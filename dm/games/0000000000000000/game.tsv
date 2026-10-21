@@ -1,0 +1,24 @@
+﻿# Placeholder profile for the shell (dm/ios/tools/shell_build.sh).
+#
+# A shell carries no game content and serves any game at run time, so every value here is either neutral or replaced at run time:
+#   modules        -> read from the Guest library's __dm<name>x0 sections (host/loader.c dm_shell_modules, main.m)
+#   romfs_marker   -> the shell accepts any existing non-empty romfs directory (main.m romfs_locate)
+#   chain version  -> read from msl/b-<version> (gfx/nvn/nvn_mtl.m DM_CHAIN)
+#   Shader tables, rewriter tables, shader libraries and the RomFS are written into the app by the packer, not here.
+# The memory values below are a middle-of-the-road set; a game that needs different ones is served by Documents/env.txt.
+title_id	0000000000000000
+program_id	0000000000000000
+
+name	Shell
+ipa	Shell.ipa
+app_category	public.app-category.action-games
+pad_layout	full
+
+modules	main sdk
+romfs_marker	System/Resource
+zip_store	.aras:.bfsar:.bfstm:.mp4:.szs:.metallib
+
+mem_reserve	0x100000000
+mem_alias	0x10000000
+mem_stack	0x10000000
+app_pool	0xCD500000

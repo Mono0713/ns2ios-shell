@@ -1,0 +1,71 @@
+name: Build shell
+
+# Builds the game-free shell on a GitHub-hosted Apple silicon runner. The output is a few MB and contains no game content, so it
+# neither touches the 2 GB release-asset limit nor puts anyone's game files on GitHub. One shell then serves any game: users run
+# scripts/nxn_pack.py on Windows/Linux/macOS to pack their own NSP + prod.keys into it and sideload the resulting IPA.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'dm/**'
+      - '.github/workflows/shell.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shell
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    # iOS 26 SDK is required (project.yml deploymentTarget 26.0, Metal 4 in the graphics layer), so macos-26 / Xcode 26.
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DM_ROOT: ${{ runner.temp }}/dm-work
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the toolchain
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK $SDK"
+          test "${SDK%%.*}" -ge 26 || { echo "::error::iOS 26 SDK required, runner has $SDK"; exit 1; }
+          df -h "$RUNNER_TEMP"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          brew install xcodegen zstd spirv-cross
+          python3 -m pip install --quiet --break-system-packages lz4 capstone fonttools \
+            || python3 -m pip install --quiet lz4 capstone fonttools
+
+      - name: Build the shell
+        run: bash dm/ios/tools/shell_build.sh
+
+      - name: List the shell's contents
+        if: always()
+        run: |
+          f="$DM_ROOT/build/shell/shell_files.tsv"
+          if [ -f "$f" ]; then echo "### Shell contents ($(wc -l < "$f" | tr -d ' ') files)"; head -80 "$f"; else echo "no file list produced"; fi >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the shell
+        uses: actions/upload-artifact@v4
+        with:
+          name: nxnative-shell-build-input
+          path: ${{ runner.temp }}/dm-work/build/shell/nxnative-shell-build-input.zip
+          if-no-files-found: error
+
+      - name: Upload the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-build-log
+          path: |
+            ${{ runner.temp }}/dm-work/build/shell/build.log
+          if-no-files-found: ignore

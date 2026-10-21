@@ -1,0 +1,79 @@
+#!/bin/bash
+# Build the shell: an unsigned iOS app package that contains no game content at all.
+# Users pack their own game files into it (scripts/nxn_pack.py) and sideload the result -- no Xcode, no Mac, no paid developer account.
+#   shell_build.sh            ios shell (devices)
+# Output ($DM_ROOT/build/shell/):
+#   nxnative-shell-build-input.zip   the shell (build input, not an installable .ipa: installed as is it reports the missing game and stops)
+# It holds our own host program, the font stand-ins and the icon slot. It does NOT hold: the game program, shader libraries, the RomFS,
+# or any table generated from game files. The check at the end enforces that.
+#
+# Unlike d2r-mobile's shell_build.sh this needs NO game files: nxnative's rewriter/shader tables are already plain resources under Gen/dm
+# (ios/project.yml lists them as a resource folder) rather than compiled-in arrays, so the only compile-time game dependency was the
+# module images in Gen/embed.S -- and those now come from the Guest library at run time (host/loader.c, DM_SHELL).
+set -u
+cd "$(dirname "$0")/.." || exit 1
+IOS=$PWD; DM=$(cd .. && pwd)
+t() { echo "[$(date +%T)] $*"; }; die() { t "FAIL: $*"; exit 1; }
+
+# The neutral placeholder profile: modules / romfs marker / chain version are all resolved at run time in shell mode.
+export GAME=0000000000000000
+export LC_ALL=C
+export DM_BUNDLE_ID=${DM_BUNDLE_ID:-org.nxnative.shell}
+export DM_DISPLAY_NAME=${DM_DISPLAY_NAME:-Shell}
+export DM_APP_VERSION=${DM_APP_VERSION:-1.0}
+export DM_APP_CATEGORY=public.app-category.action-games
+export DM_TEAM_ID=${DM_TEAM_ID:-0000000000}
+export DM_SHOW_FPS=NO
+export DM_LANG=${DM_LANG:-en-US}
+
+ROOT=${DM_ROOT:-$HOME/dm-work}; O=$ROOT/build/shell; DD=$O/dd; A=$O/app
+rm -rf "$O" && mkdir -p "$O" || die "cannot create $O"
+[ -f "../games/$GAME/game.tsv" ] || die "placeholder profile ../games/$GAME/game.tsv is missing"
+
+t "generate Gen/ (host source links, empty module assembly, placeholder tables)"
+rm -rf Gen && mkdir -p Gen/dm/font Gen/Assets.xcassets || die "cannot create Gen"
+python3 tools/gen_build.py ../host Gen > Gen/dm.xcconfig || die "gen_build.py (needs make + clang from Xcode)"
+# No module images in the executable: the Guest library supplies them at run time.
+echo '// Shell: the module images are not in the executable (dm/ios/tools/shell_build.sh); host/loader.c fetches them from Frameworks/Guest.framework.' > Gen/embed.S
+# The packer overwrites Gen/dm (a resource folder) with the game's own tables; a placeholder keeps the folder non-empty.
+: > Gen/dm/placeholder.tsv
+# No app icon in the shell: the packer sets the game's icon. An empty catalog still has to exist (project.yml lists it).
+printf '{"info":{"author":"xcode","version":1}}\n' > Gen/Assets.xcassets/Contents.json
+echo 'DM_APPICON =' >> Gen/dm.xcconfig
+# Shared-font stand-ins: ours, not game content (iOS lacks the macOS font path build_ipa.sh uses)
+cp "${STD_FONT:-/System/Library/Fonts/Supplemental/Arial Unicode.ttf}" Gen/dm/font/standard.ttf || die "copy standard font (STD_FONT=a TTF)"
+"${FONT_PY:-python3}" "$DM/tools/make_ext_font.py" Gen/dm/font/nintendo_ext.ttf > /dev/null || die "make_ext_font.py (pip install fonttools, or FONT_PY=python with fontTools)"
+# -DDM_SHELL turns on: the Guest-library image header (loader.c), source-form shader compilation (nvn_mtl.m), the runtime chain
+# version, the relaxed RomFS lookup and the first-launch shader page (dm_shader_prep.m). Appended to the generated xcconfig line.
+python3 - Gen/dm.xcconfig <<'PY'
+import sys
+p = sys.argv[1]; s = open(p, encoding='utf-8').read().split('\n')
+for i, l in enumerate(s):
+    if l.startswith('OTHER_CFLAGS = '):
+        s[i] = l.replace('OTHER_CFLAGS = $(inherited) ', 'OTHER_CFLAGS = $(inherited) -DDM_SHELL ', 1); break
+else:
+    sys.exit('no OTHER_CFLAGS line in the generated xcconfig')
+open(p, 'w', encoding='utf-8', newline='\n').write('\n'.join(s))
+PY
+grep -q -- '-DDM_SHELL' Gen/dm.xcconfig || die "could not add -DDM_SHELL to Gen/dm.xcconfig"
+xcodegen generate -q > /dev/null || die "xcodegen"
+
+t "xcodebuild (Release, unsigned, iPhone + iPad)"
+mkdir -p "$O"
+xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$DD" \
+  TARGETED_DEVICE_FAMILY='1,2' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build > "$O/build.log" 2>&1 \
+  || { grep -E 'error:' "$O/build.log" | head -20; die "xcodebuild, log $O/build.log"; }
+APP=$DD/Build/Products/Release-iphoneos/DmIOS.app; [ -d "$APP" ] || APP=$(grep -o '/[^ ]*/Release-iphoneos/DmIOS\.app' "$O/build.log" | tail -1)
+[ -n "$APP" ] && [ -d "$APP" ] || die "no built app"
+cp -R "$APP" "$A" || die "copy the app"; A=$O/app
+
+# What must not be in the shell. The packer writes all of these into the app it produces.
+for p in romfs msl aoc Frameworks; do [ -e "$A/$p" ] && die "the shell must not carry $p/"; done
+rm -rf "$A/_CodeSignature" "$A/embedded.mobileprovision"
+n=$(otool -l "$A/DmIOS" | grep -c -E 'sectname __dm|segname __DM'); [ "$n" = 0 ] || die "the shell executable still has $n module image sections"
+big=$(find "$A" -type f -size +8M | head -5); [ -z "$big" ] || die "the shell carries files larger than 8 MB: $big"
+printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\n' "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" > "$A/dm/shell_info.txt"
+
+( cd "$A" && find . -type f | sort | while read -r f; do printf '%s\t%s\n' "$(stat -f %z "$f")" "$f"; done ) > "$O/shell_files.tsv"
+( cd "$O" && rm -rf Payload && mkdir Payload && cp -R app Payload/DmIOS.app && zip -qry nxnative-shell-build-input.zip Payload && rm -rf Payload ) || die "pack the shell"
+t "shell: $O/nxnative-shell-build-input.zip ($(du -h "$O/nxnative-shell-build-input.zip" | cut -f1), $(wc -l < "$O/shell_files.tsv" | tr -d ' ') files)"
