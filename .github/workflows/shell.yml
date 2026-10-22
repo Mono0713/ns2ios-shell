@@ -296,6 +296,10 @@ jobs:
     needs: [tools, shell]
     runs-on: windows-latest
     timeout-minutes: 40
+    outputs:
+      # '1' when a real game was actually packed and inspected. Empty means the test data could not be fetched, which says
+      # nothing about the shell -- the release is then published and labelled unverified rather than silently trusted.
+      verified: ${{ steps.data.outputs.ok }}
     steps:
       - uses: actions/checkout@v4
 
@@ -316,11 +320,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Without the token there is no test data, and without a smoke pack there is no evidence the shell works. That has
-          # to stop the pipeline, not quietly turn into "publish anyway": the release job requires this job to succeed.
+          # Two different things can go wrong here, and they must not be confused:
+          #   the test data cannot be reached (no token, expired token, asset gone) -> no verdict about the shell.
+          #     Warn, leave the output empty, publish anyway and mark the release unverified.
+          #   the pack or the checks that follow fail -> a real verdict about the shell. Fail, and nothing is published.
           if [ -z "${TOKEN:-}" ]; then
-            echo "::error::SMOKE_TOKEN is not set, so nothing can be smoke-tested and nothing will be published. Add it under Settings -> Secrets and variables -> Actions (a token with read access to xinerqu/ns2ios-smoke)."
-            exit 1
+            echo "::warning::SMOKE_TOKEN is not set, so this build cannot be smoke-tested. It will be published marked unverified. Add a token with read access to xinerqu/ns2ios-smoke to verify builds again."
+            echo "**Not smoke-tested** — no SMOKE_TOKEN, so this build is published marked unverified." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           mkdir -p data tools
           # the artifact should be flat, but do not depend on it: take every .exe wherever it landed
@@ -331,8 +338,9 @@ jobs:
           done
           api=https://api.github.com/repos/xinerqu/ns2ios-smoke/releases/tags/smoke-data
           if ! curl -sSfL -H "Authorization: Bearer $TOKEN" "$api" -o rel.json; then
-            echo "::error::cannot read the test data release: SMOKE_TOKEN is expired, or xinerqu/ns2ios-smoke/tags/smoke-data is gone. Nothing will be published until this works."
-            exit 1
+            echo "::warning::cannot read the test data (SMOKE_TOKEN expired, or xinerqu/ns2ios-smoke/tags/smoke-data is gone). This build cannot be smoke-tested and will be published marked unverified."
+            echo "**Not smoke-tested** — the test data could not be fetched, so this build is published marked unverified." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           for name in game.nsp prod.keys; do
             url=$(python -c "import json,sys;d=json.load(open('rel.json'));print(next(a['url'] for a in d['assets'] if a['name']=='$name'))")
@@ -342,6 +350,7 @@ jobs:
           echo "ok=1" >> "$GITHUB_OUTPUT"
 
       - name: Pack the test game
+        if: steps.data.outputs.ok == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -352,6 +361,7 @@ jobs:
           ls -l out
 
       - name: Check the package it produced
+        if: steps.data.outputs.ok == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -389,11 +399,12 @@ jobs:
 
   release:
     needs: [tools, shell, smoke]
-    # Publishing requires a passed smoke pack, full stop: this job used to accept a skipped smoke job, which quietly turned
-    # "the token is missing" into "publish whatever was built". Nothing reaches a release without having been packed once.
+    # A failed smoke pack blocks publishing, because "the packer died" every time so far has meant the shell and the packer
+    # disagree. A smoke job that could not run (no token, data unreachable) is not a failure: the release goes out and the
+    # notes say it was not verified, so the shell is never silently trusted and never silently withheld.
     if: |
       always() && needs.tools.result == 'success' && needs.shell.result == 'success'
-      && needs.smoke.result == 'success'
+      && (needs.smoke.result == 'success' || needs.smoke.result == 'skipped')
       && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish)
     runs-on: ubuntu-latest
     steps:
@@ -475,7 +486,19 @@ jobs:
           set -euo pipefail
           TAG="${{ needs.shell.outputs.version }}"
           TITLE="Game-free shell ${TAG#shell-}"   # the tag already carries the shell- prefix
-          { echo "Source: ${{ needs.shell.outputs.origin }}"; echo; cat notes.md; } > body.md
+          # Say on the page whether this shell was actually packed with a real game before it went out. The smoke job sets
+          # verified=1 only when it managed to pack and inspect one; when the test data is unreachable the build is still
+          # published, but nobody should have to guess whether it was tested.
+          {
+            echo "Source: ${{ needs.shell.outputs.origin }}"
+            if [ "${{ needs.smoke.outputs.verified }}" = '1' ]; then
+              echo "Smoke test: **passed** — a real game was packed with this shell on Windows before publishing. <br> 冒烟测试：**通过**——发布前已用真实游戏在 Windows 上完整打过一次包。"
+            else
+              echo "> **Not smoke-tested** — the test data could not be fetched, so nothing was packed with this shell before publishing. <br> **未做冒烟测试**：取不到测试数据，这一版发布前没有用它打过包。"
+            fi
+            echo
+            cat notes.md
+          } > body.md
           # The tag is date + upstream commit, so several pushes in a day land on the same release. Replace the assets and
           # the notes there instead of leaving the first version of the text up; gh release create would just fail.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
