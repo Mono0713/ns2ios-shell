@@ -25,6 +25,9 @@ export DM_APP_CATEGORY=public.app-category.action-games
 export DM_TEAM_ID=${DM_TEAM_ID:-0000000000}
 export DM_SHOW_FPS=NO
 export DM_LANG=${DM_LANG:-en-US}
+# Upstream's project.yml names the scheme "${DM_SCHEME_NAME}" and build_ipa.sh sets it from the game name; a shell has no game,
+# so it supplies its own. Without it xcodegen writes the variable name literally and xcodebuild finds no such scheme.
+export DM_SCHEME_NAME=${DM_SCHEME_NAME:-"Shell (shell)"}
 
 ROOT=${DM_ROOT:-$HOME/dm-work}; O=$ROOT/build/shell; DD=$O/dd; A=$O/app
 rm -rf "$O" && mkdir -p "$O" || die "cannot create $O"
@@ -64,7 +67,7 @@ xcodebuild -list -project DmIOS.xcodeproj > "$O/xcodebuild-list.log" 2>&1 || tru
 
 t "xcodebuild (Release, unsigned, iPhone + iPad)"
 mkdir -p "$O"
-xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$DD" \
+xcodebuild -project DmIOS.xcodeproj -scheme "$DM_SCHEME_NAME" -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$DD" \
   TARGETED_DEVICE_FAMILY='1,2' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build > "$O/build.log" 2>&1 \
   || { grep -E 'error:' "$O/build.log" | head -20; die "xcodebuild, log $O/build.log"; }
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app; [ -d "$APP" ] || APP=$(grep -o '/[^ ]*/Release-iphoneos/DmIOS\.app' "$O/build.log" | tail -1)
