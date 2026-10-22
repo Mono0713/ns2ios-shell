@@ -327,6 +327,17 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv'):
         if (gdir / n).is_file(): shutil.copyfile(gdir / n, A / 'dm' / n)
 
+    # The shell was built from the placeholder profile, so the memory layout baked into its host is the placeholder's. Write
+    # the game's real values here: main.m turns dm/env.txt into environment variables before the host starts, and hle_svc.c
+    # reads them. Getting this wrong does not crash immediately -- the game asks for the wrong heap size and aborts in
+    # SetHeapSize (Hades II asked for pool - 64 MB instead of pool - 108 MB and overflowed the pool by 44 MB).
+    mem_map = (('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
+               ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'))
+    env_lines = ['%s=%s' % (ev, one(rows, k)) for k, ev in mem_map if one(rows, k)]
+    if env_lines:
+        (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: ' + ', '.join(env_lines))
+
     # App identity: name, version, bundle ID stays the shell's (the sideloading tool replaces it anyway), icon.
     ip = A / 'Info.plist'
     try:
