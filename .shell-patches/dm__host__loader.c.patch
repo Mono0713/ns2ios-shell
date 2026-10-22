@@ -1,0 +1,70 @@
+diff --git a/dm/host/loader.c b/dm/host/loader.c
+index bb00865..3a8100f 100644
+--- a/dm/host/loader.c
++++ b/dm/host/loader.c
+@@ -356,7 +356,65 @@ static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned lo
+     if (kr != KERN_SUCCESS || a != to) die("%s vm_remap %p → %#lx (%#lx bytes) failed: %d", m->name, from, (unsigned long)to, size, kr);
+     if ((cur & need) != need) die("%s permissions after vm_remap %#x, missing %#x", m->name, cur, need);
+ }
++#ifdef DM_SHELL
++// Shell (dm/ios/tools/shell_build.sh): the app carries no game content at all, so the module images are not in this executable but in
++// Frameworks/Guest.framework/Guest -- a dynamic library that holds only segments, written by dm/tools/guest_dylib.py from the user's own
++// game files. The section names are the same as in the embedded approach (gen_embed.py), so only the image header to read them from changes.
++#include <dlfcn.h>
++#include <mach-o/dyld.h>
++static const struct mach_header_64 *shell_image_quiet(const char **why) {
++    static const struct mach_header_64 *mh; static const char *cached;
++    if (mh) return mh;
++    if (cached) { if (why) *why = cached; return NULL; }
++    char exe[4096]; uint32_t n = sizeof exe;
++    if (_NSGetExecutablePath(exe, &n)) { cached = "cannot get the executable path"; if (why) *why = cached; return NULL; }
++    char *sl = strrchr(exe, '/');
++    if (!sl || (size_t)(sl - exe) + 40 > sizeof exe) { cached = "unexpected executable path"; if (why) *why = cached; return NULL; }
++    strcpy(sl, "/Frameworks/Guest.framework/Guest");
++    if (access(exe, R_OK)) { cached = "Frameworks/Guest.framework/Guest is not in this package"; if (why) *why = cached; return NULL; }
++    if (!dlopen(exe, RTLD_NOW)) { cached = "dlopen of Frameworks/Guest.framework/Guest failed"; fprintf(stderr, "boot: dlopen %s: %s\n", exe, dlerror()); if (why) *why = cached; return NULL; }
++    for (uint32_t i = 0; i < _dyld_image_count(); i++) if (strstr(_dyld_get_image_name(i), "/Guest.framework/Guest")) mh = (const struct mach_header_64 *)_dyld_get_image_header(i);
++    if (!mh) { cached = "the Guest library is loaded but its image header was not found"; if (why) *why = cached; return NULL; }
++    fprintf(stderr, "boot: module images come from the Guest library %s\n", exe); return mh;
++}
++static const struct mach_header_64 *shell_image(void) {
++    const char *why = NULL; const struct mach_header_64 *mh = shell_image_quiet(&why);
++    if (!mh) die("this package has no game program yet: %s. Pack your own game files into it with scripts/nxn_pack.py first.", why);
++    return mh;
++}
++// Module names present in the Guest library, read back from its __dm<name>x0 sections, so one shell serves any game without a
++// module list compiled in. main.c takes module names from argv; dm/ios/Sources/main.m appends these before calling dm_main.
++int dm_shell_modules(const char **out, int max) {
++    static char store[16][17]; static const char *ptrs[16]; static int cached = -1;
++    if (cached >= 0) { int k = cached < max ? cached : max; for (int i = 0; i < k; i++) out[i] = ptrs[i]; return k; }
++    const char *why = NULL; const struct mach_header_64 *mh = shell_image_quiet(&why);
++    if (!mh) { fprintf(stderr, "boot: no module list from the Guest library (%s); falling back to the compiled-in one\n", why); cached = 0; return 0; }
++    int n = 0; const uint8_t *p = (const uint8_t *)(mh + 1);
++    for (uint32_t i = 0; i < mh->ncmds && n < 16; i++) {
++        const struct load_command *lc = (const struct load_command *)p;
++        if (lc->cmdsize < sizeof(struct load_command)) break;
++        if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof(struct segment_command_64)) {
++            const struct segment_command_64 *sc = (const struct segment_command_64 *)p;
++            const struct section_64 *s = (const struct section_64 *)(sc + 1);
++            for (uint32_t k = 0; k < sc->nsects && n < 16; k++, s++) {
++                size_t l = strnlen(s->sectname, 16);
++                if (l < 7 || strncmp(s->sectname, "__dm", 4) || l + sizeof(struct segment_command_64) > lc->cmdsize) continue;
++                if (s->sectname[l - 2] != 'x' || s->sectname[l - 1] != '0') continue;
++                size_t nl = l - 6; if (nl > 16) continue;
++                int dup = 0; for (int j = 0; j < n; j++) if (!strncmp(ptrs[j], s->sectname + 4, nl) && !ptrs[j][nl]) dup = 1;
++                if (dup) continue;
++                memcpy(store[n], s->sectname + 4, nl); store[n][nl] = 0; ptrs[n] = store[n]; n++;
++            }
++        }
++        p += lc->cmdsize;
++    }
++    cached = n; int k = n < max ? n : max; for (int i = 0; i < k; i++) out[i] = ptrs[i];
++    return k;
++}
++#define IMAGE_MH shell_image()
++#else
+ #define IMAGE_MH (&_mh_execute_header)
++#endif
+ static void map_image(module_t *m, const char *dir) {
+     (void)dir;
+     char sx0[17], sx1[17], dm[17]; snprintf(sx0, sizeof sx0, "__dm%sx0", m->name); snprintf(sx1, sizeof sx1, "__dm%sx1", m->name); snprintf(dm, sizeof dm, "__DM%sW", m->name);

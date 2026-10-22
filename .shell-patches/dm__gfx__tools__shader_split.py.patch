@@ -1,0 +1,16 @@
+diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
+index c62338d..87aff94 100644
+--- a/dm/gfx/tools/shader_split.py
++++ b/dm/gfx/tools/shader_split.py
+@@ -947,7 +947,10 @@ def main():
+     files, results, common = [], [], None
+     for i, (romfs, mainnso) in enumerate(zip(romfs_v, main_v)):
+         tag = os.path.basename(os.path.dirname(os.path.abspath(romfs))) if i else ''
+-        files += sorted((os.path.join(dp, f), (tag + '/' if tag else '') + os.path.relpath(os.path.join(dp, f), romfs)) for dp, _, fs in os.walk(romfs) for f in fs)
++        # Posix separators in the recorded paths: they are the paths inside the RomFS, and the profile's shader_groups match
++        # on them. On Windows os.path.relpath returns backslashes, which put every shader into "other" and changed the
++        # package name, so the split tables no longer matched the profile's.
++        files += sorted((os.path.join(dp, f), (tag + '/' if tag else '') + os.path.relpath(os.path.join(dp, f), romfs).replace(os.sep, '/')) for dp, _, fs in os.walk(romfs) for f in fs)
+         img = nso_image(mainnso)
+         if not i:
+             import unityfs

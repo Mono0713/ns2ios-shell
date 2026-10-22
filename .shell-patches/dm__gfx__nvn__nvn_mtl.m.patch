@@ -1,0 +1,80 @@
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index aecb2c3..66ed20b 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -25,6 +25,20 @@
+ #include "nvn_cover.h"
+ #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree (in the game profile folder, -I from the Makefile)
+ #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
++#ifdef DM_SHELL
++// The shell serves any game, so the B library's translation chain version cannot be a compile-time constant: it is the name of the one
++// library directory under msl/ (b-<version>), which the packer writes there. Falls back to the compiled-in value (diagnostics only).
++static const char *shell_chain(void) {
++    static char v[34]; if (v[0]) return v;
++    NSString *msl = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
++    for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[])
++        if ([d hasPrefix:@"b-"] && d.length > 2 && d.length < 34) { snprintf(v, sizeof v, "%s", d.UTF8String + 2); return v; }
++    return DMSH_CHAIN;
++}
++#define DM_CHAIN shell_chain()
++#else
++#define DM_CHAIN DMSH_CHAIN
++#endif
+ // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
+ #define NTEX 256
+ // The NVN driver's constant segments, one layout in every game (dm/gfx/tools/dmsh_build.py), byte offsets: c2 holds the combined handles at 0x20 + 8 r (41 slots up to the separate table:
+@@ -2655,12 +2669,12 @@ static void shmap_load(void) {
+     g_shmap_path = path;
+     const char *m = getenv("DM_MSL_DIR");
+     // Library directory = <DM_MSL_DIR or default cache>/b-<translation chain version>: the version comes from the game profile's dmsh_chain.h (tools/dmsh_chain.py); a host built from an old source tree only accepts libraries of the old version
+-    g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache", getenv("DM_ROOT") ?: getenv("HOME"), getenv("DM_ROOT") ? "" : "/dm-work"], DMSH_CHAIN];
+-    if (![NSFileManager.defaultManager fileExistsAtPath:g_msl_dir]) MLOG("[RED] shader library directory %s does not exist: translation chain version %s of this source tree has not been built yet (dm/gfx/tools/dmsh_build.py)", g_msl_dir.UTF8String, DMSH_CHAIN);
++    g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache", getenv("DM_ROOT") ?: getenv("HOME"), getenv("DM_ROOT") ? "" : "/dm-work"], DM_CHAIN];
++    if (![NSFileManager.defaultManager fileExistsAtPath:g_msl_dir]) MLOG("[RED] shader library directory %s does not exist: translation chain version %s of this source tree has not been built yet (dm/gfx/tools/dmsh_build.py)", g_msl_dir.UTF8String, DM_CHAIN);
+     NSString *cp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"c1_full.tsv"];   // Same directory as the mapping table (Mac: dm/games/<id>; iOS: dm/ inside the App, copied along by build_ipa.sh)
+     NSString *ct = cp ? [NSString stringWithContentsOfFile:cp encoding:NSUTF8StringEncoding error:nil] : nil;
+     NSString *head = ct ? [[ct componentsSeparatedByString:@"\n"] firstObject] : nil;
+-    NSString *want = [NSString stringWithFormat:@"# chain b-%s", DMSH_CHAIN];
++    NSString *want = [NSString stringWithFormat:@"# chain b-%s", DM_CHAIN];
+     if (!head || ![head hasPrefix:want]) {
+         MLOG("[RED] c1_full.tsv is stale or missing; every c1 gets its own 64 KiB");
+     } else {
+@@ -2799,6 +2813,20 @@ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
+     size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
+     t_lib_layer = m != MAP_FAILED && memmem(m, len, "render_target_array_index", 25) != NULL;   // the library's functions use the layer: for a vertex library, its output (shader_load)
+     if (m == MAP_FAILED) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"mmap failed %@", path]}]; return nil; }
++#ifdef DM_SHELL
++    // Shell: on a computer without Apple's shader compiler the "library" files carry shader source instead of a compiled library
++    // (a compiled library starts with MTLB); compile it here on the spot. The system caches the result, so from the second launch on the
++    // same shader costs nothing. Measured cold on a device: about 80 ms each on average, about 450 ms for the longest single one.
++    if (len < 4 || memcmp(m, "MTLB", 4)) {
++        NSString *src = [[NSString alloc] initWithBytes:m length:len encoding:NSUTF8StringEncoding]; munmap(m, len);
++        if (!src) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:EILSEQ userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"neither a compiled library nor shader source: %@", path]}]; return nil; }
++        static _Atomic int n; static _Atomic long long us; CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
++        id<MTLLibrary> l = [g_dev newLibraryWithSource:src options:nil error:err]; long long dt = (long long)((CFAbsoluteTimeGetCurrent() - t0) * 1e6);
++        int k = atomic_fetch_add(&n, 1) + 1; long long tot = atomic_fetch_add(&us, dt) + dt;
++        if (k == 1 || k % 100 == 0 || dt >= 300000) MLOG("shader compiled from source: #%d %.0f ms, %.1f s total", k, dt / 1e3, tot / 1e6);
++        return l;
++    }
++#endif
+     dispatch_data_t d = dispatch_data_create(m, len, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(m, len); });
+     return [g_dev newLibraryWithData:d error:err];
+ }
+@@ -2816,7 +2844,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
+     NSError *e = nil;
+     NSData *jd = [NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%@/%@.json", g_msl_dir, pc]];
+     NSDictionary *j = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+-    if (j && stage == 2 && [j[@"gs_slice"] isKindOfClass:[NSDictionary class]] && [j[@"chain"] isEqual:@DMSH_CHAIN]) {   // a slice-writing geometry shader has no library: a stub prog_fold_gs replaces
++    if (j && stage == 2 && [j[@"gs_slice"] isKindOfClass:[NSDictionary class]] && [j[@"chain"] isEqual:[NSString stringWithUTF8String:DM_CHAIN]]) {   // a slice-writing geometry shader has no library: a stub prog_fold_gs replaces
+         NvShader *o = [NvShader new]; o->stage = 2; o->lay_loc = -1; strlcpy(o->key, pc.UTF8String, sizeof o->key);
+         o->gs_loc = [j[@"gs_slice"][@"loc"] intValue]; o->gs_comp = [[j[@"gs_slice"][@"comp"] description] UTF8String][0];
+         return o;
+@@ -2825,7 +2853,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
+     NSString *lp = [NSString stringWithFormat:@"%@/%@.metallib", g_msl_dir, pc];
+     id<MTLLibrary> lib = lib_from_file(lp, &e);
+     if (!lib || !j) { MLOG("[RED] failed to load shader %s: %s", pc.UTF8String, e ? e.localizedDescription.UTF8String : "no reflection json"); return nil; }
+-    if (![j[@"chain"] isEqual:@DMSH_CHAIN]) { MLOG("[RED] shader %s has translation chain version %s, but this host expects %s", pc.UTF8String, [[j[@"chain"] description] UTF8String], DMSH_CHAIN); return nil; }
++    if (![j[@"chain"] isEqual:[NSString stringWithUTF8String:DM_CHAIN]]) { MLOG("[RED] shader %s has translation chain version %s, but this host expects %s", pc.UTF8String, [[j[@"chain"] description] UTF8String], DM_CHAIN); return nil; }
+     if (layer && !j[@"entry_layer"]) { MLOG("[RED] vertex shader %s has no layer entry points", pc.UTF8String); return nil; }
+     NvShader *o = [NvShader new]; o->gs_loc = o->lay_loc = -1;
+     if (stage == 0 && [j[@"layer_from"] isKindOfClass:[NSDictionary class]]) { o->lay_loc = [j[@"layer_from"][@"loc"] intValue]; o->lay_comp = [[j[@"layer_from"][@"comp"] description] UTF8String][0]; }

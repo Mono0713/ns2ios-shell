@@ -114,15 +114,28 @@ jobs:
             git clone --depth 1 https://github.com/seedds/nxnative.git up
             UP=$(git -C up rev-parse HEAD)
             echo "upstream commit $UP"
-            # copy this fork's files over the upstream tree; the list is explicit, so everything else follows upstream
-            # (the entries may carry a trailing "# comment", which is not part of the path)
+            # Apply this fork onto the upstream tree. Files this fork adds are copied; files it modifies are patched, so an
+            # upstream edit elsewhere in the same file survives instead of being overwritten by a whole-file copy.
             while IFS= read -r line; do
-              p="${line%%#*}"
+              p="${line#+}"; p="${p%%#*}"
               p="$(echo "$p" | tr -d '[:space:]')"
               [ -n "$p" ] || continue
               mkdir -p "up/$(dirname "$p")"
-              cp -a "fork/$p" "up/$p" || { echo "::error::cannot copy $p"; exit 1; }
-            done < <(grep -vE '^[[:space:]]*(#|$)' fork/.shell-overlay.txt)
+              if [ -d "fork/$p" ]; then cp -a "fork/$p" "up/$(dirname "$p")/"; else cp -a "fork/$p" "up/$p"; fi \
+                || { echo "::error::cannot copy $p"; exit 1; }
+            done < <(grep -E '^\+' fork/.shell-overlay.txt)
+
+            n=0
+            for f in fork/.shell-patches/*.patch; do
+              [ -e "$f" ] || continue
+              if ! git -C up apply --whitespace=nowarn "$f"; then
+                echo "::error::$(basename "$f") does not apply: upstream changed the same lines this fork patches."
+                echo "Rebase those hunks onto the current upstream text (see docs/SHELL.md), regenerate the patch, push."
+                exit 1
+              fi
+              n=$((n+1))
+            done
+            echo "applied $n patches"
             src=up
             SHA=$UP   # GITHUB_ENV only reaches later steps; this step needs the value itself for the version string
             echo "::endgroup::"
