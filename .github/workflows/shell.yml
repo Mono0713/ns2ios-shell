@@ -125,8 +125,10 @@ jobs:
                 || { echo "::error::cannot copy $p"; exit 1; }
             done < <(grep -E '^\+' fork/.shell-overlay.txt)
 
+            # absolute: git -C up changes directory, so a relative patch path would resolve inside up/
+            PATCHDIR="$(pwd)/fork/.shell-patches"
             n=0
-            for f in fork/.shell-patches/*.patch; do
+            for f in "$PATCHDIR"/*.patch; do
               [ -e "$f" ] || continue
               if ! git -C up apply --whitespace=nowarn "$f"; then
                 echo "::error::$(basename "$f") does not apply: upstream changed the same lines this fork patches."
