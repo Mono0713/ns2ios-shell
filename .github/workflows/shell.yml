@@ -176,7 +176,7 @@ jobs:
                    \( -name '*.nsp' -o -name '*.xci' -o -name '*.nsz' -o -name '*.xcz' -o -name '*.nca' \
                       -o -name '*.tik' -o -name '*.keys' -o -name 'prod.keys' -o -name '*.ipa' \) -print || true)
           test -z "$leak" || { echo "::error::game files or keys are in the tree: $leak"; exit 1; }
-          python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py
+          python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py dm/ios/tools/make_shell_patch.py
           python3 scripts/nxn_pack.py --help > /dev/null
           # nometal_run.py answers the four toolchain probes Apple's compiler would answer: if one regresses, every
           # packing attempt on a machine without Xcode dies at the shader step.

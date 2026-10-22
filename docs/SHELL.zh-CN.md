@@ -65,7 +65,12 @@ bash dm/ios/tools/shell_build.sh
 1. `git clone --depth 1 https://github.com/seedds/nxnative up`
 2. `cd up && git apply --reject <本仓库>/.shell-patches/xxx.patch`，看产生了哪些 `.rej`
 3. 打开 `.rej` 与上游那段新代码，**读懂之后**把改动重新落上去；直接粘旧文本通常不对
-4. 用新上游重新生成该 patch，更新 `.shell-base.txt` 里的提交号，push
+4. 重新生成补丁并更新基准：
+   ```
+   python dm/ios/tools/make_shell_patch.py dm/xxx/yyy.py     # 一个文件；--all 重生成全部 "~" 条目
+   ```
+   它按 `.shell-base.txt` 里的提交取上游原文做 diff，并把两边的 CRLF 归一（补丁是打到上游的 LF 文件上的）。
+   改完基准提交后，先 `git -C up apply --check <.shell-patches/xxx.patch>` 确认能合，再一起提交文件、补丁和 `.shell-base.txt`
 5. 只有第 4 步不够用时才需要动 C：上游改掉了壳模式替换的那六处（函数签名、结构体字段、`#define` 名字）或者被读写的数据结构布局，补丁合上了也编不过。这时改 `dm/host/*.c` 等文件，再重新生成补丁
 
 判断「要不要改 C」的一条线：只要上游没碰这六处替换点和相关结构体，补丁合上就能编过。

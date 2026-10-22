@@ -8,7 +8,7 @@
 # of the same chain holds the iOS libraries of the same sources. A folder is taken only when its json chain_metal is the current convention and a fresh compile of
 # a few of its shaders (two per stage) reproduces their libraries byte for byte; each folder is read once (filled.json remembers it by its number of libraries).
 # Not part of the chain version (dmsh_chain.py): the cache never changes an output, it only skips recompiling one. Change FORMAT when what it stores changes.
-import os, re, json, shutil, ctypes, hashlib, threading, subprocess, collections
+import os, re, json, shutil, ctypes, hashlib, threading, subprocess, collections, time
 
 FORMAT = b'dmsh_mtlcache 1'
 try:   # CDLL(None) means "the running process" on POSIX only; on Windows it raises TypeError, so the copy is a plain one
@@ -17,10 +17,24 @@ except (OSError, TypeError):
     _clonefile = None
 
 
+def _replace(src, dst, tries=40):
+    """os.replace that survives Windows: a rename onto a file another process has open returns WinError 5 there, while
+    POSIX makes it always succeed. A scanner (Defender on a CI runner) reading the .metallib that was just written is the
+    usual holder, and it lets go within milliseconds, so retry; if the destination itself stays locked, drop it first."""
+    for i in range(tries):
+        try:
+            os.replace(src, dst); return
+        except PermissionError:
+            if i == tries - 1: raise
+            try: os.unlink(dst)      # only the destination can block the rename, and every caller overwrites it anyway
+            except OSError: pass
+            time.sleep(0.05)
+
+
 def clone(src, dst):
     tmp = f'{dst}.tmp-{os.getpid()}-{threading.get_ident()}'
     if _clonefile is None or _clonefile(os.fsencode(src), os.fsencode(tmp), 0) != 0: shutil.copyfile(src, tmp)
-    os.replace(tmp, dst)
+    _replace(tmp, dst)
 
 
 def compiler_id(sdk):
@@ -56,7 +70,7 @@ class Cache:
             clone(p, lib); self.count((target, 'reused')); return
         tmp = f'{lib}.tmp-{os.getpid()}-{threading.get_ident()}'
         self._compile(target, msl, tmp)
-        os.replace(tmp, lib)
+        _replace(tmp, lib)
         os.makedirs(os.path.dirname(p), exist_ok=True); clone(lib, p); self.count((target, 'compiled'))
 
     def _check(self, target, d, stems, mac_dir):

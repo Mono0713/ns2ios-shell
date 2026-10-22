@@ -7,7 +7,8 @@
 # one of these files merges automatically instead of being lost by a whole-file copy. Only a change to the same lines makes
 # `git apply` fail, and that is the one case that needs a human.
 #
-# When you add or modify a file for the shell route, add it here -- and for a "~" entry, regenerate its patch.
+# When you add or modify a file for the shell route, add it here -- and for a "~" entry, regenerate its patch with
+# `python dm/ios/tools/make_shell_patch.py <path>` (or --all), which diffs this tree against the base commit and handles CRLF.
 
 # --- added (copied whole) ---
 
@@ -15,6 +16,7 @@
 + dm/gfx/tools/nometal_run.py             # runs the shader chain without Apple's compiler
 + dm/ios/Sources/dm_shader_prep.m         # first-launch shader compilation page
 + dm/ios/tools/shell_build.sh             # builds the game-free shell
++ dm/ios/tools/make_shell_patch.py        # regenerates .shell-patches/*.patch after editing a "~" file
 + dm/games/0000000000000000/game.tsv      # neutral placeholder profile the shell is compiled against
 + dm/games/0000000000000000/dmsh_chain.h
 + scripts/nxn_pack.py                     # packs the shell and the user's game files into an IPA, on any OS

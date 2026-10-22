@@ -71,7 +71,13 @@ publishes nothing — you never get a shell that has drifted from upstream witho
 1. `git clone --depth 1 https://github.com/seedds/nxnative up`
 2. `cd up && git apply --reject <this repo>/.shell-patches/xxx.patch` and look at the `.rej` files
 3. Read the `.rej` and the new upstream code, then **re-apply the intent** by hand; pasting the old text usually is not right
-4. Regenerate that patch against the new upstream, update the commit in `.shell-base.txt`, push
+4. Regenerate the patch and move the base:
+   ```
+   python dm/ios/tools/make_shell_patch.py dm/xxx/yyy.py     # one file; --all regenerates every "~" entry
+   ```
+   It diffs against upstream's copy at the commit in `.shell-base.txt` and normalises CRLF on both sides, because the patch is
+   applied to upstream's LF files. After moving the base commit, confirm with
+   `git -C up apply --check <.shell-patches/xxx.patch>`, then commit the file, the patch and `.shell-base.txt` together
 5. Only if step 4 is not enough does C need work: upstream changed one of the six substitutions shell mode makes (a signature, a
    struct field, a `#define` name) or the layout of data that is read across the boundary, so the patch applies but the build
    fails. Fix `dm/host/*.c` and regenerate the patches
