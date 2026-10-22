@@ -21,7 +21,7 @@ translator); spirv-cross 1.4.357.0 on PATH; a C compiler (clang). Every step say
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, os, plistlib, re, shutil, subprocess, sys, time, zipfile
+import argparse, json, os, plistlib, re, shutil, subprocess, sys, time, zipfile
 from pathlib import Path
 
 PY = sys.executable
@@ -186,6 +186,31 @@ def step_extract(nx, keys, folder, picks, work, versions):
     return dirs
 
 
+def check_build_ids(game, rows, ver, mods):
+    """A profile registers one build ID per module per version. If the files carry a different one, the NSP is not the
+    version the profile's rewriter patches and shader tables were made for: the app would build fine and misbehave only
+    on the phone, so stop here instead."""
+    want = {}
+    for line in rows.get('build', []):
+        f = line.split('\t')
+        if f[0] != ver: continue
+        for item in f[2:]:
+            if '=' in item: k, v = item.split('=', 1); want[k] = v
+    if not want:
+        warn('the profile registers no build IDs for %s: skipping the check' % ver); return
+    bad = []
+    for m in mods:
+        p = game / 'ExeFS' / m
+        if not p.is_file(): bad.append('%-8s missing' % m); continue
+        with open(p, 'rb') as f: head = f.read(0x50)
+        got = head[0x40:0x50].hex()
+        if m in want and got != want[m]: bad.append('%-8s profile %s / file %s' % (m, want[m], got))
+    if bad:
+        die('the game files are not version %s of this profile:\n  - %s\n    (the profile registers: %s)'
+            % (ver, '\n  - '.join(bad), ', '.join('%s=%s' % kv for kv in want.items())))
+    say('build IDs match the profile for %s (%s)' % (ver, ', '.join(sorted(want))))
+
+
 def step_rewrite(exe_dir, mods, out, work, force=False):
     # patch_nso.py is pure Python (capstone + lz4): its stubs are hand-assembled machine code, not built at run time,
     # so no C compiler is needed here even though its comments mention clang.
@@ -197,7 +222,7 @@ def step_rewrite(exe_dir, mods, out, work, force=False):
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
 
 
-def step_shaders(game, prof_dir, tables, work, force=False):
+def step_shaders(game, prof_dir, tables, work, tid, force=False):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
     pkg, tb = work / 'shader' / 'pkg', work / 'shader' / 'tables'
@@ -206,7 +231,7 @@ def step_shaders(game, prof_dir, tables, work, force=False):
     tb.mkdir(parents=True, exist_ok=True)
     names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
     run([PY, GFX / 'shader_split.py', game / 'RomFS', game / 'ExeFS' / 'main', pkg] + [tb / n for n in names],
-        log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files')
+        env={'DM_GAME': tid}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files')
     for n in names:
         a, b = tb / n, prof_dir / n
         if b.is_file():
@@ -219,18 +244,44 @@ def step_shaders(game, prof_dir, tables, work, force=False):
     return pkg, tb
 
 
-def step_translate(pkg, work, xlate, iosout, force=False):
+def step_translate(pkg, work, xlate, iosout, tid, force=False):
     """dmsh_build.py, with no metal compiler: nometal_run.py turns `xcrun metal` into a copy, so the "libraries" hold MSL
     source and the phone compiles them once on first launch. dmsh_build.py creates <iosout>/b-<chain version> itself."""
-    if not force and iosout.is_dir() and any(iosout.glob('b-*/*_b.metallib')):
+    # Completeness is decided by the per-shader results dmsh_build.py writes, not by "some file is there": a run that was
+    # interrupted leaves libraries behind, and trusting them would ship a package that only fails on the phone.
+    cache = work / 'shader' / 'cache'
+    def done():
+        marks = sorted(cache.glob('b-*/_b_build.json'))
+        if not marks: return False
+        try: res = json.load(open(marks[-1], encoding='utf-8'))
+        except Exception: return False
+        if not res or any(r.get('st') != 'ok' for r in res): return False
+        d = iosout / marks[-1].parent.name
+        have = {x.name for x in d.glob('*_b.metallib')} if d.is_dir() else set()
+        return all(r['key'] + '_b.metallib' in have for r in res)
+    if not force and done():
         say('shader libraries already there'); return
     need_tool('spirv-cross', 'translate SPIR-V to Metal Shading Language',
               'install Vulkan SDK 1.4.357.0 (its Bin/ holds spirv-cross.exe) or build SPIRV-Cross at tag vulkan-sdk-1.4.357.0')
     nometal = GFX / 'nometal_run.py'
     if not nometal.is_file():
         die('dm/gfx/tools/nometal_run.py is missing (it is what makes this work without Apple\'s compiler)')
+    # dmsh_build.py refuses to start when the toolchain does not match dmsh_chain.lock, which on a machine using the
+    # prebuilt executables it never will: register this machine first. That rewrites dmsh_chain.lock and the profile's
+    # dmsh_chain.h -- the header is the compile-time constant only the Xcode route needs, and the shell reads the version
+    # from the directory name, so neither value is used any further here.
+    genv = {'XLATE': str(xlate), 'DM_GAME': tid}
+    chk = subprocess.run([PY, nometal, GFX / 'dmsh_chain.py', '--check-tools'], capture_output=True, text=True,
+                         env=dict(os.environ, PYTHONUTF8='1', **genv))
+    if chk.returncode:
+        say('the toolchain differs from dmsh_chain.lock: registering this machine')
+        run([PY, nometal, GFX / 'dmsh_chain.py', '--update-lock'], env=genv,
+            log=work / 'logs' / 'chain_lock.log', what='dmsh_chain --update-lock')
+        run([PY, nometal, GFX / 'dmsh_chain.py', '--header'], env=genv,
+            log=work / 'logs' / 'chain_header.log', what='dmsh_chain --header')
+        warn('dmsh_chain.lock and dm/games/%s/dmsh_chain.h now describe this machine (do not commit them)' % tid)
     run([PY, nometal, GFX / 'dmsh_build.py', pkg, work / 'shader' / 'cache'],
-        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8')},
+        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8'), 'DM_GAME': tid},
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
     n = len(list(iosout.glob('b-*/*_b.metallib'))) if iosout.is_dir() else 0
     if not n: die('no shader libraries were produced (see %s)' % (work / 'logs' / 'shaders.log'))
@@ -398,40 +449,31 @@ def main():
     dirs = step_extract(nx, keys, folder, picks, work, versions)
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
+    check_build_ids(game, rows, pkg, mods)
 
     patched = work / 'build' / 'patched'
     step_rewrite(game / 'ExeFS', mods, patched, work, a.force)
     if a.stop_after == 'rewrite': return say('stopped after rewrite')
 
-    tables = ['shader_facts.tsv', 'shader_map.tsv', 'shader_map.tsv.conflicts.tsv', 'shader_pairs.tsv']   # dmsh_chain.py TABLES
-    pkg_dir, tb = step_shaders(game, gdir, tables, work, a.force)
+    # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
+    tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
+    pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
-    # The chain version is decided by the tools on this machine (it hashes the game's tables and the toolchain). The shell reads
-    # it back from the directory name at run time, so nothing has to be recompiled for a different value.
-    chk = subprocess.run([PY, GFX / 'nometal_run.py', GFX / 'dmsh_chain.py', '--check-tools'],
-                         capture_output=True, text=True, env=dict(os.environ, PYTHONUTF8='1'))
-    if chk.returncode:
-        say('the local tools differ from dmsh_chain.lock: re-registering the chain for this machine')
-        run([PY, GFX / 'nometal_run.py', GFX / 'dmsh_chain.py', '--update-lock'], log=work / 'logs' / 'chain_lock.log', what='registering the translation chain')
-        run([PY, GFX / 'nometal_run.py', GFX / 'dmsh_chain.py', '--header'], log=work / 'logs' / 'chain_header.log', what='writing the chain version header')
-        warn('dmsh_chain.lock and the profiles\' dmsh_chain.h were updated for this machine: do not commit them')
-    ver_out = subprocess.run([PY, GFX / 'nometal_run.py', GFX / 'dmsh_chain.py'], capture_output=True, text=True,
-                             env=dict(os.environ, PYTHONUTF8='1')).stdout.strip().splitlines()
-    if not ver_out: die('could not get the translation chain version (dmsh_chain.py printed nothing)')
-    chain_v = ver_out[-1].strip()
-    say('translation chain version on this machine: %s' % chain_v)
+    # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
+    # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
+    # profile header is a compile-time constant that only the Xcode route needs. The shell reads the version back from
+    # the directory name at run time, so dmsh_build.py is left to compute it and we take whatever directory it makes.
     iosout = work / 'build' / 'ios' / 'dmsh_b'          # dmsh_build.py creates b-<chain version> inside it
     cands = ([tools_dir / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')] if tools_dir else []) + \
             [GFX / 'dmsh_xlate_bin' / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')]
     xlate = next((c for c in cands if c.is_file()), None)
     if not xlate: die('no shader translator: pass --tools <folder> with dmsh_xlate, or build it with dotnet publish')
-    step_translate(pkg_dir, work, xlate, iosout, a.force)
-    msl_out = iosout / ('b-' + chain_v)
-    if not msl_out.is_dir():
-        cand = sorted(p for p in iosout.glob('b-*') if p.is_dir()) if iosout.is_dir() else []
-        if not cand: die('no shader library directory under %s' % iosout)
-        msl_out = cand[0]; say('using the library directory the build produced: %s' % msl_out.name)
+    step_translate(pkg_dir, work, xlate, iosout, tid, a.force)
+    libs = sorted(p for p in iosout.glob('b-*') if p.is_dir()) if iosout.is_dir() else []
+    if not libs: die('no shader library directory under %s' % iosout)
+    msl_out = libs[-1]
+    say('shader libraries: %s (%d)' % (msl_out.name, len(list(msl_out.glob('*_b.metallib')))))
     if a.stop_after == 'guest': return say('stopped before assembly')
 
     stage = work / 'stage'

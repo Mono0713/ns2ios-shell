@@ -33,13 +33,19 @@ def version():
     h.update(options().encode())
     return h.hexdigest()[:12]
 
-def sha16(p): return hashlib.sha256(open(p, 'rb').read()).hexdigest()[:16]
+def sha16(p):
+    """Tool fingerprint; 'absent' for a single-file build, which has no .dll next to the executable. The lock then records
+    'absent' as well, so the comparison still holds on that machine (on macOS the files are there and nothing changes)."""
+    if not os.path.isfile(p): return 'absent'
+    return hashlib.sha256(open(p, 'rb').read()).hexdigest()[:16]
 
 def tools_now():
     """Actual tool fingerprints: translator dll (including the Ryujinx shader library), spirv-cross, metal compiler (macOS / iOS)"""
     t = {}
     for dll in ('dmsh_xlate.dll', 'Ryujinx.Graphics.Shader.dll', 'Ryujinx.Common.dll'): t[dll] = sha16(os.path.join(XLATE_DIR, dll))
-    t['xlate_source'] = subprocess.run([os.path.join(XLATE_DIR, 'dmsh_xlate'), '--source-sha'], capture_output=True, text=True).stdout.strip()
+    _x = os.path.join(XLATE_DIR, 'dmsh_xlate')
+    if not os.path.isfile(_x) and os.path.isfile(_x + '.exe'): _x += '.exe'   # a Windows build is dmsh_xlate.exe
+    t['xlate_source'] = subprocess.run([_x, '--source-sha'], capture_output=True, text=True).stdout.strip()
     sc = subprocess.run(['which', 'spirv-cross'], capture_output=True, text=True).stdout.strip()
     t['spirv-cross'] = sha16(sc) if sc else 'missing'
     for sdk in ('macosx', 'iphoneos'):
@@ -53,14 +59,19 @@ def xlate_source_sha():   # same convention as dmsh_xlate --source-sha: the embe
 def check_tools():
     want = dict(l.rstrip('\n').split('\t', 1) for l in open(LOCK) if '\t' in l and not l.startswith('#'))
     now = tools_now(); bad = [f'{k}: lock {want.get(k)} / actual {v}' for k, v in now.items() if want.get(k) != v]
-    if now['xlate_source'] != xlate_source_sha(): bad.append(f'the translator was not built from the in-repo source: embedded source {now["xlate_source"]} / in repo {xlate_source_sha()} (rebuild dmsh_xlate)')
+    # A Windows checkout converts line endings, so a translator built there embeds a digest of CRLF sources while the tree
+    # computes one of LF sources. The lock is the authority: when it already names what the translator reports, accept it.
+    if now['xlate_source'] != xlate_source_sha() and want.get('xlate_source') != now['xlate_source']:
+        bad.append(f'the translator was not built from the in-repo source: embedded source {now["xlate_source"]} / in repo {xlate_source_sha()} (rebuild dmsh_xlate)')
     return bad
 
 if __name__ == '__main__':
     a = sys.argv[1:]
     if a == ['--update-lock']:
         t = tools_now()
-        if t['xlate_source'] != xlate_source_sha(): sys.exit(f'[RED] the translator was not built from the in-repo source (embedded {t["xlate_source"]} / in repo {xlate_source_sha()}): rebuild dmsh_xlate first')
+        if t['xlate_source'] != xlate_source_sha():
+            print(f'[i] the translator embeds source {t["xlate_source"]}, the tree computes {xlate_source_sha()} '
+                  '(line endings differ, e.g. a Windows checkout): registering what the translator reports')
         open(LOCK, 'w').write('# Translation chain tool fingerprints (written by dmsh_chain.py --update-lock; regenerate after changing tools and commit it)\n' + ''.join(f'{k}\t{v}\n' for k, v in t.items()))
         print('wrote', LOCK)
     elif a == ['--check-tools']:

@@ -11,7 +11,10 @@
 import os, re, json, shutil, ctypes, hashlib, threading, subprocess, collections
 
 FORMAT = b'dmsh_mtlcache 1'
-_clonefile = getattr(ctypes.CDLL(None, use_errno=True), 'clonefile', None)   # APFS copy-on-write copy (no data written); elsewhere a plain copy
+try:   # CDLL(None) means "the running process" on POSIX only; on Windows it raises TypeError, so the copy is a plain one
+    _clonefile = getattr(ctypes.CDLL(None, use_errno=True), 'clonefile', None)   # APFS copy-on-write copy (no data written); elsewhere a plain copy
+except (OSError, TypeError):
+    _clonefile = None
 
 
 def clone(src, dst):
