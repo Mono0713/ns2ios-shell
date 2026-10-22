@@ -136,6 +136,15 @@ jobs:
           echo "V=$V" >> "$GITHUB_ENV"
           echo "building $V from $src"
 
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          # xcodegen builds the project; fontTools is what make_ext_font.py draws the button-icon font with
+          brew install xcodegen
+          python3 -m pip install --quiet --break-system-packages fonttools \
+            || python3 -m pip install --quiet fonttools
+          python3 -c "import fontTools; print('fontTools', fontTools.version)"
+
       - name: Check the packer and the tools it drives
         run: |
           set -euo pipefail
