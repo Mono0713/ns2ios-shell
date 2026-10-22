@@ -133,9 +133,10 @@ jobs:
           echo "building $V from $src"
 
       - name: Check the packer and the tools it drives
-        working-directory: ${{ env.TREE }}
         run: |
           set -euo pipefail
+          # cd, not working-directory: ${{ env.X }} does not see values written to GITHUB_ENV at run time
+          cd "$TREE"
           python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py
           python3 scripts/nxn_pack.py --help > /dev/null
           # nometal_run.py answers the four toolchain probes Apple's compiler would answer: if one regresses, every
@@ -154,11 +155,11 @@ jobs:
           PY
 
       - name: Build the shell
-        working-directory: ${{ env.TREE }}
         env:
           DM_ROOT: ${{ runner.temp }}/dm-work
         run: |
           set -euo pipefail
+          cd "$TREE"
           SDK=$(xcrun --sdk iphoneos --show-sdk-version)
           test "${SDK%%.*}" -ge 26 || { echo "::error::iOS 26 SDK required, runner has $SDK"; exit 1; }
           bash dm/ios/tools/shell_build.sh
