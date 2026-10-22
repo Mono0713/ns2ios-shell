@@ -14,10 +14,10 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'Tree to build from'
+        description: 'Tree to build from (upstream = latest nxnative + this fork''s files, fork = this snapshot)'
         type: choice
-        options: [fork, upstream]
-        default: fork
+        options: [upstream, fork]
+        default: upstream
       publish:
         description: 'Publish a release'
         type: boolean
@@ -102,7 +102,7 @@ jobs:
       - name: Assemble the source tree
         id: tree
         env:
-          REQUESTED: ${{ github.event_name == 'schedule' && 'upstream' || inputs.source || 'fork' }}
+          REQUESTED: ${{ inputs.source || 'upstream' }}   # upstream by default: this repository only carries the diff
         run: |
           # keep this step's output too: a failure here happens before the build log exists
           exec > >(tee "$RUNNER_TEMP/shell.out") 2>&1
