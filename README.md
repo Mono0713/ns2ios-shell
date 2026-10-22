@@ -1,99 +1,150 @@
-# nxnative
+# nxnative shell — pack an IPA without a Mac
 
-Play your own Nintendo Switch games natively on iPhone and iPad. Bring your game (its NSP files) and your `prod.keys`; one script turns them into an IPA that you sideload.
+Play your own Nintendo Switch games on iPhone and iPad. This fork of [nxnative](https://github.com/seedds/nxnative) splits the
+build in two, so the Mac-only half happens **once** on a CI runner and everything that needs your game files happens on **your
+own machine — Windows, Linux or macOS, without Xcode**.
 
-It is not an emulator: the game's own code runs directly on the Apple chip, with Switch graphics rebuilt on Metal. Nothing from any game is in this repository, and the project is not affiliated with Nintendo or any game publisher.
+| | Where | What |
+|---|---|---|
+| **1. Shell** | built by CI, downloaded once | A few MB of unsigned iOS app with **no game content at all** |
+| **2. Pack** | your machine | `scripts/nxn_pack.py` takes your NSP + `prod.keys`, rewrites the program, translates the shaders and writes them into the shell |
 
-## Acknowledgements
+The shell is **game-agnostic**: one shell serves any game in the supported list. Nothing from any game ever reaches this
+repository or CI.
 
-This project is built on other people's work:
+> 中文说明：[README.zh-CN.md](README.zh-CN.md) · Upstream's own README (the Mac route): [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md)
 
-- **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (MIT) developed this native-execution approach, for Diablo II: Resurrected. nxnative (first called smbw-mobile) started as a copy of its generic parts: the NSO rewriter, the host that stands in for Horizon, the NVN-on-Metal layer and the iOS app shell. Fixes go both ways.
-- **Ryujinx** (MIT): its shader translator (`Ryujinx.Graphics.Shader`, `Ryujinx.Common` and `Spv.Generator` 1.3.2, in `dm/third_party/ryujinx` with a few fixes listed in [its README](dm/third_party/ryujinx/README.md)) turns the games' Maxwell shaders into SPIR-V. Its emulation of the kernel and system services is also a reference when the host's behaviour is in doubt.
-- **[Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)**: its kernel, mesosphère, is the reference for Horizon's synchronization semantics (address arbiter, condition variables).
-- **yuzu**: Maxwell instruction encodings for the shader reference tool, and a cross-check for kernel behaviour.
-- **[LibHac](https://github.com/Thealexbarney/LibHac)**: reads NSPs and layers updates over the base game in `dm/tools/nx_extract`. **hactool** did the first extractions.
-- **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**: SPIR-V to Metal Shading Language.
-- **deko3d** (zlib): its texture layout size algorithm is ported in `dm/gfx/nvn/nvn_tex.c`.
-- **libvpx** (VP9 movies), **stb_vorbis** (movie sound), the **Vulkan headers** and **NVIDIA FLIP** ship in `dm/third_party` with their licenses ([list](dm/third_party/README.md)).
-- **Capstone**, **lz4**, **fontTools** and **XcodeGen** are used by the build.
+## Quick start (Windows)
 
-## Games
+**1. Download two files** from the [Releases](../../releases) page:
 
-All of these are tested on an iPhone and playable:
+- `shell-<date>-<commit>-shell.zip` — the shell
+- `nxnative-windows-tools.zip` — `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe` (self-contained, no .NET SDK needed)
 
-| | |
-|:---:|:---:|
-| ![Super Mario Bros. Wonder](docs/images/super-mario-bros-wonder.jpg)<br>Super Mario Bros. Wonder<br><sub>IPA ~4 GB</sub> | ![Fire Emblem Engage](docs/images/fire-emblem-engage.jpg)<br>Fire Emblem Engage<br><sub>IPA ~15 GB · 60 fps (30 on Switch) with update 2.0.0</sub> |
-| ![Metroid Dread](docs/images/metroid-dread.jpg)<br>Metroid Dread<br><sub>IPA ~5 GB</sub> | ![13 Sentinels: Aegis Rim](docs/images/13-sentinels.jpg)<br>13 Sentinels: Aegis Rim<br><sub>IPA ~5 GB</sub> |
-| ![Super Mario 3D World + Bowser's Fury](docs/images/super-mario-3d-world.jpg)<br>Super Mario 3D World + Bowser's Fury<br><sub>IPA ~3 GB</sub> | ![The Legend of Zelda: Breath of the Wild](docs/images/zelda-breath-of-the-wild.jpg)<br>The Legend of Zelda: Breath of the Wild<br><sub>IPA ~16 GB · 60 fps (30 on Switch) with update 1.9.0</sub> |
-| ![The Legend of Zelda: Link's Awakening](docs/images/zelda-links-awakening.jpg)<br>The Legend of Zelda: Link's Awakening<br><sub>IPA ~6 GB</sub> | ![Super Mario Odyssey](docs/images/super-mario-odyssey.jpg)<br>Super Mario Odyssey<br><sub>IPA ~6 GB</sub> |
-| ![Hades](docs/images/hades.jpg)<br>Hades<br><sub>IPA ~4 GB</sub> | ![Hyrule Warriors: Age of Calamity](docs/images/hyrule-warriors-age-of-calamity.jpg)<br>Hyrule Warriors: Age of Calamity<br><sub>IPA ~15 GB · 60 fps (30 on Switch) with update 1.3.0</sub> |
-| ![Fire Emblem: Three Houses](docs/images/fire-emblem-three-houses.jpg)<br>Fire Emblem: Three Houses<br><sub>IPA ~13 GB · 60 fps (30 on Switch) with update 1.2.0</sub> | ![Super Mario Galaxy](docs/images/super-mario-galaxy.jpg)<br>Super Mario Galaxy<br><sub>IPA ~3 GB</sub> |
-| ![The Legend of Zelda: Tears of the Kingdom](docs/images/zelda-tears-of-the-kingdom.jpg)<br>The Legend of Zelda: Tears of the Kingdom<br><sub>IPA ~17 GB · 60 fps (30 on Switch) with update 1.4.3</sub> | ![Monster Hunter Rise](docs/images/monster-hunter-rise.jpg)<br>Monster Hunter Rise<br><sub>IPA ~22 GB · 60 fps (30 on Switch) with update 16.0.2</sub> |
-| ![Ace Attorney Investigations Collection](docs/images/ace-attorney-investigations.jpg)<br>Ace Attorney Investigations Collection<br><sub>IPA ~7 GB</sub> | ![Hades II](docs/images/hades-ii.jpg)<br>Hades II<br><sub>IPA ~4 GB</sub> |
-| ![Unicorn Overlord](docs/images/unicorn-overlord.jpg)<br>Unicorn Overlord<br><sub>IPA ~4 GB</sub> | ![Rhythm Heaven Groove](docs/images/rhythm-heaven-groove.jpg)<br>Rhythm Heaven Groove<br><sub>IPA ~3 GB</sub> |
-| ![Octopath Traveler 0](docs/images/octopath-traveler-0.jpg)<br>Octopath Traveler 0<br><sub>IPA ~4 GB · 60 fps (30 on Switch) with update 1.0.5</sub> | ![Pokémon Legends: Z-A](docs/images/pokemon-legends-z-a.jpg)<br>Pokémon Legends: Z-A<br><sub>IPA ~6 GB</sub> |
-| ![Cuphead](docs/images/cuphead.jpg)<br>Cuphead<br><sub>IPA ~5 GB</sub> | ![Super Mario Galaxy 2](docs/images/super-mario-galaxy-2.jpg)<br>Super Mario Galaxy 2<br><sub>IPA ~3 GB</sub> |
-| ![FINAL FANTASY TACTICS - The Ivalice Chronicles](docs/images/final-fantasy-tactics.jpg)<br>FINAL FANTASY TACTICS - The Ivalice Chronicles<br><sub>IPA ~11 GB</sub> | ![Absolum](docs/images/absolum.jpg)<br>Absolum<br><sub>IPA ~2 GB</sub> |
-| ![Captain Toad: Treasure Tracker](docs/images/captain-toad-treasure-tracker.jpg)<br>Captain Toad: Treasure Tracker<br><sub>IPA ~2 GB</sub> | ![Brain Memory Training Academy](docs/images/brain-memory-training-academy.jpg)<br>Brain Memory Training Academy<br><sub>IPA ~0.1 GB</sub> |
-| ![The Great Ace Attorney Chronicles](docs/images/the-great-ace-attorney-chronicles.jpg)<br>The Great Ace Attorney Chronicles<br><sub>IPA ~4 GB</sub> | ![STEINS;GATE RE:BOOT](docs/images/steins-gate-reboot.jpg)<br>STEINS;GATE RE:BOOT<br><sub>IPA ~6 GB</sub> |
+Unpack the tools anywhere, e.g. `D:\nxn-tools`.
 
-Needs iOS / iPadOS 26 or later on an iPhone 15 Pro or newer (A17 Pro chip or later) or an iPad with an M1 chip or later: the games' textures are BC-compressed, and older iPhones can't read that format. Other games aren't supported yet. For them the script writes a survey and still tries its best to pack an IPA, guessing the game's settings; such an IPA may not start.
-
-## Pack an IPA
-
-**1. Get nxnative and its tools** (once, on a Mac with [Xcode](https://apps.apple.com/app/xcode/id497799835) and [Homebrew](https://brew.sh)):
+**2. Put one game's files in a folder.** The file name must carry the title ID and version:
 
 ```
-git clone https://github.com/seedds/nxnative.git && cd nxnative
-brew install xcodegen zstd spirv-cross
-brew install --cask dotnet-sdk
-python3 -m pip install lz4 capstone fonttools "backports.zstd; python_version < '3.14'"
+D:\games\hades2\
+  Hades II [0100A00019DE0000][v0].nsp
 ```
 
-**2. Put one game's NSPs in a folder**, base game (an NSP, or an XCI cartridge dump) and update (and any DLC):
+**3. Run:**
 
-```
-~/Games/MarioWonder/
-  Super Mario Bros. Wonder [010015100B514000][v0].nsp
-  Super Mario Bros. Wonder [010015100B514800][v327680].nsp
-```
-
-**3. Run the script:**
-
-```
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys
+```bash
+python scripts/nxn_pack.py shell-<date>-<commit>-shell.zip D:\games\hades2 ^
+    -k D:\keys\prod.keys --tools D:\nxn-tools
 ```
 
-The IPA appears in the same folder (here `~/Games/MarioWonder/SMBWMobile.ipa`). The first build takes 30–60 minutes, later ones about 10. You need free disk space of about twice the NSPs' size plus 10 GB. Options such as `-o` (output path) and `--app-name` are listed by `-h`.
+**4. Sideload the IPA** it writes next to your NSPs (SideStore, Sideloadly, LiveContainer…). The first launch compiles the
+shaders once, with a progress page that estimates how long it will take.
 
-**4. Install** the IPA with your sideloading tool (AltStore, Sideloadly, LiveContainer, …). The app gets the game's name, icon and version (the update's version, for example 1.2.1 for Mario Wonder; the base game's when there is no update).
+## Requirements
 
-## Play
+On the **packing machine**:
 
-**Touch controls.** Tap **2D** / **3D** at the top to switch layouts; the app remembers your choice. Wonder, Engage, Dread, 13 Sentinels, Link's Awakening, Ace Attorney Investigations Collection, Unicorn Overlord, Rhythm Heaven Groove, Octopath Traveler 0, Pokémon Legends: Z-A, Cuphead, Absolum, Brain Memory Training Academy, The Great Ace Attorney Chronicles and STEINS;GATE RE:BOOT start in 2D, the other games in 3D (STEINS;GATE RE:BOOT's quick save is R3, in the 3D layout). In 3D, the right stick (the camera in most games) is not drawn: swipe on the right third of the screen, starting anywhere off the buttons. In Super Mario Galaxy and Super Mario Galaxy 2, other touches outside the controls move the pointer; in Captain Toad: Treasure Tracker they touch the game's screen (touch blocks, stun enemies).
-A connected game controller hides the touch controls and keeps every button.
+| Need | How |
+|---|---|
+| Python 3.9+ | `pip install lz4 capstone fonttools backports.zstd pillow` |
+| Three executables | From `nxnative-windows-tools.zip`, passed with `--tools` |
+| `prod.keys` | Dumped from your own console. It never leaves your machine: it is passed to `nx_extract` as an argument and is not written to any log |
 
-**Shaking.** Shake the iPhone to shake the controller, in games that read its motion: Super Mario Odyssey's motion moves (such as the cap throw on a shake) need it, and Odyssey only takes them in its default docked mode. A light bump does not count; a sharp flick of the phone does.
+No .NET SDK, no C++ toolchain, no Mac. (Building the tools yourself is possible: `dotnet publish dm/tools/nx_extract -r win-x64
+--self-contained`, same for `dm/gfx/tools/dmsh_xlate`; SPIRV-Cross must be the `vulkan-sdk-1.4.357.0` tag.)
 
-- **Game language** is English by default. Pick another when packing with `--language` (`-l`), by code or by name: `-l ja`, `-l zh-Hans`, `-l French` (`LANGUAGE` in Spyder). It must be one the game has; the script prints the game's languages and stops on one it lacks. To change it without rebuilding, add a line such as `DM_LANG=zh-Hans` to `Documents/env.txt`.
-- **Saves and logs** are in the Files app, under the app's name: `save/` and `log.txt`. When something goes wrong, send `log.txt` (the previous run is `log.prev.txt`).
-- **Short stutters** the first time a new scene appears are normal: the app compiles graphics for it once and remembers them for the next launch.
-- **Reinstalling:** some sideloading tools give a reinstalled app a new data folder. Copy `save/` and `pso_user.tsv` over from the old one to keep your progress.
-- **Settings without rebuilding:** put lines like `DM_OPMODE=0` (handheld mode: lower resolution, higher frame rate) in `Documents/env.txt`. `DM_FPS_TARGET=30` keeps Breath of the Wild, Tears of the Kingdom and Octopath Traveler 0 at their original 30 fps, which saves battery. `DM_SHOW_FPS=1` shows the frame rate at the top left (`--show-fps` when packing turns it on from the start).
+## File naming — read this
 
-## Known issues
+The packer takes the **title ID and version from the file name**:
 
-- No amiibo and no online features.
-- Fire Emblem Engage: after switching away from the app and back, some sounds may stay silent until you restart it.
-- Fire Emblem: Three Houses: small square patches on the ground where decals land.
-- Super Mario Galaxy and Super Mario Galaxy 2: effects drawn as points or lines come out one pixel wide.
+```
+Hades II [0100A00019DE0000][v0].nsp
+         └── title ID ──┘ └ver┘
+```
 
-## For developers
+- Missing the title ID → the file is skipped with a warning.
+- **Two content checks then verify it really is that version**: the NSO build ID in `ExeFS/main` and `sdk` is compared with
+  the profile, and the shader tables split out of your files must match the profile byte for byte. A wrong file name or a
+  wrong game version stops the build instead of producing a broken IPA.
 
-How it works, the script's options, running games on the Mac, adding a game, and per-game notes: [docs/development.md](docs/development.md). In-depth bring-up and debugging notes: [docs/agents](docs/agents/README.md).
+Formats: **NSP** (base, updates, DLC) and **XCI** (cartridge dump — base game only). **NSZ is not supported**: unpack it first
+with `nsz -D "file.nsz"`.
 
-## License
+## Which games work
 
-MIT (see [LICENSE](LICENSE)). Third-party code keeps its own license; see [dm/third_party](dm/third_party/README.md).
+Games with a profile in [`dm/games/`](dm/games/) are supported, and the profile records **which versions must be present**.
+Some games need the base game **and** an update:
+
+| Situation | Example |
+|---|---|
+| Base game only | Hades II `0100A00019DE0000`, Brain Memory Training Academy, Rhythm Heaven Groove, The Great Ace Attorney Chronicles |
+| Base + specific update | Super Mario Bros. Wonder needs `v0` **and** `v327680` (1.2.1); Odyssey needs `v393216` |
+
+`shader_versions` in `dm/games/<title ID>/game.tsv` is the requirement. When a version is missing the packer says so and
+names the file you need.
+
+Two titles are known to need more: **Fire Emblem: Three Houses** (GLSL shaders) and **Super Mario Galaxy** (Vulkan) generate
+their shaders at run time, so they cannot be produced from the files alone.
+
+## How it works
+
+```
+CI (once)          your machine                      iPhone
+─────────          ──────────────────────────────    ────────────────────
+shell_build.sh ──► nxn_pack.py
+  host program       ├ extract NSP      (nx_extract)
+  no game content    ├ rewrite program   (patch_nso.py)
+  no shaders         ├ split shaders     (shader_split.py)
+  no RomFS           ├ translate → MSL   (dmsh_xlate, spirv-cross)  ──► IPA ──► sideload
+                     ├ write Guest.framework (guest_dylib.py)            │
+                     └ assemble + pack (pack_ipa.py)                    ▼
+                                                                  first launch:
+                                                                  compile shaders
+```
+
+Two things make one shell work for every game, both moved from compile time to run time:
+
+- the **module list** is read back from the `__dm<name>x0` sections of `Frameworks/Guest.framework` (the game program is a
+  segment-only dylib instead of being compiled into the executable);
+- the **shader chain version** is read from the name of the `msl/b-<version>` directory.
+
+The shell is also compiled against a neutral placeholder profile, so the game's memory layout (`mem_used`, `app_pool`, …) is
+written by the packer into the app's `dm/env.txt` and read by the host at startup.
+
+## Notes and caveats
+
+- **The IPA contains your game files.** It is for your own use; do not distribute it.
+- **First launch takes a while**: the phone compiles every shader once. Hades II's 140 shaders take about 5 s; bigger titles
+  take minutes (the progress page estimates). The system caches the result, so later launches start immediately.
+- To change a setting on the device without repacking, put `KEY=VALUE` lines in the app's `Documents/env.txt`.
+- If it crashes, the host writes `Documents/log.txt` — in almost every case that file names the reason.
+- Packing needs **disk space of roughly twice the NSP size**: the extracted RomFS, the staged app and the IPA coexist.
+
+## Repository layout
+
+```
+dm/ios/tools/shell_build.sh      builds the shell (CI, needs the macOS 26 SDK)
+scripts/nxn_pack.py              packs the shell + your game files into an IPA (any OS)
+dm/tools/guest_dylib.py          writes Frameworks/Guest.framework from the rewritten modules
+dm/gfx/tools/nometal_run.py      runs the shader chain without Apple's metal compiler
+dm/ios/Sources/dm_shader_prep.m  first-launch shader compilation page
+dm/games/0000000000000000/       neutral profile the shell is compiled against
+.shell-overlay.txt               files this fork adds or changes on top of upstream
+docs/SHELL.md                    the split in more detail
+```
+
+## Credits and license
+
+This is a fork of **[nxnative](https://github.com/seedds/nxnative)** by **jhaizhou**, and owes most of its substance to it: the
+rewriter, the translation chain, the host, the game profiles and the thirty-odd device-verified titles are upstream's work.
+
+The shell route follows **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (same author, nxnative's predecessor),
+which worked it out first for Diablo II. `guest_dylib.py`, `nometal_run.py`, `dm_shader_prep.m` and `shell_build.sh` are ported
+from there.
+
+`nx_extract` uses **[LibHac](https://github.com/Thealexbarney/LibHac)**; the shader translator embeds Ryujinx's shader library;
+shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**.
+
+**License: MIT**, the same as upstream (see [LICENSE](LICENSE), © 2026 jhaizhou). If you redistribute this fork or a build of
+it, keep the copyright notice and this license with it. The MIT license covers the code only: game files, keys and any IPA you
+pack are your own responsibility and are not covered by it.

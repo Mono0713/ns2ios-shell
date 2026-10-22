@@ -1,0 +1,34 @@
+# Files this fork adds or changes on top of seedds/nxnative.
+#
+# The upstream build job takes the latest upstream tree and copies exactly these paths over it before building. Keeping the
+# list explicit (instead of copying everything) means an upstream change to any other file is picked up automatically, and
+# the surface we have to keep compatible is visible in one place.
+#
+# When you add or modify a file for the shell route, add it here or the upstream build will silently use the original.
+
+# --- changed ---
+dm/host/loader.c              # module images from Frameworks/Guest.framework instead of the executable (+ dm_shell_modules)
+dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL)
+dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name
+dm/gfx/tools/shader_split.py  # posix separators in the recorded RomFS paths (Windows)
+dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
+dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
+dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host
+dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
+
+# --- added ---
+dm/tools/guest_dylib.py                 # writes Frameworks/Guest.framework (pure standard library, any OS)
+dm/gfx/tools/nometal_run.py             # runs the shader chain without Apple's compiler
+dm/ios/Sources/dm_shader_prep.m          # first-launch shader compilation page
+dm/ios/tools/shell_build.sh              # builds the game-free shell
+dm/games/0000000000000000/game.tsv       # neutral placeholder profile the shell is compiled against
+dm/games/0000000000000000/dmsh_chain.h
+scripts/nxn_pack.py                      # packs the shell and the user's game files into an IPA, on any OS
+README.md                     # this fork's route (upstream's is kept at docs/UPSTREAM-README.md)
+README.zh-CN.md
+docs/SHELL.md
+docs/SHELL.zh-CN.md
+docs/UPSTREAM-README.md
+.github/workflows/shell.yml
+.github/workflows/windows-tools.yml
+.shell-overlay.txt

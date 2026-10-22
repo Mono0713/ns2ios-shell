@@ -1,100 +1,47 @@
 name: Build shell
 
-# Builds the game-free shell on a GitHub-hosted Apple silicon runner. The output is a few MB and contains no game content, so it
-# neither touches the 2 GB release-asset limit nor puts anyone's game files on GitHub. One shell then serves any game: users run
-# scripts/nxn_pack.py on Windows/Linux/macOS to pack their own NSP + prod.keys into it and sideload the resulting IPA.
+# Builds the game-free shell and the Windows-side tools, then publishes them as a release.
+#
+# Two sources are supported:
+#   fork      this repository's tree (default for manual runs and pushes)
+#   upstream  the latest seedds/nxnative commit with this fork's changes copied over it, per .shell-overlay.txt
+#             (the daily schedule uses this, so an upstream update becomes a new release without anyone acting)
+#
+# The output contains no game content: a few MB of app plus three Windows executables. Users pack their own game files
+# into the shell with scripts/nxn_pack.py and sideload the result.
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: 'Tree to build from'
+        type: choice
+        options: [fork, upstream]
+        default: fork
+      publish:
+        description: 'Publish a release'
+        type: boolean
+        default: true
   push:
+    branches: [main]
     paths:
       - 'dm/**'
+      - 'scripts/**'
+      - '.shell-overlay.txt'
       - '.github/workflows/shell.yml'
+  schedule:
+    - cron: '0 19 * * *'   # daily, 03:00 Beijing time, from upstream
 
 permissions:
-  contents: read
+  contents: write           # creating releases
 
 concurrency:
-  group: shell
-  cancel-in-progress: true
+  group: shell-build
+  cancel-in-progress: false
 
 jobs:
-  shell:
-    # iOS 26 SDK is required (project.yml deploymentTarget 26.0, Metal 4 in the graphics layer), so macos-26 / Xcode 26.
-    runs-on: macos-26
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Verify the toolchain
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = arm64
-          xcodebuild -version
-          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
-          echo "iOS SDK $SDK"
-          test "${SDK%%.*}" -ge 26 || { echo "::error::iOS 26 SDK required, runner has $SDK"; exit 1; }
-          df -h "$RUNNER_TEMP"
-
-      - name: Install dependencies
-        run: |
-          set -euo pipefail
-          brew install xcodegen zstd spirv-cross
-          python3 -m pip install --quiet --break-system-packages lz4 capstone fonttools \
-            || python3 -m pip install --quiet lz4 capstone fonttools
-
-      - name: Check the packer and the tools it drives
-        run: |
-          set -euo pipefail
-          python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py
-          python3 scripts/nxn_pack.py --help > /dev/null
-          # nometal_run.py answers the four toolchain probes Apple's compiler would answer: if one regresses, every
-          # packing attempt on a machine without Xcode dies at the shader step.
-          python3 - <<'PY'
-          import importlib.util
-          spec = importlib.util.spec_from_file_location('nm', 'dm/gfx/tools/nometal_run.py')
-          m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-          for cmd, want in ((['xcrun','-sdk','macosx','metal','--version'], 'none'),
-                            (['xcrun','-sdk','macosx','metallib','--version'], 'none'),
-                            (['xcrun','-sdk','iphoneos','--show-sdk-version'], '26.0'),
-                            (['xcrun','-sdk','iphoneos','--show-sdk-build-version'], '26A000')):
-              got = m.run(cmd, capture_output=True, text=True).stdout.strip()
-              assert got == want, (cmd, got, want)
-          print('nometal_run: 4/4 probes answered')
-          PY
-
-      - name: Build the shell
-        run: bash dm/ios/tools/shell_build.sh
-        env:
-          # runner.* is only available in step-level expressions, not in a job-level env block.
-          DM_ROOT: ${{ runner.temp }}/dm-work
-
-      - name: List the shell's contents
-        if: always()
-        run: |
-          f="$RUNNER_TEMP/dm-work/build/shell/shell_files.tsv"
-          if [ -f "$f" ]; then echo "### Shell contents ($(wc -l < "$f" | tr -d ' ') files)"; head -80 "$f"; else echo "no file list produced"; fi >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload the shell
-        uses: actions/upload-artifact@v4
-        with:
-          name: nxnative-shell-build-input
-          path: ${{ runner.temp }}/dm-work/build/shell/nxnative-shell-build-input.zip
-          if-no-files-found: error
-
-      - name: Upload the build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shell-build-log
-          path: |
-            ${{ runner.temp }}/dm-work/build/shell/build.log
-          if-no-files-found: ignore
-
-  # The tools a packing machine needs but cannot easily get: nx_extract and the shader translator are .NET programs, and
-  # SPIRV-Cross has no Windows build for the exact tag the shader chain was pinned to. Built here once as self-contained
-  # executables, so a Windows user needs neither the .NET SDK nor a C++ toolchain -- only Python and its packages.
-  windows-tools:
+  tools:
+    name: Windows tools
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -123,7 +70,7 @@ jobs:
           set -euo pipefail
           mkdir -p out/spirv-cross
           exe=$(find SPIRV-Cross -name 'spirv-cross.exe' -type f | head -1)
-          test -n "$exe" || { echo "::error::spirv-cross.exe was not produced"; find SPIRV-Cross -name '*.exe' | head; exit 1; }
+          test -n "$exe" || { echo "::error::spirv-cross.exe was not produced"; exit 1; }
           cp "$exe" out/spirv-cross/
           test -f out/nx_extract/nx_extract.exe
           test -f out/dmsh_xlate/dmsh_xlate.exe
@@ -138,3 +85,169 @@ jobs:
             out/dmsh_xlate/dmsh_xlate.exe
             out/spirv-cross/spirv-cross.exe
           if-no-files-found: error
+
+  shell:
+    name: Shell
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.tree.outputs.version }}
+      origin: ${{ steps.tree.outputs.origin }}
+    steps:
+      - name: Check out this fork
+        uses: actions/checkout@v4
+        with:
+          path: fork
+
+      - name: Assemble the source tree
+        id: tree
+        env:
+          REQUESTED: ${{ github.event_name == 'schedule' && 'upstream' || inputs.source || 'fork' }}
+        run: |
+          set -euo pipefail
+          source="$REQUESTED"
+          src=fork
+          if [ "$source" = upstream ]; then
+            echo "::group::fetch upstream"
+            git clone --depth 1 https://github.com/seedds/nxnative.git up
+            UP=$(git -C up rev-parse HEAD)
+            echo "upstream commit $UP"
+            # copy this fork's files over the upstream tree; the list is explicit, so everything else follows upstream
+            grep -vE '^[[:space:]]*(#|$)' fork/.shell-overlay.txt | while read -r p; do
+              mkdir -p "up/$(dirname "$p")"
+              cp -a "fork/$p" "up/$p"
+            done
+            src=up
+            echo "::endgroup::"
+            echo "origin=upstream $UP" >> "$GITHUB_OUTPUT"
+            echo "SHA=$UP" >> "$GITHUB_ENV"
+          else
+            SHA=$(git -C fork rev-parse HEAD)
+            echo "origin=fork $SHA" >> "$GITHUB_OUTPUT"
+            echo "SHA=$SHA" >> "$GITHUB_ENV"
+          fi
+          V="shell-$(date -u +%Y%m%d)-$(echo "$SHA" | cut -c1-7)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "TREE=$src" >> "$GITHUB_ENV"
+          echo "V=$V" >> "$GITHUB_ENV"
+          echo "building $V from $src"
+
+      - name: Check the packer and the tools it drives
+        working-directory: ${{ env.TREE }}
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py
+          python3 scripts/nxn_pack.py --help > /dev/null
+          # nometal_run.py answers the four toolchain probes Apple's compiler would answer: if one regresses, every
+          # packing attempt on a machine without Xcode dies at the shader step.
+          python3 - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('nm', 'dm/gfx/tools/nometal_run.py')
+          m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          for cmd, want in ((['xcrun','-sdk','macosx','metal','--version'], 'none'),
+                            (['xcrun','-sdk','macosx','metallib','--version'], 'none'),
+                            (['xcrun','-sdk','iphoneos','--show-sdk-version'], '26.0'),
+                            (['xcrun','-sdk','iphoneos','--show-sdk-build-version'], '26A000')):
+              got = m.run(cmd, capture_output=True, text=True).stdout.strip()
+              assert got == want, (cmd, got, want)
+          print('nometal_run: 4/4 probes answered')
+          PY
+
+      - name: Build the shell
+        working-directory: ${{ env.TREE }}
+        env:
+          DM_ROOT: ${{ runner.temp }}/dm-work
+        run: |
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          test "${SDK%%.*}" -ge 26 || { echo "::error::iOS 26 SDK required, runner has $SDK"; exit 1; }
+          bash dm/ios/tools/shell_build.sh
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$DM_ROOT/build/shell/nxnative-shell-build-input.zip" "$GITHUB_WORKSPACE/dist/${V}-shell.zip"
+          cp "$DM_ROOT/build/shell/shell_files.tsv" "$GITHUB_WORKSPACE/dist/${V}-contents.tsv"
+
+      - name: Summarise
+        if: always()
+        run: |
+          f="$GITHUB_WORKSPACE/dist/${V}-contents.tsv"
+          {
+            echo "### Shell ${V}"
+            echo
+            echo "- source: ${{ steps.tree.outputs.origin }}"
+            if [ -f "$f" ]; then echo "- contents: $(wc -l < "$f" | tr -d ' ') files"; echo '```'; head -40 "$f"; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shell
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-build-log
+          path: ${{ runner.temp }}/dm-work/build/shell/build.log
+          if-no-files-found: ignore
+
+  release:
+    needs: [tools, shell]
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: shell
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-tools
+          path: tools
+
+      - name: Pack the tools
+        run: |
+          set -euo pipefail
+          cd tools && zip -qry ../dist/nxnative-windows-tools.zip . && cd ..
+
+      - name: Write the notes
+        run: |
+          cat > notes.md <<'EOF'
+          The game-free shell plus the three executables a packing machine needs. Nothing here contains game content.
+
+          ## Files
+
+          | File | What it is |
+          |---|---|
+          | `<version>-shell.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe` — self-contained, no .NET SDK or C++ toolchain needed. |
+
+          ## Use it
+
+          1. Download both files and unpack the tools somewhere, e.g. `D:\nxn-tools`.
+          2. Put one game's NSP/XCI in a folder. The file name must carry the title and version:
+             `Hades II [0100A00019DE0000][v0].nsp`. A game whose profile lists several versions needs all of them.
+          3. Run `python scripts/nxn_pack.py <shell>.zip <game folder> -k <prod.keys> --tools D:\nxn-tools`.
+          4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer). The first launch compiles the shaders once.
+
+          The packing machine needs Python 3.9+ with `lz4 capstone fonttools backports.zstd pillow`.
+
+          See `README.md` (English) and `README.zh-CN.md` for the full instructions, the game list and the naming rules.
+
+          ## Credits
+
+          Built on nxnative by jhaizhou (MIT) and on its predecessor d2r-mobile (MIT), which pioneered the shell route.
+          EOF
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.shell.outputs.version }}"
+          TITLE="Shell ${{ needs.shell.outputs.version }}"
+          { echo "Source: ${{ needs.shell.outputs.origin }}"; echo; cat notes.md; } > body.md
+          gh release create "$TAG" dist/*.zip dist/*.tsv \
+            --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file body.md \
+            || gh release upload "$TAG" dist/*.zip dist/*.tsv --repo "$GITHUB_REPOSITORY" --clobber
+          echo "published $TAG" >> "$GITHUB_STEP_SUMMARY"
