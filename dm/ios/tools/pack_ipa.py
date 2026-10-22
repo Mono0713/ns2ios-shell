@@ -18,6 +18,27 @@ DIR_MODE = stat.S_IFDIR | 0o755   # a parent folder no source folder stands for 
 Entry = collections.namedtuple('Entry', 'name path st')   # st None: such a parent folder
 
 
+def ios_mode(name):
+    """The Unix mode for an iOS app bundle, derived from the archive path.
+    Needed on Windows, where os.stat carries no x bit (a file there is 0o666): packed as is, the app's main binary would lose
+    its execute permission and the installed app would not start. The bundle layout makes this decidable: only the app's main
+    binary, framework binaries and dylibs are executable."""
+    if name.endswith('/'): return stat.S_IFDIR | 0o755
+    base = name.rsplit('/', 1)[-1]
+    if name == 'Payload/DmIOS.app/DmIOS': return stat.S_IFREG | 0o755
+    if '/Frameworks/' in name:                                  # Frameworks/X.framework/X is the binary, its Info.plist is not
+        seg = name.split('/Frameworks/', 1)[1].split('/')
+        if len(seg) == 2 and seg[0].endswith('.framework') and seg[1] == seg[0][:-len('.framework')]:
+            return stat.S_IFREG | 0o755
+    if base.endswith(('.dylib',)): return stat.S_IFREG | 0o755
+    return stat.S_IFREG | 0o644
+
+
+def entry_mode(e):
+    if e.st is None: return DIR_MODE                             # a parent folder this writer made up
+    return ios_mode(e.name) if os.name == 'nt' else e.st.st_mode  # Windows: no x bit, no symlinks; derive it from the path
+
+
 def entries(maps, skip):
     """The archive's entries in order: for each mapping its parent folders (unless an earlier entry gave them), its root, then its tree depth first, sorted by name,
     without the skipped paths and without other mappings' roots (each adds its own)"""
@@ -78,7 +99,7 @@ class Zip:
         off, nb, fl, t, d = h
         z = [v for v in (usize, csize, off) if v >= L32]   # zip64 extra: the fields that do not fit, in this order
         ext = struct.pack(f'<HH{len(z)}Q', 1, 8 * len(z), *z) if z else b''
-        mode = e.st.st_mode if e.st else DIR_MODE
+        mode = entry_mode(e)
         self.cd.append(struct.pack('<IHHHHHHIIIHHHHHII', 0x02014B50, 0x031E, 45 if z else 20 if method == 8 else 10, fl, method, t, d, crc, min(csize, L32), min(usize, L32),
                                    len(nb), len(ext), 0, 0, 0, (mode << 16) | (0x10 if stat.S_ISDIR(mode) else 0), min(off, L32)) + nb + ext)
 
