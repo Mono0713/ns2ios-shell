@@ -7,17 +7,22 @@ and `xcodebuild` -- are the ones the shell split removed.
 
 Usage:
   python scripts/nxn_pack.py <shell.zip> <NSP folder> -k <prod.keys> [-o out.ipa] [-p vN] [--stop-after STEP]
+  python scripts/nxn_pack.py --clean <NSP folder>          # remove what an earlier run left behind, and exit
 
   <NSP folder>   one game's files: the base game (.nsp, or a cartridge dump .xci) plus every update the game profile's
                  shader_versions lists (see dm/games/<title ID>/game.tsv). DLC NSPs are packed too when present.
   -k            prod.keys (also read from the KEYS environment variable)
-  -p            the version to pack (default: the profile's `package` value)
+  -p            the version to pack (default: the newest one in the folder)
   --stop-after  stop after a step, to bring the chain up one piece at a time. Steps:
                 extract, rewrite, shaders, guest, assemble, pack
   --force       redo steps whose output already exists
+  --keep-work   keep the working folder (<NSP folder>/<title ID>_pack) instead of removing it after a good pack, so a
+                rerun reuses the extraction, the rewritten modules and the compiled shaders. Worth it when repacking the
+                same game repeatedly; the folder is several times the size of the game.
+  --clean       delete that working folder without packing anything
 
-Requirements: Python 3.9+ with lz4, capstone, fonttools and pillow; the .NET 10 SDK (for nx_extract and the shader
-translator); spirv-cross 1.4.357.0 on PATH; a C compiler (clang). Every step says what is missing before it starts.
+Requirements: Python 3.9+ with lz4, capstone, fonttools and pillow and the three executables from the release (nx_extract,
+dmsh_xlate, spirv-cross) on PATH or in --tools. Every step says what is missing before it starts.
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
@@ -36,6 +41,55 @@ TOOLS = DM / 'tools'
 def say(s): print('[%s] %s' % (time.strftime('%H:%M:%S'), s), flush=True)
 def die(s): sys.exit('[x] ' + s)
 def warn(s): print('[!] ' + s, flush=True)
+
+
+def folder_size(p):
+    """Bytes under p, without following a symlink out of it: the game's RomFS can be large and the count is only a report."""
+    n = 0
+    for root, dirs, files in os.walk(p, followlinks=False):
+        for f in files:
+            try: n += os.lstat(os.path.join(root, f)).st_size
+            except OSError: pass
+    return n
+
+
+def tidy(work, keep_logs=True):
+    """Remove what the pack no longer needs, and return the bytes freed.
+
+    Everything in here is either derivable from the game files again (the extraction, the rewritten modules, the split
+    shaders, the assembled stage tree) or a cache the next run rebuilds. logs/ can stay: it is a few KB, and it is the only
+    thing that explains a package that misbehaves on the phone. Each child is removed through its own path, and only if it
+    really is inside the work folder, so a symlinked RomFS cannot take anything else with it.
+    """
+    total = 0
+    root = work.resolve()
+    for d in sorted(work.iterdir()):
+        if keep_logs and d.name == 'logs': continue
+        if d.parent.resolve() != root:
+            warn('not removing %s: it is not inside %s' % (d, work)); continue
+        n = folder_size(d) if d.is_dir() and not d.is_symlink() else d.lstat().st_size
+        try:
+            if d.is_dir() and not d.is_symlink(): shutil.rmtree(d)
+            else: d.unlink()
+        except OSError as e:
+            warn('could not remove %s (%s): leaving it' % (d.name, e)); continue
+        total += n
+        say('  removed %-12s %9.1f MB' % (d.name + ('/' if d.is_dir() else ''), n / 1048576))
+    return total
+
+
+def clean_folders(folder):
+    """--clean: everything a previous run left in this folder, logs included."""
+    if not folder.is_dir(): die('no such folder: %s' % folder)
+    works = sorted(p for p in folder.iterdir() if p.is_dir() and p.name.endswith('_pack'))
+    if not works: say('nothing to clean: %s holds no <title ID>_pack folder' % folder); return
+    freed = 0
+    for w in works:
+        say('cleaning %s' % w.name)
+        freed += tidy(w, keep_logs=False)
+        try: w.rmdir()
+        except OSError: pass
+    say('freed %.1f MB' % (freed / 1048576))
 
 
 def run(cmd, env=None, cwd=None, log=None, what=None):
@@ -469,13 +523,18 @@ def step_pack(A, out_ipa, rows, work):
 
 def main():
     ap = argparse.ArgumentParser(description='Pack the shell and your own game files into an IPA, without a Mac.')
-    ap.add_argument('shell', help='the shell zip (nxnative-shell-build-input.zip)')
-    ap.add_argument('nsp_dir', help="a folder with the game's NSP/XCI files")
+    ap.add_argument('shell', nargs='?', default='', help='the shell zip (nxnative-shell-build-input.zip)')
+    ap.add_argument('nsp_dir', nargs='?', default='', help="a folder with the game's NSP/XCI files")
     ap.add_argument('-k', '--keys', default=os.environ.get('KEYS', ''), help='prod.keys')
     ap.add_argument('-o', '--out', default='', help='output IPA (default: next to the NSPs)')
-    ap.add_argument('-p', '--package', default='', help='version to pack (default: the profile picks one)')
+    ap.add_argument('-p', '--package', default='', help='version to pack (default: the newest one in the folder)')
     ap.add_argument('--stop-after', default='', choices=['', 'extract', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
     ap.add_argument('--force', action='store_true', help='redo steps whose output already exists')
+    ap.add_argument('--keep-work', action='store_true',
+                    help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
+                         'modules and the shaders (it is several times the size of the game)')
+    ap.add_argument('--clean', default='', metavar='NSP_FOLDER',
+                    help='remove the working folder an earlier run left in NSP_FOLDER, and exit')
     ap.add_argument('--tools', default=os.environ.get('NXN_TOOLS', ''),
                     help='folder holding nx_extract, dmsh_xlate and spirv-cross executables (the windows-tools CI '
                          'artifact). They are put on PATH and used instead of building anything.')
@@ -484,6 +543,11 @@ def main():
     for st in (sys.stdout, sys.stderr):
         try: st.reconfigure(errors='replace')
         except Exception: pass
+
+    if a.clean:
+        clean_folders(Path(a.clean).resolve()); return
+    if not a.shell: die("give the shell zip, or --clean <NSP folder> to remove an earlier run's temporary files")
+    if not a.nsp_dir: die("give the folder holding the game's NSP/XCI files")
 
     shell = Path(a.shell).resolve()
     folder = Path(a.nsp_dir).resolve()
@@ -581,6 +645,16 @@ def main():
     say('done: %s (%.0f MB)' % (out_ipa, out_ipa.stat().st_size / 1048576))
     say('next: sign it with a sideloading tool (SideStore / Sideloadly / LiveContainer) and install it on the phone')
     say('this IPA contains your game files: for your own use only, do not distribute it')
+
+    # The IPA is written and closed, so the working tree is spent: everything in it was either derived from the game files
+    # (a rerun redoes it) or copied into the package. Removing it is the default because it is several times the size of
+    # the game -- a 4 GB game leaves ~16 GB behind -- and people notice that, not the 90 seconds it saves.
+    if a.keep_work:
+        say('working folder kept: %s (remove it with --clean "%s")' % (work, folder))
+    else:
+        say('removing the temporary files (--keep-work keeps them for a faster rerun)')
+        freed = tidy(work)
+        say('removed %.1f MB; the logs stay in %s' % (freed / 1048576, work / 'logs'))
 
 
 if __name__ == '__main__':

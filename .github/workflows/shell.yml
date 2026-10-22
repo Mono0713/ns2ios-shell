@@ -377,6 +377,14 @@ jobs:
           4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer). The first launch compiles the shaders once.
              <br> 用自签工具装上它产出的 IPA；首次启动会编译一遍着色器。
 
+          The temporary files (the extraction, the rewritten modules, the split shaders, the assembled app tree) are deleted
+          once the IPA exists — together they are several times the size of the game. Only a few-KB log per step stays, in
+          `<title ID>_pack/logs/`. `--keep-work` keeps the whole tree for a faster repack of the same game; `--clean <game folder>`
+          clears out an earlier run.
+          <br> IPA 写好后临时文件会自动删除（解包、改写后的模块、拆出的着色器、拼装好的 app 树，加起来是游戏体积的好几倍），
+          只留每步几 KB 的日志在 `<title ID>_pack/logs/`。`--keep-work` 保留整棵树以便快速重打包；`--clean <游戏文件夹>`
+          单独清掉之前留下的。
+
           The packing machine needs Python 3.9+ with `lz4 capstone fonttools backports.zstd pillow`.
           打包机器需要 Python 3.9+ 以及上述几个包。
 

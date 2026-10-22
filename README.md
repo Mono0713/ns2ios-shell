@@ -43,6 +43,17 @@ python scripts/nxn_pack.py shell-<date>-<commit>-shell.zip D:\games\hades2 ^
 **4. Sideload the IPA** it writes next to your NSPs (SideStore, Sideloadly, LiveContainer…). The first launch compiles the
 shaders once, with a progress page that estimates how long it will take.
 
+The **temporary files are removed as soon as the IPA is written**: the extraction, the rewritten modules, the split shaders
+and the assembled app tree add up to several times the size of the game (a 4 GB game leaves ~16 GB behind) and none of it is
+worth keeping. Only the few-KB log (`<title ID>_pack\logs\`) stays, because that is what explains a package that misbehaves
+on the phone.
+
+Add `--keep-work` to keep that tree when you repack the same game repeatedly, or clear out an earlier run:
+
+```bash
+python scripts/nxn_pack.py --clean D:\games\hades2
+```
+
 ## Requirements
 
 On the **packing machine**:

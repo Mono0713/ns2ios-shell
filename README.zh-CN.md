@@ -42,6 +42,15 @@ python scripts/nxn_pack.py shell-<日期>-<提交>-shell.zip D:\games\hades2 ^
 **4. 侧载**它生成在你 NSP 旁边的 IPA（SideStore、Sideloadly、LiveContainer 都行）。**首次启动会编译一遍着色器**，屏幕上
 有进度页，会告诉你还要多久。
 
+打完包**临时文件会自动删掉**：中途解出来的游戏、改写后的模块、拆出的着色器、拼装好的 app 树，加起来是游戏体积的好几倍
+（4 GB 的游戏会留下十几 GB），留着没用。只保留几 KB 的日志（`<title ID>_pack\logs\`），手机上有异常时看它。
+
+想反复给同一个游戏重打包、省掉解包和翻译的时间，加 `--keep-work` 保留那棵工作树；想单独清掉之前留下的：
+
+```bash
+python scripts/nxn_pack.py --clean D:\games\hades2
+```
+
 ## 环境要求
 
 **打包机器**上需要：

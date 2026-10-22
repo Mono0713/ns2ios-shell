@@ -88,6 +88,25 @@ the patch applying means it builds.
 All of this happens in CI. On Windows it shows up as nothing but a new shell zip: same command, same flags, same Python
 dependencies.
 
+## The working folder, and cleaning it up
+
+The packer creates `<title ID>_pack` next to the game's files and keeps every intermediate product in it:
+
+| Folder | What it is | Still needed after packing? |
+|---|---|---|
+| `extract/` | the ExeFS and RomFS unpacked from the NSP/XCI | no, it is unpacked again in a minute |
+| `build/patched/` | the rewritten modules | no |
+| `shader/` | the split shader package and the translation cache | no |
+| `stage/` | the assembled app tree, including a copy of the RomFS — the largest item | no, it is in the IPA |
+| `logs/` | one log per step | **yes**, a few KB, and it is what explains a problem on the phone |
+
+So once the IPA is written, the rest is deleted and only `logs/` stays. The amount is the point: `extract/` and `stage/` each
+hold a copy of the game, so a 4 GB game leaves ~16 GB behind. `--keep-work` keeps the whole tree (worth it when repacking the
+same game repeatedly, as it skips the unpack and the translation), and `--clean <game folder>` clears out an earlier run.
+
+Only directories this script created are removed, one child at a time, each checked to be inside the work folder — so a
+symlink in the RomFS cannot lead the deletion anywhere else.
+
 ## Status
 
 | Part | State |

@@ -59,10 +59,5 @@ def run(args, *a, **k):
 if __name__ == '__main__':
     if len(sys.argv) < 2: sys.exit(__doc__ or '用法：nometal_run.py <脚本.py> [参数…]')
     subprocess.run = run
-    # The harness this runs under counts file deletions and refuses to go past a threshold, while the shader build deletes
-    # a temporary file per shader -- so it died halfway through its own cleanup, not in the work itself. Keep the files
-    # instead: they all live inside the work folder, which is thrown away with the build.
-    os.unlink = lambda p, *a, **k: None
-    shutil.rmtree = lambda p, *a, **k: None
     script = os.path.abspath(sys.argv[1]); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(script))
     runpy.run_path(script, run_name='__main__')
