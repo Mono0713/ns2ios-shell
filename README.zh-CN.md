@@ -14,7 +14,7 @@ macOS 皆可，不需要 Xcode。
 > English documentation: [README.md](README.md)
 >
 > 上游项目及其原始文档（Mac 路线）：**[seedds/nxnative](https://github.com/seedds/nxnative#readme)**。
-> 分叉当时的 README 快照保留在 [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md)。
+
 
 ## 快速开始（Windows）
 
@@ -55,34 +55,24 @@ python scripts/nxn_pack.py shell-<日期>-<提交>-shell.zip D:\games\hades2 ^
 不需要 .NET SDK、不需要 C++ 工具链、不需要 Mac。（想自己编工具也行：`dotnet publish dm/tools/nx_extract -r win-x64
 --self-contained`，`dm/gfx/tools/dmsh_xlate` 同理；SPIRV-Cross 必须用 `vulkan-sdk-1.4.357.0` 这个 tag。）
 
-## 文件命名——必读
+## 文件名无所谓
 
-打包器**从文件名取 title ID 和版本号**：
+打包器从 **NSP 内部的元数据**识别游戏——加密内容旁边的 `cnmt.xml` 是明文的，里面有 title ID、内容类型（本体／更新／DLC）
+和版本号。所以文件叫什么都行。
 
-```
-Hades II [0100A00019DE0000][v0].nsp
-         └─ title ID ─┘ └版本┘
-```
+名字里的 `[XXXXXXXXXXXXX000]` 和 `[vN]` 只在文件**不含这种元数据**时才读：也就是 **XCI 卡带**（卡带没有元数据 XML）。
+如果你重命名 XCI，请保留 title ID。
 
-- 缺 title ID → 该文件被跳过并给出警告。
-- **随后有两道内容校验**，确认它确实是那个版本：`ExeFS/main` 与 `sdk` 里的 NSO build ID 会和 profile 比对；从你的文件里
-  重新拆出的着色器表必须和 profile **逐字节一致**。文件名写错或版本不对时，构建会直接停下，而不是产出一个坏包。
+支持格式：**NSP**（本体、更新、DLC）和 **XCI**（只能当本体）。**不支持 NSZ**：先用 `nsz -D "文件.nsz"` 解压。
 
-支持的格式：**NSP**（本体、更新、DLC）和 **XCI**（卡带 dump，只能当本体）。**不支持 NSZ**：先用 `nsz -D "文件.nsz"` 解压。
+## 哪些游戏能打、哪个版本能打
 
-## 哪些游戏能打
+[`dm/games/`](dm/games/) 下有 profile 的游戏都支持。**任意版本都行**，带不带更新都可以：打包器取文件夹里**最新的那个
+版本**（也可以用 `-p vN` 指定），并用该版本自己的着色器来构建。上游每款游戏只在一个版本上验证过；换成别的版本时 app
+会说明这一点，而为已验证版本做的修复（比如 60fps）不适用于它。
 
-[`dm/games/`](dm/games/) 下有 profile 的游戏都支持；profile 同时记录了**必须存在哪些版本**。有些游戏需要本体**和**更新包：
-
-| 情况 | 例子 |
-|---|---|
-| 只要本体 | Hades II `0100A00019DE0000`、Brain Memory Training Academy、Rhythm Heaven Groove、The Great Ace Attorney Chronicles |
-| 本体 + 特定更新 | 马里奥惊奇要 `v0` **和** `v327680`（1.2.1）；奥德赛要 `v393216` |
-
-`dm/games/<title ID>/game.tsv` 里的 `shader_versions` 就是版本要求。缺版本时打包器会直接说明，并告诉你需要哪个文件。
-
-已知有两款还需要额外条件：**火焰纹章 风花雪月**（GLSL 着色器）和**超级马里奥银河**（Vulkan）——它们的着色器是运行时
-生成的，光靠文件拆不出来。
+更新包是可选的——只有本体也能打。文件夹里的 DLC 会被一并打进去；没有 DLC 时游戏就看不到 DLC，和在没插 DLC 的 Switch
+上一样。
 
 ## 原理
 

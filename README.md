@@ -15,7 +15,7 @@ repository or CI.
 > 中文说明：[README.zh-CN.md](README.zh-CN.md)
 >
 > Upstream project and its own documentation (the Mac route): **[seedds/nxnative](https://github.com/seedds/nxnative#readme)**.
-> A snapshot of its README as of this fork is kept at [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md).
+
 
 ## Quick start (Windows)
 
@@ -56,38 +56,27 @@ On the **packing machine**:
 No .NET SDK, no C++ toolchain, no Mac. (Building the tools yourself is possible: `dotnet publish dm/tools/nx_extract -r win-x64
 --self-contained`, same for `dm/gfx/tools/dmsh_xlate`; SPIRV-Cross must be the `vulkan-sdk-1.4.357.0` tag.)
 
-## File naming — read this
+## File names do not matter
 
-The packer takes the **title ID and version from the file name**:
+The packer identifies the game from the **metadata inside the NSP** — the plaintext `cnmt.xml` next to the (encrypted) content
+files, which carries the title ID, the content type (base game / update / DLC) and the version. So files can be named
+anything at all.
 
-```
-Hades II [0100A00019DE0000][v0].nsp
-         └── title ID ──┘ └ver┘
-```
+The `[XXXXXXXXXXXXX000]` and `[vN]` in a name are only read when a file carries no such metadata: **XCI cartridges** (a
+cartridge has no metadata XML). If you rename an XCI, keep the title ID in the name.
 
-- Missing the title ID → the file is skipped with a warning.
-- **Two content checks then verify it really is that version**: the NSO build ID in `ExeFS/main` and `sdk` is compared with
-  the profile, and the shader tables split out of your files must match the profile byte for byte. A wrong file name or a
-  wrong game version stops the build instead of producing a broken IPA.
+Formats: **NSP** (base game, updates, DLC) and **XCI** (base game only). **NSZ is not supported** — unpack it first with
+`nsz -D "file.nsz"`.
 
-Formats: **NSP** (base, updates, DLC) and **XCI** (cartridge dump — base game only). **NSZ is not supported**: unpack it first
-with `nsz -D "file.nsz"`.
+## Which games work, and which version
 
-## Which games work
+Any game with a profile in [`dm/games/`](dm/games/). **Any version works**, with or without an update: the packer takes the
+newest version it finds in the folder (override with `-p vN`) and builds it with the shaders split from that version's own
+files. Upstream tested each game on one version; on another version the app says so, and fixes made for the tested version
+(60 fps, for instance) do not apply to it.
 
-Games with a profile in [`dm/games/`](dm/games/) are supported, and the profile records **which versions must be present**.
-Some games need the base game **and** an update:
-
-| Situation | Example |
-|---|---|
-| Base game only | Hades II `0100A00019DE0000`, Brain Memory Training Academy, Rhythm Heaven Groove, The Great Ace Attorney Chronicles |
-| Base + specific update | Super Mario Bros. Wonder needs `v0` **and** `v327680` (1.2.1); Odyssey needs `v393216` |
-
-`shader_versions` in `dm/games/<title ID>/game.tsv` is the requirement. When a version is missing the packer says so and
-names the file you need.
-
-Two titles are known to need more: **Fire Emblem: Three Houses** (GLSL shaders) and **Super Mario Galaxy** (Vulkan) generate
-their shaders at run time, so they cannot be produced from the files alone.
+An update is optional — the base game alone is enough. DLC files in the folder are packed too, and without them the game sees
+none, exactly as on a Switch without them.
 
 ## How it works
 

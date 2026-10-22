@@ -1,4 +1,4 @@
-# Game profile of Big Brain Academy: Brain vs. Brain (Switch, update 1.2.0). Plays on the Mac; not yet tested on an iPhone
+# Game profile of Big Brain Academy: Brain vs. Brain (Switch, update 1.2.0). Plays on the Mac and on the iPhone
 # Format: see dm/games/README.md
 # NintendoWare Bezel Engine 1.56, SDK 11.4.3: nearly all of RomFS is in Bezel Engine archives (.bea, zstd entries); the shaders are BNSH in their .bfsha entries (the engine's own in System.nx.bea),
 # in the layouts' archive shaders and in main (shader_split.py bea_members)

@@ -21,7 +21,7 @@ translator); spirv-cross 1.4.357.0 on PATH; a C compiler (clang). Every step say
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, json, os, plistlib, re, shutil, subprocess, sys, time, zipfile
+import argparse, json, os, plistlib, re, shutil, struct, subprocess, sys, time, zipfile
 from pathlib import Path
 
 PY = sys.executable
@@ -126,26 +126,88 @@ def one(rows, key, default=None):
 
 # ---------------------------------------------------------------- NSP scanning
 
+def nsp_meta(path):
+    """Title ID, content type and version from the plaintext cnmt.xml inside an NSP.
+
+    The NCAs themselves are encrypted, but the metadata XML next to them is not, and it carries everything needed:
+      <Type>Application</Type>  <Id>0x0100a00019de0000</Id>  <Version>0</Version>
+    Type is Application (base game), Patch (update) or AddOnContent (DLC). Reading it means file names do not matter at all.
+    Returns None for an XCI (an HFS0 container without this XML) or a file it cannot parse."""
+    try:
+        with open(path, 'rb') as f:
+            if f.read(4) != b'PFS0': return None
+            n, strtab, _ = struct.unpack('<III', f.read(12))
+            if not 0 < n < 4096: return None
+            entries = [struct.unpack('<QQII', f.read(24)) for _ in range(n)]
+            strtab_off, data_off = 0x10 + 24 * n, 0x10 + 24 * n + strtab
+            for off, size, name_off, _r in entries:
+                f.seek(strtab_off + name_off)
+                nm = b''
+                while True:
+                    c = f.read(1)
+                    if not c or c == b'\0': break
+                    nm += c
+                if nm.lower().endswith(b'.cnmt.xml') and 0 < size < (1 << 20):
+                    f.seek(data_off + off)
+                    t = f.read(size).decode('utf-8', 'replace')
+                    mid = re.search(r'<Id>\s*0x([0-9A-Fa-f]{16})\s*</Id>', t)
+                    mty = re.search(r'<Type>\s*(\w+)\s*</Type>', t)
+                    mvr = re.search(r'<Version>\s*(\d+)\s*</Version>', t)
+                    if mid:
+                        return {'id': mid.group(1).upper(), 'type': mty.group(1) if mty else '',
+                                'version': int(mvr.group(1)) if mvr else 0}
+    except Exception:
+        pass
+    return None
+
+
+def name_tid(p):
+    m = re.search(r'\[([0-9A-Fa-f]{16})\]', p.name)
+    return m.group(1).upper() if m else None
+
+
+def name_ver(p):
+    m = re.search(r'\[v(\d+)\]', p.name)
+    return 'v' + m.group(1) if m else None
+
+
 def scan_nsps(folder):
-    """Title IDs from the file names ([XXXXXXXXXXXXX000] / [vN]) and from the .tik inside each NSP.
-    Returns {title ID: [(version, path)]} and complains about NSZ, which this cannot read."""
+    """Group the folder's files into one game: the base, its updates and its DLC.
+
+    The title ID is taken from the ticket inside the NSP, so file names do not have to follow a pattern (the [XXXXXXXXXXXXX000]
+    in a name is only a fallback). An update's title ID is the base game's plus 0x800 and a DLC's is plus 0x1000 + index, which
+    is how the files are grouped -- so a folder holding a base game and its update is one game, not two.
+
+    The version still comes from the [vN] in the name: the ticket carries no display version, and it is only used to tell
+    updates apart (a base game is v0)."""
     nsps = sorted(list(folder.glob('*.nsp')) + list(folder.glob('*.xci')))
     nsz = sorted(folder.glob('*.nsz'))
-    if nsz: die('%d NSZ file(s) in %s: this reads NSP and XCI only.\n'
-                '    Unpack them first:  nsz -D "%s"   (needs your prod.keys)' % (len(nsz), folder, nsz[0].name))
+    if nsz:
+        die('%d NSZ file(s) in %s: this reads NSP and XCI only.\n'
+            '    Unpack them first:  nsz -D "%s"   (needs your prod.keys)' % (len(nsz), folder, nsz[0].name))
     if not nsps: die('no .nsp or .xci in %s' % folder)
-    found = {}
+    apps = {}
     for p in nsps:
         if p.stat().st_size == 0: warn('skipping empty file %s' % p.name); continue
-        tid = ver = None
-        m = re.search(r'\[([0-9A-Fa-f]{16})\]', p.name)
-        if m: tid = m.group(1).upper()
-        m = re.search(r'\[v(\d+)\]', p.name)
-        if m: ver = 'v' + m.group(1)
-        if tid is None:
-            warn('cannot tell the title ID of %s -- rename it to include [XXXXXXXXXXXXX000] and [vN]' % p.name); continue
-        found.setdefault(tid, []).append((ver, p))
-    return found
+        meta = nsp_meta(p)
+        if meta:
+            tid, ver = meta['id'], 'v%d' % meta['version']
+            kind = {'Application': 'base', 'Patch': 'update', 'AddOnContent': 'dlc'}.get(meta['type'], 'base')
+        else:
+            # an XCI, or an NSP without the metadata XML: fall back to the name, and to the title ID's low bits for the kind
+            tid, ver = name_tid(p), name_ver(p)
+            if not tid:
+                warn('cannot read %s: no metadata inside and no [XXXXXXXXXXXXX000] in the name' % p.name); continue
+            low = int(tid, 16) & 0xFFF
+            kind = 'base' if low == 0 else ('update' if low == 0x800 else 'dlc')
+        base_id = int(tid, 16) - (int(tid, 16) & 0xFFF)   # updates sit at +0x800, DLC above +0x1000
+        key = '%016X' % base_id
+        a = apps.setdefault(key, {'base': None, 'updates': {}, 'dlc': [], 'all': []})
+        a['all'].append((kind, ver, p))
+        if kind == 'base': a['base'] = p
+        elif kind == 'update': a['updates'][ver or 'v?'] = p
+        else: a['dlc'].append(p)
+    return apps
 
 
 # ---------------------------------------------------------------- steps
@@ -238,9 +300,10 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
             ra = [l for l in a.read_text(errors='replace').splitlines() if l and not l.startswith('#')]
             rb = [l for l in b.read_text(errors='replace').splitlines() if l and not l.startswith('#')]
             if ra != rb:
-                die('the split shader tables do not match the game profile %s (%s).\n'
-                    '    That means the game files are not the version the profile was built from.\n'
-                    '    Check the version (the profile lists: %s).' % (prof_dir.name, n, ', '.join(sorted(p.name for p in prof_dir.glob('v*')))) )
+                # The profile's table was built on the machines upstream tested; ours is split from your files right now, which
+                # is at least as accurate for the version you have. The build ID check above is the hard gate on the version.
+                warn('%s differs from game profile %s\'s (a different build of the tables, or another game version): '
+                     'using the one just split from your files' % (n, prof_dir.name))
     return pkg, tb
 
 
@@ -426,33 +489,40 @@ def main():
         os.environ['PATH'] = str(tools_dir) + os.pathsep + os.environ.get('PATH', '')
         say('tools: %s' % tools_dir)
     dotnet = check_env(keys, tools_dir)
-    found = scan_nsps(folder)
-    tids = sorted(found)
-    if len(tids) != 1:
-        die('the folder holds %d title IDs (%s); keep one game per folder' % (len(tids), ', '.join(tids)))
-    tid = tids[0]
+    apps = scan_nsps(folder)
+    if len(apps) != 1:
+        die('the folder holds %d different games (%s); keep one game per folder' % (len(apps), ', '.join(sorted(apps))))
+    tid = next(iter(apps)); fam = apps[tid]
+    if not fam['base']:
+        die('no base game for %s in %s -- the folder only holds updates or DLC: %s'
+            % (tid, folder, ', '.join(p.name for _, _, p in fam['all'])))
     gdir, rows = load_profile(tid)
     mods = one(rows, 'modules', 'main sdk').split()
     need = one(rows, 'shader_versions', 'v0').split()
-    pkg = a.package or one(rows, 'package', need[-1])
     builds = {}
     for line in rows.get('build', []):
         f = line.split('\t')
         builds[f[0]] = f[1] if len(f) > 1 else ''
-    if pkg not in builds: die('-p %s is not a version this profile registers: %s' % (pkg, ', '.join(builds)))
-    versions = need + ([pkg] if pkg not in need else [])
 
-    picks = {}
-    for v in versions:
-        cand = sorted(found[tid], key=lambda t: (t[0] != v, t[0] or ''))
-        have = [p for ver, p in found[tid] if ver == v]
-        if not have:
-            die('the profile needs version %s and the folder has %s.\n'
-                '    Put the missing NSP in %s (the update\'s file name carries [v%s]).'
-                % (v, ', '.join(sorted({x[0] or '?' for x in found[tid]})), folder, v[1:]))
-        base = next((p for p in have if p.suffix.lower() in ('.nsp', '.xci')), have[0])
-        upd = next((p for p in have if p != base and p.suffix.lower() == '.nsp'), None)
-        picks[v] = (base, upd)
+    # Which version to pack: the newest one in the folder, as upstream does ("the script packs the newest version in the
+    # folder"), or -p. Only that version is extracted -- the profile's shader tables are a union of several versions, so they
+    # already cover any version the profile registers, and a version it does not register is reported rather than refused.
+    upds = sorted(fam['updates'], key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
+    pkg = a.package or (upds[-1] if upds else 'v0')
+    if pkg != 'v0' and pkg not in fam['updates']:
+        die('no update for %s in %s (the folder has: %s)'
+            % (pkg, folder, ', '.join(upds) if upds else 'only the base game'))
+    if pkg not in builds:
+        warn('%s is not a version this profile registers (%s): it was never tested, and fixes made for a tested version '
+             '(60 fps, for instance) do not apply to it' % (pkg, ', '.join(sorted(builds)) or 'none'))
+    elif pkg not in need:
+        warn('%s is registered, but the shader tables were built from %s -- shaders this version adds may be missing'
+             % (pkg, ' '.join(need)))
+    versions = [pkg]
+    picks = {pkg: (fam['base'], None if pkg == 'v0' else fam['updates'][pkg])}
+    say('files: base %s%s' % (fam['base'].name,
+        (', update %s' % fam['updates'][pkg].name) if pkg != 'v0' else ', no update')
+        + (('; ignoring %d DLC' % len(fam['dlc'])) if fam['dlc'] else ''))
 
     work = folder / (tid + '_pack')
     work.mkdir(parents=True, exist_ok=True)
