@@ -113,10 +113,14 @@ jobs:
             UP=$(git -C up rev-parse HEAD)
             echo "upstream commit $UP"
             # copy this fork's files over the upstream tree; the list is explicit, so everything else follows upstream
-            grep -vE '^[[:space:]]*(#|$)' fork/.shell-overlay.txt | while read -r p; do
+            # (the entries may carry a trailing "# comment", which is not part of the path)
+            while IFS= read -r line; do
+              p="${line%%#*}"
+              p="$(echo "$p" | tr -d '[:space:]')"
+              [ -n "$p" ] || continue
               mkdir -p "up/$(dirname "$p")"
-              cp -a "fork/$p" "up/$p"
-            done
+              cp -a "fork/$p" "up/$p" || { echo "::error::cannot copy $p"; exit 1; }
+            done < <(grep -vE '^[[:space:]]*(#|$)' fork/.shell-overlay.txt)
             src=up
             echo "::endgroup::"
             echo "origin=upstream $UP" >> "$GITHUB_OUTPUT"
@@ -160,9 +164,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$TREE"
+          echo "tree: $PWD"
+          ls -l dm/ios/tools/shell_build.sh dm/games/0000000000000000/game.tsv
           SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK $SDK"
           test "${SDK%%.*}" -ge 26 || { echo "::error::iOS 26 SDK required, runner has $SDK"; exit 1; }
-          bash dm/ios/tools/shell_build.sh
+          bash dm/ios/tools/shell_build.sh 2>&1 | tee "$RUNNER_TEMP/shell.out"
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp "$DM_ROOT/build/shell/nxnative-shell-build-input.zip" "$GITHUB_WORKSPACE/dist/${V}-shell.zip"
           cp "$DM_ROOT/build/shell/shell_files.tsv" "$GITHUB_WORKSPACE/dist/${V}-contents.tsv"
@@ -189,7 +196,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shell-build-log
-          path: ${{ runner.temp }}/dm-work/build/shell/build.log
+          path: |
+            ${{ runner.temp }}/dm-work/build/shell/build.log
+            ${{ runner.temp }}/shell.out
           if-no-files-found: ignore
 
   release:
