@@ -23,8 +23,6 @@ jobs:
     # iOS 26 SDK is required (project.yml deploymentTarget 26.0, Metal 4 in the graphics layer), so macos-26 / Xcode 26.
     runs-on: macos-26
     timeout-minutes: 60
-    env:
-      DM_ROOT: ${{ runner.temp }}/dm-work
     steps:
       - uses: actions/checkout@v4
 
@@ -47,11 +45,14 @@ jobs:
 
       - name: Build the shell
         run: bash dm/ios/tools/shell_build.sh
+        env:
+          # runner.* is only available in step-level expressions, not in a job-level env block.
+          DM_ROOT: ${{ runner.temp }}/dm-work
 
       - name: List the shell's contents
         if: always()
         run: |
-          f="$DM_ROOT/build/shell/shell_files.tsv"
+          f="$RUNNER_TEMP/dm-work/build/shell/shell_files.tsv"
           if [ -f "$f" ]; then echo "### Shell contents ($(wc -l < "$f" | tr -d ' ') files)"; head -80 "$f"; else echo "no file list produced"; fi >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the shell
