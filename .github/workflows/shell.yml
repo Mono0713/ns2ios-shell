@@ -225,6 +225,8 @@ jobs:
           name: shell-build-log
           path: |
             ${{ runner.temp }}/dm-work/build/shell/build.log
+            ${{ runner.temp }}/dm-work/build/shell/xcodegen.log
+            ${{ runner.temp }}/dm-work/build/shell/xcodebuild-list.log
             ${{ runner.temp }}/shell.out
           if-no-files-found: ignore
 

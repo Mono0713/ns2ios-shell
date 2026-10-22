@@ -56,7 +56,11 @@ else:
 open(p, 'w', encoding='utf-8', newline='\n').write('\n'.join(s))
 PY
 grep -q -- '-DDM_SHELL' Gen/dm.xcconfig || die "could not add -DDM_SHELL to Gen/dm.xcconfig"
-xcodegen generate -q > /dev/null || die "xcodegen"
+# keep xcodegen's output: when it silently skips a target (an info path it cannot write, say) the build fails later with
+# "does not contain a scheme", which says nothing about the cause
+if ! xcodegen generate > "$O/xcodegen.log" 2>&1; then tail -20 "$O/xcodegen.log"; die "xcodegen, log $O/xcodegen.log"; fi
+[ -d DmIOS.xcodeproj ] || die "xcodegen produced no project (log $O/xcodegen.log)"
+xcodebuild -list -project DmIOS.xcodeproj > "$O/xcodebuild-list.log" 2>&1 || true
 
 t "xcodebuild (Release, unsigned, iPhone + iPad)"
 mkdir -p "$O"
