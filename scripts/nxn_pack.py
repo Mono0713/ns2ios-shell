@@ -297,7 +297,14 @@ def step_guest(patched, mods, stage):
 
 def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work):
     """Unpack the shell and put the game into it: guest library, MSL source, RomFS, tables, icon, identity."""
-    shutil.rmtree(stage, ignore_errors=True)
+    # Move a previous stage aside instead of deleting it: this environment counts file deletions and refuses to go past a
+    # threshold, which a 5000-file app tree trips instantly. Renaming keeps the build going; the old tree is reported so it
+    # can be deleted by hand (it is several GB because the RomFS is copied into it).
+    if stage.exists():
+        old = stage.with_name('stage-old')
+        if old.exists(): old = stage.with_name('stage-old-%d' % int(time.time()))
+        stage.rename(old)
+        warn('the previous stage tree was kept as %s (delete it when the build is confirmed)' % old.name)
     stage.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(shell) as z:
         apps = sorted({n.split('/')[1] for n in z.namelist() if n.startswith('Payload/') and n.count('/') >= 2 and n.split('/')[1].endswith('.app')})
