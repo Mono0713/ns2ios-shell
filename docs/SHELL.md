@@ -47,6 +47,41 @@ Or on CI: run the **Build shell** workflow. Manual runs use this fork's tree; th
 with this fork's files copied over it (`.shell-overlay.txt`). Both publish a release. The build ends with checks that the app
 carries no `romfs/`, `msl/`, `aoc/`, no module image sections and no file over 8 MB outside `dm/font`.
 
+## Following upstream
+
+The daily 19:00 UTC schedule builds from upstream's **latest commit**, so when upstream adds support for a new game, the shell
+downloaded from here plays it — nobody has to follow up by hand.
+
+This repository is not a clone of upstream; it only carries the difference, in two kinds:
+
+| File | Meaning |
+|---|---|
+| lines starting with `+` in `.shell-overlay.txt` | files this fork **adds**, copied wholesale onto the upstream tree |
+| `.shell-patches/*.patch` | this fork's changes to files upstream **already has**; `git apply`'d onto the upstream tree |
+| `.shell-base.txt` | the upstream commit the patches were generated against |
+
+Patches rather than whole-file copies exist so that an upstream edit elsewhere in the same file survives. The **only** case that
+conflicts is upstream changing the same lines a patch touches.
+
+### When it conflicts
+
+Symptom: the `Shell` job fails in `Assemble the source tree` with `xxx.patch does not apply`. The pipeline stops there and
+publishes nothing — you never get a shell that has drifted from upstream without being told.
+
+1. `git clone --depth 1 https://github.com/seedds/nxnative up`
+2. `cd up && git apply --reject <this repo>/.shell-patches/xxx.patch` and look at the `.rej` files
+3. Read the `.rej` and the new upstream code, then **re-apply the intent** by hand; pasting the old text usually is not right
+4. Regenerate that patch against the new upstream, update the commit in `.shell-base.txt`, push
+5. Only if step 4 is not enough does C need work: upstream changed one of the six substitutions shell mode makes (a signature, a
+   struct field, a `#define` name) or the layout of data that is read across the boundary, so the patch applies but the build
+   fails. Fix `dm/host/*.c` and regenerate the patches
+
+The rule of thumb for "does C need work": if upstream touched none of those six substitution points or the structs around them,
+the patch applying means it builds.
+
+All of this happens in CI. On Windows it shows up as nothing but a new shell zip: same command, same flags, same Python
+dependencies.
+
 ## Status
 
 | Part | State |

@@ -3,3 +3,22 @@
 __pycache__/
 *.pyc
 dm/ios/Gen/
+
+# This repository is public. Game files and keys must never be committed, whatever a packing run leaves behind
+# in the tree. The shell carries no game content by design, so none of these are ever needed here.
+*.nsp
+*.xci
+*.nsz
+*.xcz
+*.nca
+*.ncz
+*.tik
+*.keys
+prod.keys
+console.keys
+*.ipa
+*.xip
+data/
+out/
+built/
+work/

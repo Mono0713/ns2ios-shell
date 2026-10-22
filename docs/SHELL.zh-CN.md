@@ -44,6 +44,34 @@ bash dm/ios/tools/shell_build.sh
 （`.shell-overlay.txt`）。两者都会发布 release。构建末尾会核对 app 里没有 `romfs/`、`msl/`、`aoc/`、没有模块映像节、
 `dm/font` 之外没有超过 8 MB 的文件。
 
+## 跟上上游
+
+每天 19:00 UTC 的定时任务从上游**最新提交**构建。上游支持了新游戏，这里下载到的壳跟着就能玩——不需要谁去手动跟进。
+
+本仓库不是上游的克隆，只带差异，分两类：
+
+| 文件 | 含义 |
+|---|---|
+| `.shell-overlay.txt` 里带 `+` 的行 | 本仓库**新增**的文件，整份复制到上游树上 |
+| `.shell-patches/*.patch` | 本仓库对上游**已有**文件的修改；以补丁方式 `git apply` 到上游树上 |
+| `.shell-base.txt` | 补丁基于哪个上游提交生成 |
+
+补丁而不是整文件覆盖，是为了让上游对同一个文件其他位置的改动自动保留下来。于是**唯一会冲突的情况**是：上游改了与补丁同一段代码。
+
+### 冲突怎么处理
+
+症状：`Shell` 任务在 `Assemble the source tree` 失败，日志 `xxx.patch does not apply`。此时流水线停下，不发布——不会出现「壳和上游对不上却已经上线」的情况。
+
+1. `git clone --depth 1 https://github.com/seedds/nxnative up`
+2. `cd up && git apply --reject <本仓库>/.shell-patches/xxx.patch`，看产生了哪些 `.rej`
+3. 打开 `.rej` 与上游那段新代码，**读懂之后**把改动重新落上去；直接粘旧文本通常不对
+4. 用新上游重新生成该 patch，更新 `.shell-base.txt` 里的提交号，push
+5. 只有第 4 步不够用时才需要动 C：上游改掉了壳模式替换的那六处（函数签名、结构体字段、`#define` 名字）或者被读写的数据结构布局，补丁合上了也编不过。这时改 `dm/host/*.c` 等文件，再重新生成补丁
+
+判断「要不要改 C」的一条线：只要上游没碰这六处替换点和相关结构体，补丁合上就能编过。
+
+这一步完全在 CI 里完成，Windows 端看到的只是一个新的壳 zip：命令、参数、Python 依赖都不变。
+
 ## 状态
 
 | 部分 | 状态 |

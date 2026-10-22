@@ -171,6 +171,11 @@ jobs:
           set -euo pipefail
           # cd, not working-directory: ${{ env.X }} does not see values written to GITHUB_ENV at run time
           cd "$TREE"
+          # this repository is public: a packed game or a key file must never be reachable from what gets built here
+          leak=$(find . -path ./.git -prune -o -type f \
+                   \( -name '*.nsp' -o -name '*.xci' -o -name '*.nsz' -o -name '*.xcz' -o -name '*.nca' \
+                      -o -name '*.tik' -o -name '*.keys' -o -name 'prod.keys' -o -name '*.ipa' \) -print || true)
+          test -z "$leak" || { echo "::error::game files or keys are in the tree: $leak"; exit 1; }
           python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py
           python3 scripts/nxn_pack.py --help > /dev/null
           # nometal_run.py answers the four toolchain probes Apple's compiler would answer: if one regresses, every
