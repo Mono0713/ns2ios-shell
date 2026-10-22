@@ -71,7 +71,9 @@ cp -R "$APP" "$A" || die "copy the app"; A=$O/app
 for p in romfs msl aoc Frameworks; do [ -e "$A/$p" ] && die "the shell must not carry $p/"; done
 rm -rf "$A/_CodeSignature" "$A/embedded.mobileprovision"
 n=$(otool -l "$A/DmIOS" | grep -c -E 'sectname __dm|segname __DM'); [ "$n" = 0 ] || die "the shell executable still has $n module image sections"
-big=$(find "$A" -type f -size +8M | head -5); [ -z "$big" ] || die "the shell carries files larger than 8 MB: $big"
+# dm/font is ours (the shared-font stand-ins: Arial Unicode alone is ~23 MB), so it is exempt from the size check; anything else big
+# would be game content that slipped in (a shader library, the RomFS).
+big=$(find "$A" -type f -size +8M -not -path '*/dm/font/*' | head -5); [ -z "$big" ] || die "the shell carries files larger than 8 MB outside dm/font: $big"
 printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\n' "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" > "$A/dm/shell_info.txt"
 
 ( cd "$A" && find . -type f | sort | while read -r f; do printf '%s\t%s\n' "$(stat -f %z "$f")" "$f"; done ) > "$O/shell_files.tsv"
