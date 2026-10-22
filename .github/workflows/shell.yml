@@ -124,6 +124,7 @@ jobs:
               cp -a "fork/$p" "up/$p" || { echo "::error::cannot copy $p"; exit 1; }
             done < <(grep -vE '^[[:space:]]*(#|$)' fork/.shell-overlay.txt)
             src=up
+            SHA=$UP   # GITHUB_ENV only reaches later steps; this step needs the value itself for the version string
             echo "::endgroup::"
             echo "origin=upstream $UP" >> "$GITHUB_OUTPUT"
             echo "SHA=$UP" >> "$GITHUB_ENV"
