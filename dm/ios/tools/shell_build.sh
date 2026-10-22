@@ -68,7 +68,9 @@ xcodebuild -list -project DmIOS.xcodeproj > "$O/xcodebuild-list.log" 2>&1 || tru
 t "xcodebuild (Release, unsigned, iPhone + iPad)"
 mkdir -p "$O"
 xcodebuild -project DmIOS.xcodeproj -scheme "$DM_SCHEME_NAME" -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$DD" \
-  TARGETED_DEVICE_FAMILY='1,2' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= build > "$O/build.log" 2>&1 \
+  TARGETED_DEVICE_FAMILY='1,2' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+  DM_COPY_GAME_RESOURCES=NO DM_XCODE_OUTPUT_ROOT="$DD" SYMROOT="$DD/Build/Products" OBJROOT="$DD/Build/Intermediates.noindex" \
+  build > "$O/build.log" 2>&1 \
   || { grep -E 'error:' "$O/build.log" | head -20; die "xcodebuild, log $O/build.log"; }
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app; [ -d "$APP" ] || APP=$(grep -o '/[^ ]*/Release-iphoneos/DmIOS\.app' "$O/build.log" | tail -1)
 [ -n "$APP" ] && [ -d "$APP" ] || die "no built app"
