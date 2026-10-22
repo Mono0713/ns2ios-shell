@@ -29,6 +29,5 @@ README.zh-CN.md
 docs/SHELL.md
 docs/SHELL.zh-CN.md
 docs/UPSTREAM-README.md
-.github/workflows/shell.yml
-.github/workflows/windows-tools.yml
+.github/workflows/shell.yml   # the Windows tools are a job in this same workflow, not a separate file
 .shell-overlay.txt
