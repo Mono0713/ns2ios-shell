@@ -113,7 +113,8 @@ jobs:
       - name: Build SPIRV-Cross at the pinned tag
         run: |
           git clone --branch vulkan-sdk-1.4.357.0 --depth 1 https://github.com/KhronosGroup/SPIRV-Cross
-          cmake -S SPIRV-Cross -B SPIRV-Cross/build -G "Visual Studio 17 2022" -A x64 -DSPIRV_CROSS_ENABLE_TESTS=OFF
+          # no -G: the runner's Visual Studio version changes over time and naming it by version is what broke this before
+          cmake -S SPIRV-Cross -B SPIRV-Cross/build -DSPIRV_CROSS_ENABLE_TESTS=OFF
           cmake --build SPIRV-Cross/build --config Release --target spirv-cross
 
       - name: Collect
@@ -121,10 +122,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out/spirv-cross
-          cp SPIRV-Cross/build/output/Release/spirv-cross.exe out/spirv-cross/
+          exe=$(find SPIRV-Cross -name 'spirv-cross.exe' -type f | head -1)
+          test -n "$exe" || { echo "::error::spirv-cross.exe was not produced"; find SPIRV-Cross -name '*.exe' | head; exit 1; }
+          cp "$exe" out/spirv-cross/
           test -f out/nx_extract/nx_extract.exe
           test -f out/dmsh_xlate/dmsh_xlate.exe
-          test -f out/spirv-cross/spirv-cross.exe
           ./out/spirv-cross/spirv-cross.exe --help > /dev/null
           ls -l out/nx_extract/nx_extract.exe out/dmsh_xlate/dmsh_xlate.exe out/spirv-cross/spirv-cross.exe
 
