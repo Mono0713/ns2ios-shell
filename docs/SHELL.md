@@ -47,6 +47,12 @@ Or on CI: run the **Build shell** workflow. Manual runs use this fork's tree; th
 with this fork's files copied over it (`.shell-overlay.txt`). Both publish a release. The build ends with checks that the app
 carries no `romfs/`, `msl/`, `aoc/`, no module image sections and no file over 8 MB outside `dm/font`.
 
+The pipeline is `tools → shell → smoke → release`, and **nothing is published unless the smoke pack passes**: it pulls a small
+game's NSP and `prod.keys` from a private repository, packs it with the shell and the tools that were just built, and inspects
+the result (executable bits, shader library count, RomFS, the memory layout in `env.txt`, the shell's gate declaration, the
+display name). A missing or expired `SMOKE_TOKEN` **fails the pipeline** instead of skipping the smoke test and publishing
+anyway — an unverified shell is not worth shipping.
+
 ## Following upstream
 
 The schedule runs at 08:00 Beijing time (00:00 UTC) and **only builds when upstream moved**: it compares upstream's latest

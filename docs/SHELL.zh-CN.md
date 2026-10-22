@@ -44,6 +44,10 @@ bash dm/ios/tools/shell_build.sh
 （`.shell-overlay.txt`）。两者都会发布 release。构建末尾会核对 app 里没有 `romfs/`、`msl/`、`aoc/`、没有模块映像节、
 `dm/font` 之外没有超过 8 MB 的文件。
 
+流水线是 `tools → shell → smoke → release`。**smoke 不通过就不会发布**：它从私有仓库取一个小游戏的 NSP 和 `prod.keys`，
+用刚构建出来的壳和工具真打一次包，再检查产物（可执行位、着色器库数量、RomFS、`env.txt` 里的内存布局、壳的 gate 声明、
+显示名）。没有 `SMOKE_TOKEN`、或者 token 失效，流水线**直接失败**而不是跳过冒烟照常发布——一个没验证过的壳不值得发出去。
+
 ## 跟上上游
 
 每天北京时间早 8 点（00:00 UTC）的定时任务**只在有更新时**构建：先比上游最新提交与最近一次 release 的版本号，

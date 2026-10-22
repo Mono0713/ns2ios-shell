@@ -316,9 +316,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Without the token there is no test data, and without a smoke pack there is no evidence the shell works. That has
+          # to stop the pipeline, not quietly turn into "publish anyway": the release job requires this job to succeed.
           if [ -z "${TOKEN:-}" ]; then
-            echo "::warning::SMOKE_TOKEN is not set, so the smoke pack is skipped. Add it to publish only verified builds."
-            exit 0
+            echo "::error::SMOKE_TOKEN is not set, so nothing can be smoke-tested and nothing will be published. Add it under Settings -> Secrets and variables -> Actions (a token with read access to xinerqu/ns2ios-smoke)."
+            exit 1
           fi
           mkdir -p data tools
           # the artifact should be flat, but do not depend on it: take every .exe wherever it landed
@@ -328,7 +330,10 @@ jobs:
             test -f "tools/$t.exe" || { echo "::error::the windows-tools artifact has no $t.exe"; exit 1; }
           done
           api=https://api.github.com/repos/xinerqu/ns2ios-smoke/releases/tags/smoke-data
-          curl -sSfL -H "Authorization: Bearer $TOKEN" "$api" -o rel.json
+          if ! curl -sSfL -H "Authorization: Bearer $TOKEN" "$api" -o rel.json; then
+            echo "::error::cannot read the test data release: SMOKE_TOKEN is expired, or xinerqu/ns2ios-smoke/tags/smoke-data is gone. Nothing will be published until this works."
+            exit 1
+          fi
           for name in game.nsp prod.keys; do
             url=$(python -c "import json,sys;d=json.load(open('rel.json'));print(next(a['url'] for a in d['assets'] if a['name']=='$name'))")
             curl -sSfL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" "$url" -o "data/$name"
@@ -337,7 +342,6 @@ jobs:
           echo "ok=1" >> "$GITHUB_OUTPUT"
 
       - name: Pack the test game
-        if: steps.data.outputs.ok == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -348,7 +352,6 @@ jobs:
           ls -l out
 
       - name: Check the package it produced
-        if: steps.data.outputs.ok == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -358,26 +361,39 @@ jobs:
           z = zipfile.ZipFile(ipa)
           names = z.namelist()
           def mode(n): return z.getinfo(n).external_attr >> 16
+          # env.txt carries the game's own memory layout (the shell was built with the placeholder's), and getting it wrong
+          # is not a build failure but a SetHeapSize abort on the phone. Demand a real value rather than the file existing.
+          env = z.read('Payload/DmIOS.app/dm/env.txt').decode('utf-8', 'replace') if 'Payload/DmIOS.app/dm/env.txt' in names else ''
+          libs = [n for n in names if '/msl/b-' in n and n.endswith('_b.metallib')]
+          # The shell's own stamp is what lets the packer refuse a shell that cannot dispatch something it wrote. If the
+          # build stops writing it, that protection is gone without anything else failing -- so check the stamp itself.
+          info = z.read('Payload/DmIOS.app/dm/shell_info.txt').decode('utf-8', 'replace') if 'Payload/DmIOS.app/dm/shell_info.txt' in names else ''
           checks = {
               'main binary executable': mode('Payload/DmIOS.app/DmIOS') == (stat.S_IFREG | 0o755),
               'guest binary executable': mode('Payload/DmIOS.app/Frameworks/Guest.framework/Guest') == (stat.S_IFREG | 0o755),
-              'shader libraries present': any('/msl/b-' in n and n.endswith('_b.metallib') for n in names),
+              'shader libraries present': len(libs) > 0,
               'romfs present': any('/romfs/' in n for n in names),
-              'env.txt present': 'Payload/DmIOS.app/dm/env.txt' in names,
+              'env.txt carries the memory layout': 'DM_APP_POOL=' in env,
+              'shell declares its gate kinds': 'GATES=' in info,
           }
           pl = plistlib.loads(z.read('Payload/DmIOS.app/Info.plist'))
           checks['named after the game'] = bool(pl.get('CFBundleDisplayName'))
           for k, v in checks.items(): print(('  ok   ' if v else '  FAIL ') + k)
-          print('  %s: %.1f MB, %d entries' % (os.path.basename(ipa), os.path.getsize(ipa) / 1048576, len(names)))
+          print('  %s: %.1f MB, %d entries, %d shader libraries' % (os.path.basename(ipa), os.path.getsize(ipa) / 1048576, len(names), len(libs)))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
+              f.write('### Smoke pack\n\n`%s` — %.1f MB, %d entries, %d shader libraries\n\n| check | |\n|---|---|\n'
+                      % (os.path.basename(ipa), os.path.getsize(ipa) / 1048576, len(names), len(libs)))
+              for k, v in checks.items(): f.write('| %s | %s |\n' % (k, 'ok' if v else '**FAIL**'))
           sys.exit(0 if all(checks.values()) else 1)
           PY
 
   release:
     needs: [tools, shell, smoke]
-    # publish only when everything built and the smoke pack passed (or was skipped because no token is configured)
+    # Publishing requires a passed smoke pack, full stop: this job used to accept a skipped smoke job, which quietly turned
+    # "the token is missing" into "publish whatever was built". Nothing reaches a release without having been packed once.
     if: |
       always() && needs.tools.result == 'success' && needs.shell.result == 'success'
-      && (needs.smoke.result == 'success' || needs.smoke.result == 'skipped')
+      && needs.smoke.result == 'success'
       && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish)
     runs-on: ubuntu-latest
     steps:
