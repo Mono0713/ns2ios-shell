@@ -69,20 +69,38 @@ def which(*names):
 
 # ---------------------------------------------------------------- environment
 
-def check_env(keys_path):
+def check_env(keys_path, prebuilt=None):
+    """Only what every step needs. Tools for a single step are checked when that step is reached, so the chain can be
+    brought up piece by piece with --stop-after without installing everything first."""
     bad = []
-    for m, pkg in (('lz4', 'lz4'), ('capstone', 'capstone'), ('fontTools', 'fonttools'), ('PIL', 'pillow')):
+    for m, pkg in (('lz4.block', 'lz4'), ('capstone', 'capstone'), ('fontTools', 'fonttools'), ('PIL', 'pillow')):
         try: __import__(m)
         except Exception: bad.append('Python package %s:  %s -m pip install %s' % (m, PY, pkg))
-    if not which('clang', 'gcc', 'cc'): bad.append('a C compiler (clang; on Windows installing LLVM is enough)')
-    if not which('spirv-cross'):
-        bad.append('spirv-cross 1.4.357.0 on PATH (brew install spirv-cross; on Windows build it from source with '
-                   'cmake/ninja, see dm/ios/tools/../../docs/SHELL.md)')
+    try:
+        import compression.zstd                                    # built in from Python 3.14
+    except Exception:
+        try: __import__('backports.zstd')
+        except Exception: bad.append('Python package backports.zstd:  %s -m pip install backports.zstd' % PY)
     dotnet = which('dotnet') or (str(Path.home() / '.dotnet' / 'dotnet') if (Path.home() / '.dotnet' / 'dotnet').is_file() else None)
-    if not dotnet: bad.append('.NET 10 SDK: https://dotnet.microsoft.com/download')
+    if prebuilt:
+        # nx_extract and the shader translator come prebuilt, so no .NET SDK is needed on this machine
+        pass
+    elif not dotnet:
+        bad.append('.NET 10 SDK: https://dotnet.microsoft.com/download (or pass --tools with the prebuilt executables)')
+    else:
+        # having dotnet.exe proves nothing: a runtime-only install has no compiler and `dotnet build` fails later
+        r = subprocess.run([dotnet, '--list-sdks'], capture_output=True, text=True)
+        if not re.search(r'^10\.', (r.stdout or ''), re.M):
+            bad.append('.NET 10 SDK (this dotnet has no 10.x SDK; found: %s)' % ((r.stdout or '').strip() or 'none'))
     if not Path(keys_path).is_file(): bad.append('prod.keys not found: %s' % keys_path)
     if bad: die('missing %d item(s):\n  - %s' % (len(bad), '\n  - '.join(bad)))
     return dotnet
+
+
+def need_tool(name, why, hint):
+    p = which(name)
+    if not p: die('%s is needed to %s.\n    %s' % (name, why, hint))
+    return p
 
 
 # ---------------------------------------------------------------- profile
@@ -132,10 +150,16 @@ def scan_nsps(folder):
 
 # ---------------------------------------------------------------- steps
 
-def build_nx_extract(dotnet, work):
+def build_nx_extract(dotnet, work, tools_dir=None):
+    names = ('nx_extract.exe', 'nx_extract')
+    if tools_dir:
+        for n in names:
+            c = tools_dir / n
+            if c.is_file(): say('using the prebuilt nx_extract: %s' % c); return c
     out = work / 'tools' / 'nx_extract'
     exe = out / ('nx_extract.exe' if os.name == 'nt' else 'nx_extract')
     if exe.is_file(): say('nx_extract already built'); return exe
+    if not dotnet: die('no prebuilt nx_extract and no .NET SDK: pass --tools <folder> or install the SDK')
     run([dotnet, 'build', TOOLS / 'nx_extract', '-c', 'Release', '-o', out, '-v', 'quiet'],
         log=work / 'logs' / 'nx_extract_build.log', what='building nx_extract (.NET)')
     if not exe.is_file():
@@ -163,6 +187,8 @@ def step_extract(nx, keys, folder, picks, work, versions):
 
 
 def step_rewrite(exe_dir, mods, out, work, force=False):
+    # patch_nso.py is pure Python (capstone + lz4): its stubs are hand-assembled machine code, not built at run time,
+    # so no C compiler is needed here even though its comments mention clang.
     if not force and all((out / (m + '.patched.bin')).is_file() and (out / (m + '.fixups.tsv')).is_file() for m in mods):
         say('rewritten modules already there'); return
     out.mkdir(parents=True, exist_ok=True)
@@ -198,6 +224,8 @@ def step_translate(pkg, work, xlate, iosout, force=False):
     source and the phone compiles them once on first launch. dmsh_build.py creates <iosout>/b-<chain version> itself."""
     if not force and iosout.is_dir() and any(iosout.glob('b-*/*_b.metallib')):
         say('shader libraries already there'); return
+    need_tool('spirv-cross', 'translate SPIR-V to Metal Shading Language',
+              'install Vulkan SDK 1.4.357.0 (its Bin/ holds spirv-cross.exe) or build SPIRV-Cross at tag vulkan-sdk-1.4.357.0')
     nometal = GFX / 'nometal_run.py'
     if not nometal.is_file():
         die('dm/gfx/tools/nometal_run.py is missing (it is what makes this work without Apple\'s compiler)')
@@ -306,6 +334,9 @@ def main():
     ap.add_argument('-p', '--package', default='', help='version to pack (default: the profile picks one)')
     ap.add_argument('--stop-after', default='', choices=['', 'extract', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
     ap.add_argument('--force', action='store_true', help='redo steps whose output already exists')
+    ap.add_argument('--tools', default=os.environ.get('NXN_TOOLS', ''),
+                    help='folder holding nx_extract, dmsh_xlate and spirv-cross executables (the windows-tools CI '
+                         'artifact). They are put on PATH and used instead of building anything.')
     a = ap.parse_args()
 
     for st in (sys.stdout, sys.stderr):
@@ -319,7 +350,13 @@ def main():
     if not a.keys: die('give prod.keys with -k')
     keys = Path(a.keys).resolve()
 
-    dotnet = check_env(keys)
+    tools_dir = None
+    if a.tools:
+        tools_dir = Path(a.tools).resolve()
+        if not tools_dir.is_dir(): die('--tools %s is not a folder' % tools_dir)
+        os.environ['PATH'] = str(tools_dir) + os.pathsep + os.environ.get('PATH', '')
+        say('tools: %s' % tools_dir)
+    dotnet = check_env(keys, tools_dir)
     found = scan_nsps(folder)
     tids = sorted(found)
     if len(tids) != 1:
@@ -357,7 +394,7 @@ def main():
     say('versions to pack: %s (packing %s)' % (', '.join(versions), pkg))
     say('work folder: %s' % work)
 
-    nx = build_nx_extract(dotnet, work)
+    nx = build_nx_extract(dotnet, work, tools_dir)
     dirs = step_extract(nx, keys, folder, picks, work, versions)
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
@@ -385,7 +422,10 @@ def main():
     chain_v = ver_out[-1].strip()
     say('translation chain version on this machine: %s' % chain_v)
     iosout = work / 'build' / 'ios' / 'dmsh_b'          # dmsh_build.py creates b-<chain version> inside it
-    xlate = GFX / 'dmsh_xlate_bin' / ('dmsh_xlate.exe' if os.name == 'nt' else 'dmsh_xlate')
+    cands = ([tools_dir / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')] if tools_dir else []) + \
+            [GFX / 'dmsh_xlate_bin' / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')]
+    xlate = next((c for c in cands if c.is_file()), None)
+    if not xlate: die('no shader translator: pass --tools <folder> with dmsh_xlate, or build it with dotnet publish')
     step_translate(pkg_dir, work, xlate, iosout, a.force)
     msl_out = iosout / ('b-' + chain_v)
     if not msl_out.is_dir():

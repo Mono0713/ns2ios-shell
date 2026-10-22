@@ -90,3 +90,49 @@ jobs:
           path: |
             ${{ runner.temp }}/dm-work/build/shell/build.log
           if-no-files-found: ignore
+
+  # The tools a packing machine needs but cannot easily get: nx_extract and the shader translator are .NET programs, and
+  # SPIRV-Cross has no Windows build for the exact tag the shader chain was pinned to. Built here once as self-contained
+  # executables, so a Windows user needs neither the .NET SDK nor a C++ toolchain -- only Python and its packages.
+  windows-tools:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build nx_extract
+        run: dotnet publish dm/tools/nx_extract -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o out/nx_extract
+
+      - name: Build the shader translator
+        run: dotnet publish dm/gfx/tools/dmsh_xlate -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o out/dmsh_xlate
+
+      - name: Build SPIRV-Cross at the pinned tag
+        run: |
+          git clone --branch vulkan-sdk-1.4.357.0 --depth 1 https://github.com/KhronosGroup/SPIRV-Cross
+          cmake -S SPIRV-Cross -B SPIRV-Cross/build -G "Visual Studio 17 2022" -A x64 -DSPIRV_CROSS_ENABLE_TESTS=OFF
+          cmake --build SPIRV-Cross/build --config Release --target spirv-cross
+
+      - name: Collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/spirv-cross
+          cp SPIRV-Cross/build/output/Release/spirv-cross.exe out/spirv-cross/
+          test -f out/nx_extract/nx_extract.exe
+          test -f out/dmsh_xlate/dmsh_xlate.exe
+          test -f out/spirv-cross/spirv-cross.exe
+          ./out/spirv-cross/spirv-cross.exe --help > /dev/null
+          ls -l out/nx_extract/nx_extract.exe out/dmsh_xlate/dmsh_xlate.exe out/spirv-cross/spirv-cross.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-tools
+          path: |
+            out/nx_extract/nx_extract.exe
+            out/dmsh_xlate/dmsh_xlate.exe
+            out/spirv-cross/spirv-cross.exe
+          if-no-files-found: error
