@@ -30,7 +30,7 @@ on:
       - '.shell-overlay.txt'
       - '.github/workflows/shell.yml'
   schedule:
-    - cron: '0 19 * * *'   # daily, 03:00 Beijing time, from upstream
+    - cron: '0 0 * * *'   # daily at 08:00 Beijing time, and only when upstream actually moved (see the check job)
 
 permissions:
   contents: write           # creating releases
@@ -40,8 +40,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    # The nightly run exists to pick up upstream's new games, not to rebuild what is already published: if the latest
+    # release was built from upstream's current commit, do nothing. Pushes and manual runs always build, because what
+    # changed is our own tree.
+    name: Anything new upstream
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.decide.outputs.needed }}
+      upstream: ${{ steps.decide.outputs.upstream }}
+    steps:
+      - name: Compare upstream with the latest release
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          UP=''; LATEST=''; NEEDED=true; WHY=''
+          if [ "$EVENT" != schedule ]; then
+            WHY="triggered by $EVENT, which means our own tree changed"
+          else
+            # A failure to ask must not cost the nightly build: build anyway and let the rest of the pipeline report.
+            UP=$(gh api repos/seedds/nxnative/commits/main --jq .sha) || WHY='upstream could not be reached'
+            if [ -n "$UP" ]; then
+              echo "upstream=$UP" >> "$GITHUB_OUTPUT"
+              LATEST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""') \
+                || WHY='the release list could not be read'
+              # Tags are shell-<date>-<upstream sha, 7 characters>. The newest release is the newest build, because older
+              # ones are deleted once a run succeeds.
+              if [ -z "$WHY" ] && [ -n "$LATEST" ] && [ "${LATEST##*-}" = "${UP:0:7}" ]; then
+                NEEDED=false; WHY="upstream $UP is already published as $LATEST"
+              else
+                [ -n "$WHY" ] || WHY="upstream $UP is not what ${LATEST:-nothing} was built from"
+              fi
+            fi
+          fi
+          echo "needed=$NEEDED" >> "$GITHUB_OUTPUT"
+          echo "build=$NEEDED ($WHY)"
+          {
+            echo "### Nightly check"
+            echo
+            echo "- upstream: \`${UP:-unknown}\`"
+            echo "- latest release: \`${LATEST:-none}\`"
+            echo "- build: **$NEEDED** — $WHY"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   tools:
     name: Windows tools
+    needs: [check]
+    if: needs.check.outputs.needed == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -91,6 +139,8 @@ jobs:
 
   shell:
     name: Shell
+    needs: [check]
+    if: needs.check.outputs.needed == 'true'
     runs-on: macos-26
     timeout-minutes: 60
     outputs:

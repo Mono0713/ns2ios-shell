@@ -49,8 +49,9 @@ carries no `romfs/`, `msl/`, `aoc/`, no module image sections and no file over 8
 
 ## Following upstream
 
-The daily 19:00 UTC schedule builds from upstream's **latest commit**, so when upstream adds support for a new game, the shell
-downloaded from here plays it — nobody has to follow up by hand.
+The schedule runs at 08:00 Beijing time (00:00 UTC) and **only builds when upstream moved**: it compares upstream's latest
+commit with the version in the newest release and skips in a few seconds when they agree. So when upstream adds support for a
+new game, the shell downloaded from here plays it — nobody has to follow up by hand.
 
 This repository is not a clone of upstream; it only carries the difference, in two kinds:
 
