@@ -230,9 +230,93 @@ jobs:
             ${{ runner.temp }}/shell.out
           if-no-files-found: ignore
 
-  release:
+  # Packs one small game with the shell that was just built, before anything is published. The game files and keys live in a
+  # private repository as release assets and are fetched here with a token; that repository runs no workflows (Actions minutes
+  # are the scarce resource, storage is not), and the public repository's runners are free.
+  smoke:
+    name: Smoke pack
     needs: [tools, shell]
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: shell
+          path: built
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-tools
+          path: tools-in
+
+      - name: Fetch the test data
+        id: data
+        env:
+          TOKEN: ${{ secrets.SMOKE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::SMOKE_TOKEN is not set, so the smoke pack is skipped. Add it to publish only verified builds."
+            exit 0
+          fi
+          mkdir -p data tools
+          cp tools-in/*.exe tools/ 2>/dev/null || true
+          ls tools
+          api=https://api.github.com/repos/xinerqu/ns2ios-smoke/releases/tags/smoke-data
+          curl -sSfL -H "Authorization: Bearer $TOKEN" "$api" -o rel.json
+          for name in game.nsp prod.keys; do
+            url=$(python -c "import json,sys;d=json.load(open('rel.json'));print(next(a['url'] for a in d['assets'] if a['name']=='$name'))")
+            curl -sSfL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" "$url" -o "data/$name"
+            echo "  fetched $name: $(stat -c %s "data/$name" 2>/dev/null || wc -c < "data/$name") bytes"
+          done
+          echo "ok=1" >> "$GITHUB_OUTPUT"
+
+      - name: Pack the test game
+        if: steps.data.outputs.ok == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet lz4 capstone fonttools backports.zstd pillow pyyaml
+          shellzip=$(ls built/*.zip | head -1); echo "shell: $shellzip"
+          mkdir -p out
+          python scripts/nxn_pack.py "$shellzip" data -k data/prod.keys --tools tools -o out/smoke.ipa
+          ls -l out
+
+      - name: Check the package it produced
+        if: steps.data.outputs.ok == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob, plistlib, stat, sys, zipfile
+          ipa = glob.glob('out/*.ipa')[0]
+          z = zipfile.ZipFile(ipa)
+          names = z.namelist()
+          def mode(n): return z.getinfo(n).external_attr >> 16
+          checks = {
+              'main binary executable': mode('Payload/DmIOS.app/DmIOS') == (stat.S_IFREG | 0o755),
+              'guest binary executable': mode('Payload/DmIOS.app/Frameworks/Guest.framework/Guest') == (stat.S_IFREG | 0o755),
+              'shader libraries present': any('/msl/b-' in n and n.endswith('_b.metallib') for n in names),
+              'romfs present': any('/romfs/' in n for n in names),
+              'env.txt present': 'Payload/DmIOS.app/dm/env.txt' in names,
+          }
+          pl = plistlib.loads(z.read('Payload/DmIOS.app/Info.plist'))
+          checks['named after the game'] = bool(pl.get('CFBundleDisplayName'))
+          for k, v in checks.items(): print(('  ok   ' if v else '  FAIL ') + k)
+          print('  size: %.0f MB, %d entries' % (len(open(ipa,'rb').read())/1048576 if False else 0, len(names)))
+          sys.exit(0 if all(checks.values()) else 1)
+          PY
+
+  release:
+    needs: [tools, shell, smoke]
+    # publish only when everything built and the smoke pack passed (or was skipped because no token is configured)
+    if: |
+      always() && needs.tools.result == 'success' && needs.shell.result == 'success'
+      && (needs.smoke.result == 'success' || needs.smoke.result == 'skipped')
+      && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

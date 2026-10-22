@@ -127,12 +127,15 @@ def one(rows, key, default=None):
 # ---------------------------------------------------------------- NSP scanning
 
 def nsp_meta(path):
-    """Title ID, content type and version from the plaintext cnmt.xml inside an NSP.
+    """Title ID, content type and version, read from the package itself.
 
-    The NCAs themselves are encrypted, but the metadata XML next to them is not, and it carries everything needed:
-      <Type>Application</Type>  <Id>0x0100a00019de0000</Id>  <Version>0</Version>
-    Type is Application (base game), Patch (update) or AddOnContent (DLC). Reading it means file names do not matter at all.
-    Returns None for an XCI (an HFS0 container without this XML) or a file it cannot parse."""
+    Two sources, in order of how much they tell us:
+      1. the plaintext cnmt.xml next to the encrypted NCAs -- title ID, content type (Application / Patch / AddOnContent) and
+         the numeric version, all in one place;
+      2. the name of the .tik inside: a ticket is named after its rights ID, which is the title ID followed by the key
+         generation, so its first 16 hex digits are the title ID. That covers packages whose tools dropped the XML (they
+         often keep only cnmt.nca, which is encrypted). The version is then unknown and taken as 0.
+    Returns None for an XCI (an HFS0 container without either) or a file it cannot parse."""
     try:
         with open(path, 'rb') as f:
             if f.read(4) != b'PFS0': return None
@@ -140,6 +143,7 @@ def nsp_meta(path):
             if not 0 < n < 4096: return None
             entries = [struct.unpack('<QQII', f.read(24)) for _ in range(n)]
             strtab_off, data_off = 0x10 + 24 * n, 0x10 + 24 * n + strtab
+            tik_id = None
             for off, size, name_off, _r in entries:
                 f.seek(strtab_off + name_off)
                 nm = b''
@@ -147,7 +151,8 @@ def nsp_meta(path):
                     c = f.read(1)
                     if not c or c == b'\0': break
                     nm += c
-                if nm.lower().endswith(b'.cnmt.xml') and 0 < size < (1 << 20):
+                low = nm.lower()
+                if low.endswith(b'.cnmt.xml') and 0 < size < (1 << 20):
                     f.seek(data_off + off)
                     t = f.read(size).decode('utf-8', 'replace')
                     mid = re.search(r'<Id>\s*0x([0-9A-Fa-f]{16})\s*</Id>', t)
@@ -156,6 +161,11 @@ def nsp_meta(path):
                     if mid:
                         return {'id': mid.group(1).upper(), 'type': mty.group(1) if mty else '',
                                 'version': int(mvr.group(1)) if mvr else 0}
+                elif low.endswith(b'.tik') and tik_id is None:
+                    m = re.match(rb'([0-9a-fA-F]{16})', nm.rsplit(b'/', 1)[-1])
+                    if m: tik_id = m.group(1).decode('utf-8').upper()
+            if tik_id:
+                return {'id': tik_id, 'type': '', 'version': 0}
     except Exception:
         pass
     return None
