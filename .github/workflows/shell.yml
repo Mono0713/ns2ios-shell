@@ -248,11 +248,11 @@ jobs:
 
           ## Use it / 用法
 
-          1. Download both and unpack the tools, e.g. to `D://nxn-tools`. <br> 下载两个文件，把工具解压到例如 `D://nxn-tools`。
+          1. Download both and unpack the tools, e.g. to `D:/nxn-tools`. <br> 下载两个文件，把工具解压到例如 `D:/nxn-tools`。
           2. Put one game's files in a folder; the name must carry the title ID and version:
              `Hades II [0100A00019DE0000][v0].nsp`. A game whose profile lists several versions needs all of them.
              <br> 把一个游戏的文件放进目录，文件名必须带 title ID 和版本号；profile 列了多个版本的游戏需要全部到位。
-          3. `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D://nxn-tools`
+          3. `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D:/nxn-tools`
           4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer). The first launch compiles the shaders once.
              <br> 用自签工具装上它产出的 IPA；首次启动会编译一遍着色器。
 
