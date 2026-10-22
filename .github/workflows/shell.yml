@@ -183,7 +183,7 @@ jobs:
           test "${SDK%%.*}" -ge 26 || { echo "::error::iOS 26 SDK required, runner has $SDK"; exit 1; }
           bash dm/ios/tools/shell_build.sh 2>&1 | tee "$RUNNER_TEMP/shell.out"
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$DM_ROOT/build/shell/nxnative-shell-build-input.zip" "$GITHUB_WORKSPACE/dist/${V}-shell.zip"
+          cp "$DM_ROOT/build/shell/nxnative-shell-build-input.zip" "$GITHUB_WORKSPACE/dist/${V}.zip"   # V already begins with shell-
           cp "$DM_ROOT/build/shell/shell_files.tsv" "$GITHUB_WORKSPACE/dist/${V}-contents.tsv"
 
       - name: Summarise
@@ -235,30 +235,42 @@ jobs:
       - name: Write the notes
         run: |
           cat > notes.md <<'EOF'
-          The game-free shell plus the three executables a packing machine needs. Nothing here contains game content.
+          The game-free shell, plus the three executables a packing machine needs. **Nothing here contains game content.**
 
-          ## Files
+          不含任何游戏内容的「壳」，以及打包机器需要的三个可执行文件。**这里没有任何游戏内容。**
 
-          | File | What it is |
+          ## Files / 文件
+
+          | File / 文件 | What it is / 说明 |
           |---|---|
-          | `<version>-shell.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. |
-          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe` — self-contained, no .NET SDK or C++ toolchain needed. |
+          | `<version>.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. <br> 壳：不含游戏内容的未签名 iOS 应用，把自己的游戏文件打进去。 |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe` — self-contained; no .NET SDK or C++ toolchain needed. <br> 三个自包含可执行文件，无需 .NET SDK 或 C++ 工具链。 |
 
-          ## Use it
+          ## Use it / 用法
 
-          1. Download both files and unpack the tools somewhere, e.g. `D:\nxn-tools`.
-          2. Put one game's NSP/XCI in a folder. The file name must carry the title and version:
+          1. Download both and unpack the tools, e.g. to `D://nxn-tools`. <br> 下载两个文件，把工具解压到例如 `D://nxn-tools`。
+          2. Put one game's files in a folder; the name must carry the title ID and version:
              `Hades II [0100A00019DE0000][v0].nsp`. A game whose profile lists several versions needs all of them.
-          3. Run `python scripts/nxn_pack.py <shell>.zip <game folder> -k <prod.keys> --tools D:\nxn-tools`.
+             <br> 把一个游戏的文件放进目录，文件名必须带 title ID 和版本号；profile 列了多个版本的游戏需要全部到位。
+          3. `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D://nxn-tools`
           4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer). The first launch compiles the shaders once.
+             <br> 用自签工具装上它产出的 IPA；首次启动会编译一遍着色器。
 
           The packing machine needs Python 3.9+ with `lz4 capstone fonttools backports.zstd pillow`.
+          打包机器需要 Python 3.9+ 以及上述几个包。
 
-          See `README.md` (English) and `README.zh-CN.md` for the full instructions, the game list and the naming rules.
+          Full instructions, the game list and the naming rules: [README.zh-CN.md](https://github.com/xinerqu/ns2ios-shell/blob/main/README.zh-CN.md)
+          · [README.md](https://github.com/xinerqu/ns2ios-shell/blob/main/README.md)
 
-          ## Credits
+          ## Credits / 致谢
 
-          Built on nxnative by jhaizhou (MIT) and on its predecessor d2r-mobile (MIT), which pioneered the shell route.
+          Built on [nxnative](https://github.com/seedds/nxnative) by **seedds** (MIT) — the rewriter, the translation chain, the
+          host and the game profiles are its work. The native-execution approach and the shell route come from
+          [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) by **jhaizhou-ops** (MIT), which nxnative's generic parts
+          started from; both projects borrow from each other. Two separate projects by two different authors.
+
+          基于 **seedds** 的 nxnative（MIT）——改写器、翻译链、宿主与游戏 profile 都是它的成果。原生执行方案与「壳」路线来自
+          **jhaizhou-ops** 的 d2r-mobile（MIT），nxnative 的通用部分即从其起步；两个项目互相借鉴。它们是两个独立项目、两位不同作者。
           EOF
 
       - name: Publish

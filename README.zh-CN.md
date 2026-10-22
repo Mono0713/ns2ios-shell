@@ -12,6 +12,9 @@ macOS 皆可，不需要 Xcode。
 壳是**游戏无关**的：一个壳服务支持列表里的任何游戏。任何游戏文件都不会进入这个仓库或 CI。
 
 > English documentation: [README.md](README.md)
+>
+> 上游项目及其原始文档（Mac 路线）：**[seedds/nxnative](https://github.com/seedds/nxnative#readme)**。
+> 分叉当时的 README 快照保留在 [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md)。
 
 ## 快速开始（Windows）
 
@@ -128,14 +131,19 @@ docs/SHELL.md                    拆分的详细说明
 
 ## 致谢与许可
 
-本仓库是 **jhaizhou** 的 **[nxnative](https://github.com/seedds/nxnative)** 的分支，绝大部分实质工作来自上游：改写器、
+本仓库是 **seedds** 的 **[nxnative](https://github.com/seedds/nxnative)** 的分支，绝大部分实质工作来自上游：改写器、
 翻译链、宿主、游戏 profile 以及那三十来个经过真机验证的标题，都是上游的成果。
 
-「壳」这条路线沿用 **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)**（同一作者，nxnative 的前身）——它为暗黑破坏神
-2 第一次走通了这条路。`guest_dylib.py`、`nometal_run.py`、`dm_shader_prep.m`、`shell_build.sh` 都是从那里移植的。
+这套「原生执行」方案本身来自 **jhaizhou-ops** 的 **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)**（MIT），是为
+《暗黑破坏神 II：重制版》做出来的。上游 nxnative（最初叫 smbw-mobile）就是从它的通用部分起步——NSO 改写器、Horizon 宿主、
+NVN-on-Metal 层和 iOS app 外壳——两个项目之间的修复是**双向**的。它们是**两个独立项目、两位不同作者**，各自对应各自的游戏。
+
+本分支的「壳」路线沿用 d2r-mobile 的 `shell_build.sh` 做法；`guest_dylib.py`、`nometal_run.py`、`dm_shader_prep.m`、
+`shell_build.sh` 是从那里移植的。
 
 `nx_extract` 使用 **[LibHac](https://github.com/Thealexbarney/LibHac)**；着色器翻译器内嵌了 Ryujinx 的着色器库；着色器由
 **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** 翻译。
 
-**许可：MIT**，与上游一致（见 [LICENSE](LICENSE)，© 2026 jhaizhou）。转载本分支或其构建产物时，请保留版权声明与本许可。
-MIT 只覆盖代码：游戏文件、密钥以及你打出来的 IPA 由你自己负责，不在许可范围内。
+**许可：MIT**，与上游一致。[LICENSE](LICENSE) 是上游自己的文件，其中保留的是原始版权声明（© 2026 jhaizhou——nxnative 从
+d2r-mobile 的通用部分起步，因此沿用了它的署名）。转载本分支或其构建产物时，请保留该声明与本许可。MIT 只覆盖代码：游戏文件、
+密钥以及你打出来的 IPA 由你自己负责，不在许可范围内。

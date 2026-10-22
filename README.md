@@ -12,7 +12,10 @@ own machine — Windows, Linux or macOS, without Xcode**.
 The shell is **game-agnostic**: one shell serves any game in the supported list. Nothing from any game ever reaches this
 repository or CI.
 
-> 中文说明：[README.zh-CN.md](README.zh-CN.md) · Upstream's own README (the Mac route): [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md)
+> 中文说明：[README.zh-CN.md](README.zh-CN.md)
+>
+> Upstream project and its own documentation (the Mac route): **[seedds/nxnative](https://github.com/seedds/nxnative#readme)**.
+> A snapshot of its README as of this fork is kept at [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md).
 
 ## Quick start (Windows)
 
@@ -135,16 +138,21 @@ docs/SHELL.md                    the split in more detail
 
 ## Credits and license
 
-This is a fork of **[nxnative](https://github.com/seedds/nxnative)** by **jhaizhou**, and owes most of its substance to it: the
+This is a fork of **[nxnative](https://github.com/seedds/nxnative)** by **seedds**, and owes most of its substance to it: the
 rewriter, the translation chain, the host, the game profiles and the thirty-odd device-verified titles are upstream's work.
 
-The shell route follows **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (same author, nxnative's predecessor),
-which worked it out first for Diablo II. `guest_dylib.py`, `nometal_run.py`, `dm_shader_prep.m` and `shell_build.sh` are ported
-from there.
+The native-execution approach itself comes from **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** by
+**jhaizhou-ops** (MIT), built for Diablo II: Resurrected. Upstream nxnative (first called smbw-mobile) started as a copy of its
+generic parts — the NSO rewriter, the Horizon host, the NVN-on-Metal layer and the iOS app shell — and fixes go both ways
+between the two projects. They are two separate projects by two different authors, each with its own game.
+
+The shell route here follows d2r-mobile's `shell_build.sh`; `guest_dylib.py`, `nometal_run.py`, `dm_shader_prep.m` and
+`shell_build.sh` are ported from it.
 
 `nx_extract` uses **[LibHac](https://github.com/Thealexbarney/LibHac)**; the shader translator embeds Ryujinx's shader library;
 shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**.
 
-**License: MIT**, the same as upstream (see [LICENSE](LICENSE), © 2026 jhaizhou). If you redistribute this fork or a build of
-it, keep the copyright notice and this license with it. The MIT license covers the code only: game files, keys and any IPA you
+**License: MIT**, the same as upstream. [LICENSE](LICENSE) is upstream's own file and carries the original copyright notice
+(© 2026 jhaizhou — nxnative kept it from d2r-mobile, whose generic parts it started from). If you redistribute this fork or a
+build of it, keep that notice and this license with it. The MIT license covers the code only: game files, keys and any IPA you
 pack are your own responsibility and are not covered by it.
