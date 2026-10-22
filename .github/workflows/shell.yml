@@ -264,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ needs.shell.outputs.version }}"
-          TITLE="Shell ${{ needs.shell.outputs.version }}"
+          TITLE="Game-free shell ${TAG#shell-}"   # the tag already carries the shell- prefix
           { echo "Source: ${{ needs.shell.outputs.origin }}"; echo; cat notes.md; } > body.md
           gh release create "$TAG" dist/*.zip dist/*.tsv \
             --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file body.md \
