@@ -104,7 +104,9 @@ jobs:
         env:
           REQUESTED: ${{ github.event_name == 'schedule' && 'upstream' || inputs.source || 'fork' }}
         run: |
-          set -euo pipefail
+          # keep this step's output too: a failure here happens before the build log exists
+          exec > >(tee "$RUNNER_TEMP/shell.out") 2>&1
+          set -euxo pipefail
           source="$REQUESTED"
           src=fork
           if [ "$source" = upstream ]; then
