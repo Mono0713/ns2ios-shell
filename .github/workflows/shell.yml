@@ -43,6 +43,26 @@ jobs:
           python3 -m pip install --quiet --break-system-packages lz4 capstone fonttools \
             || python3 -m pip install --quiet lz4 capstone fonttools
 
+      - name: Check the packer and the tools it drives
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/nxn_pack.py dm/gfx/tools/nometal_run.py dm/ios/tools/pack_ipa.py dm/tools/guest_dylib.py
+          python3 scripts/nxn_pack.py --help > /dev/null
+          # nometal_run.py answers the four toolchain probes Apple's compiler would answer: if one regresses, every
+          # packing attempt on a machine without Xcode dies at the shader step.
+          python3 - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('nm', 'dm/gfx/tools/nometal_run.py')
+          m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          for cmd, want in ((['xcrun','-sdk','macosx','metal','--version'], 'none'),
+                            (['xcrun','-sdk','macosx','metallib','--version'], 'none'),
+                            (['xcrun','-sdk','iphoneos','--show-sdk-version'], '26.0'),
+                            (['xcrun','-sdk','iphoneos','--show-sdk-build-version'], '26A000')):
+              got = m.run(cmd, capture_output=True, text=True).stdout.strip()
+              assert got == want, (cmd, got, want)
+          print('nometal_run: 4/4 probes answered')
+          PY
+
       - name: Build the shell
         run: bash dm/ios/tools/shell_build.sh
         env:
