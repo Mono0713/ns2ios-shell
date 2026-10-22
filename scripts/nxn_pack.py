@@ -92,6 +92,69 @@ def clean_folders(folder):
     say('freed %.1f MB' % (freed / 1048576))
 
 
+def shell_stamp(shell):
+    """What the shell says it can do: dm/shell_info.txt, written by dm/ios/tools/shell_build.sh. A shell from before that
+    stamp grew these keys has an empty or partial answer, which is itself the answer."""
+    with zipfile.ZipFile(shell) as z:
+        names = [n for n in z.namelist() if n.startswith('Payload/') and n.endswith('/dm/shell_info.txt')]
+        if not names: return {}
+        txt = z.read(names[0]).decode('utf-8', 'replace')
+    st = {}
+    for line in txt.splitlines():
+        if '=' in line:
+            k, v = line.split('=', 1)
+            st[k.strip()] = v.strip()
+    return st
+
+
+def check_shell(stamp):
+    """Refuse a shell this packer cannot fill in sensibly. Both failures below build a package that is fine until it runs,
+    so they are hard errors -- but only on a stamp that says so: a key that is missing means the shell predates the stamp,
+    which is unknown rather than bad (the first shells shipped before it grew these keys)."""
+    if not stamp:
+        warn('this shell carries no dm/shell_info.txt, so it is not from this project\'s shell route: what the packer '
+             'writes may not be what it reads. Use the shell from the release.')
+        return
+    if stamp.get('GUEST') == '0':
+        die('this shell cannot load Frameworks/Guest.framework (it was built before the shell route): the game modules '
+            'would never run. Use the shell from the release.')
+    if stamp.get('ENV') == '0':
+        die('this shell ignores dm/env.txt, so the game would get the placeholder memory layout instead of its own: the '
+            'heap request it makes from it is what overflows the pool (SetHeapSize). Use the shell from the release.')
+    missing = [k for k in ('GUEST', 'ENV', 'GATES') if k not in stamp]
+    if missing:
+        warn('this shell predates %s in dm/shell_info.txt, so it cannot be checked against this packer. If the app stops '
+             'on the phone with "unknown gate kind ...", this is why: use the shell from the same release.' % ', '.join(missing))
+
+
+def check_gates(stamp, patched, mods):
+    """Every gate kind the rewriter put into a module must be one the shell dispatches.
+
+    The rewriter turns an svc into a call the host looks up by kind (dm/host/hle.c). A shell built before a kind existed
+    registers it as unknown and aborts while loading the modules -- on the phone, after a successful build, with "unknown
+    gate kind spin". Catching it here costs a second and names the fix.
+    """
+    kinds = set()
+    for m in mods:
+        f = patched / (m + '.gates.tsv')
+        if not f.is_file(): continue
+        for line in f.read_text(errors='replace').splitlines():
+            p = line.split('\t')
+            if len(p) >= 2: kinds.add(p[1])
+    if not kinds: return
+    allowed = set(stamp.get('GATES', '').split())
+    if not allowed:
+        warn('the shell does not say which gate kinds it dispatches, and this game needs %s: if it stops while loading '
+             'the modules with "unknown gate kind", it is too old for this packer' % ' '.join(sorted(kinds)))
+        return
+    missing = kinds - allowed
+    if missing:
+        die('this shell cannot dispatch the %s gate(s) this game needs (it dispatches: %s).\n'
+            '    It is older than this packer: download the current shell from the release.'
+            % (', '.join(sorted(missing)), ' '.join(sorted(allowed))))
+    say('gates: %s (the shell dispatches: %s)' % (' '.join(sorted(kinds)), ' '.join(sorted(allowed))))
+
+
 def run(cmd, env=None, cwd=None, log=None, what=None):
     """Run a command, echoing it and keeping its output if a log path is given."""
     if what: say(what)
@@ -555,6 +618,8 @@ def main():
     if not folder.is_dir(): die('no such folder: %s' % folder)
     if not a.keys: die('give prod.keys with -k')
     keys = Path(a.keys).resolve()
+    stamp = shell_stamp(shell)
+    check_shell(stamp)
 
     tools_dir = None
     if a.tools:
@@ -616,6 +681,7 @@ def main():
     patched = work / 'build' / 'patched'
     step_rewrite(game / 'ExeFS', mods, patched, work, a.force)
     if a.stop_after == 'rewrite': return say('stopped after rewrite')
+    check_gates(stamp, patched, mods)
 
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']

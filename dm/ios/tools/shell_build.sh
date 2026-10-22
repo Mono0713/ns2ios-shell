@@ -83,7 +83,24 @@ n=$(otool -l "$A/DmIOS" | grep -c -E 'sectname __dm|segname __DM'); [ "$n" = 0 ]
 # dm/font is ours (the shared-font stand-ins: Arial Unicode alone is ~23 MB), so it is exempt from the size check; anything else big
 # would be game content that slipped in (a shader library, the RomFS).
 big=$(find "$A" -type f -size +8M -not -path '*/dm/font/*' | head -5); [ -z "$big" ] || die "the shell carries files larger than 8 MB outside dm/font: $big"
-printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\n' "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" > "$A/dm/shell_info.txt"
+# What this shell can do, recorded for the packer. The packer writes call sites into the game's modules whose kind is
+# dispatched in host/hle.c, and a shell built before a kind existed dies on the phone with "unknown gate kind <k>" the
+# moment the module loads -- which is exactly what an old shell zip plus a new packer does. So list the kinds from the code
+# that dispatches them, and refuse to ship a stamp that did not come out of that grep: a stamp that cannot be trusted is
+# worse than no stamp, because the packer uses it to decide whether the package is safe to build.
+GATES=$(grep -o 'strcmp(kind, "[a-z]*")' ../host/hle.c | sed 's/.*"\([a-z]*\)".*/\1/' | tr '\n' ' ' | sed 's/ *$//')
+case " $GATES " in
+  *" svc "*" spin "*) ;;
+  *) die "could not read the gate kinds out of host/hle.c (got '$GATES'): the stamp would lie to the packer" ;;
+esac
+GUEST=0; grep -q 'dm_shell_modules' ../host/loader.c && GUEST=1
+ENV=0; grep -q 'env.txt' Sources/main.m && ENV=1
+[ "$GUEST" = 1 ] || die "host/loader.c has no dm_shell_modules: this tree is not the shell route"
+[ "$ENV" = 1 ] || die "Sources/main.m does not read dm/env.txt: the packer's memory layout would be ignored"
+printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\n' \
+  "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" \
+  > "$A/dm/shell_info.txt"
+t "shell understands gates: $GATES"
 
 ( cd "$A" && find . -type f | sort | while read -r f; do printf '%s\t%s\n' "$(stat -f %z "$f")" "$f"; done ) > "$O/shell_files.tsv"
 ( cd "$O" && rm -rf Payload && mkdir Payload && cp -R app Payload/DmIOS.app && zip -qry nxnative-shell-build-input.zip Payload && rm -rf Payload ) || die "pack the shell"

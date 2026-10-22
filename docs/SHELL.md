@@ -88,6 +88,38 @@ the patch applying means it builds.
 All of this happens in CI. On Windows it shows up as nothing but a new shell zip: same command, same flags, same Python
 dependencies.
 
+## The contract between the shell and the packer
+
+They are built separately, so one thing has to line up: the rewriter (`patch_nso.py`) writes call sites into the game's
+modules and the host (`gate_register` in `dm/host/hle.c`) dispatches them **by kind name** — `svc`, `cntpct`, `cntvct`,
+`obs`, `spin`. The shell is compiled in advance, so a kind a newer packer writes may be one it does not know, and the result
+is a package that builds fine and dies on installation:
+
+```
+[dm] FATAL unknown gate kind spin
+[dm] bt: abort gate_register load_modules host_preload preload_thread
+```
+
+That happened once for real: a shell from an early fork build paired with a later packer aborted in `load_modules`.
+
+So `shell_build.sh` now records what the shell can do in `dm/shell_info.txt`:
+
+```
+KIND=ios
+SOURCE_SHA=<the commit it was built from>
+GATES=svc cntpct cntvct obs spin
+GUEST=1
+ENV=1
+```
+
+`GATES` is not written by hand: it is extracted from the strcmp chain in `hle.c`, and if that extraction fails (upstream
+rewrote the line, say) the build fails — better no release than a stamp that lies to the packer. `GUEST` and `ENV` are
+decided the same way, from the actual code in `loader.c` and `main.m`.
+
+After the rewrite, the packer checks that every kind it actually emitted is in `GATES`, and stops with the fix if not. A
+shell too old to carry these keys only gets a warning: a missing key means "cannot be verified", not "broken", and the first
+shells published here are in that state.
+
 ## The working folder, and cleaning it up
 
 The packer creates `<title ID>_pack` next to the game's files and keeps every intermediate product in it:

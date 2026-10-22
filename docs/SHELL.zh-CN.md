@@ -77,6 +77,35 @@ bash dm/ios/tools/shell_build.sh
 
 这一步完全在 CI 里完成，Windows 端看到的只是一个新的壳 zip：命令、参数、Python 依赖都不变。
 
+## 壳与打包器的契约
+
+两边不是同一个东西，所以有一处必须对齐：改写器（`patch_nso.py`）会往游戏模块里写入一批调用点，宿主
+（`dm/host/hle.c` 的 `gate_register`）按**类型名**分派——`svc`、`cntpct`、`cntvct`、`obs`、`spin`。壳是提前编译好的，
+新打包器写进去的类型它可能不认识，结果是**打包成功、装上就崩**：
+
+```
+[dm] FATAL unknown gate kind spin
+[dm] bt: abort gate_register load_modules host_preload preload_thread
+```
+
+这个坑真实发生过一次：一个早期 fork 构建的壳配上当时的打包器，游戏在 `load_modules` 里 abort。
+
+所以 `shell_build.sh` 现在把壳能做什么写进 `dm/shell_info.txt`：
+
+```
+KIND=ios
+SOURCE_SHA=<构建它的提交>
+GATES=svc cntpct cntvct obs spin
+GUEST=1
+ENV=1
+```
+
+`GATES` 不是手写的，是从 `hle.c` 里那条 strcmp 链**抓出来**的；抓不到（比如上游改了那行的写法）就构建失败，
+宁可不出包也不出一份会骗打包器的标记。`GUEST`/`ENV` 同理，从 `loader.c` 与 `main.m` 的实际代码里判断。
+
+打包器在改写之后核对本次真正用到的类型是否都在 `GATES` 里，不在就直接停，并说明该去下最新的壳。旧壳（没有这些字段）
+只警告——缺字段代表「不可验证」，不代表「坏的」，而现在发布的第一批壳就属于这一类。
+
 ## 工作目录与清理
 
 打包器在游戏文件夹旁边建一个 `<title ID>_pack`，一切中间产物都在里面：

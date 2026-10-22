@@ -117,11 +117,16 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
 ## Notes and caveats
 
 - **The IPA contains your game files.** It is for your own use; do not distribute it.
+- **The shell and the packer belong together.** Use the shell from the same release rather than a zip kept from earlier: an
+  old shell may not understand what a new packer writes into it (the usual symptom is an app that dies while loading with
+  `unknown gate kind spin` in its log). The packer now reads the shell's own `dm/shell_info.txt` and stops at pack time
+  with what to do, instead of leaving it for the phone to find.
 - **First launch takes a while**: the phone compiles every shader once. Hades II's 140 shaders take about 5 s; bigger titles
   take minutes (the progress page estimates). The system caches the result, so later launches start immediately.
 - To change a setting on the device without repacking, put `KEY=VALUE` lines in the app's `Documents/env.txt`.
 - If it crashes, the host writes `Documents/log.txt` — in almost every case that file names the reason.
-- Packing needs **disk space of roughly twice the NSP size**: the extracted RomFS, the staged app and the IPA coexist.
+- Packing needs **disk space of roughly twice the NSP size**: the extracted RomFS, the staged app and the IPA coexist. The
+  temporary files are then removed automatically (`--keep-work` / `--clean`, see above).
 
 ## Repository layout
 
