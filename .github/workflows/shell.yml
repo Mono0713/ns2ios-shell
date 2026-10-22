@@ -410,7 +410,12 @@ jobs:
           TAG="${{ needs.shell.outputs.version }}"
           TITLE="Game-free shell ${TAG#shell-}"   # the tag already carries the shell- prefix
           { echo "Source: ${{ needs.shell.outputs.origin }}"; echo; cat notes.md; } > body.md
-          gh release create "$TAG" dist/*.zip dist/*.tsv \
-            --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file body.md \
-            || gh release upload "$TAG" dist/*.zip dist/*.tsv --repo "$GITHUB_REPOSITORY" --clobber
+          # The tag is date + upstream commit, so several pushes in a day land on the same release. Replace the assets and
+          # the notes there instead of leaving the first version of the text up; gh release create would just fail.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip dist/*.tsv --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file body.md
+          else
+            gh release create "$TAG" dist/*.zip dist/*.tsv --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file body.md
+          fi
           echo "published $TAG" >> "$GITHUB_STEP_SUMMARY"
