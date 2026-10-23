@@ -515,13 +515,20 @@ def derive_profile(gdir, tid, ver, game, mods, dest, disp):
     for p in gdir.iterdir():
         if p.is_file() and p.name not in DERIVED_SKIP:
             shutil.copyfile(p, dest / p.name)
-    row = '\t'.join(['build', ver, disp] + ['%s=%s' % (m, module_build_id(game / 'ExeFS' / m))
-                                            for m in mods if (game / 'ExeFS' / m).is_file()])
+    # The module list has to follow the files too: a build may ship fewer modules than the profile was brought up on
+    # (Absolum 1.0.4 has no subsdk2), and a rewrite that is told to load one the dump does not have dies on the missing file.
+    present = [q.name for q in (game / 'ExeFS').iterdir() if q.is_file() and q.name not in ('rtld', 'main.npdm')]
+    order = lambda m: (m != 'main', 2 if m == 'sdk' else (1 if m.startswith('subsdk') and m[6:].isdigit() else 3),
+                       int(m[6:]) if m.startswith('subsdk') and m[6:].isdigit() else 0)
+    mods_now = sorted(present, key=order)
+    row = '\t'.join(['build', ver, disp] + ['%s=%s' % (m, module_build_id(game / 'ExeFS' / m)) for m in mods_now])
     out, put = ['# Derived from %s for %s (%s), a version that profile was not brought up on:' % (gdir, ver, disp),
-                '# its keys as they are, this version\'s build row, and shader tables made from this version\'s own files'], False
+                '# its keys as they are, this version\'s build row and module list, and shader tables from its own files'], False
     for line in (gdir / 'game.tsv').read_text(encoding='utf-8').splitlines():
-        if line.split('\t', 1)[0] in ('build', 'package', 'shader_versions'):
-            if not put: out += [row, 'package\t%s' % ver, 'shader_versions\t%s' % ver]; put = True
+        if line.split('\t', 1)[0] in ('build', 'package', 'shader_versions', 'modules'):
+            if not put:
+                out += [row, 'package\t%s' % ver, 'shader_versions\t%s' % ver, 'modules\t%s' % ' '.join(mods_now)]
+                put = True
             continue
         out.append(line)
     (dest / 'game.tsv').write_text('\n'.join(out) + '\n', encoding='utf-8')
@@ -928,6 +935,7 @@ def main():
             [str(derived.parent)] + [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d])
         os.environ['DM_GAMES_FIRST'] = '1'
         gdir, rows = derived, load_rows(derived)
+        mods = one(rows, 'modules').split()      # the derived list, not the one the registered profile names
         derived_dir = derived
         builds[pkg] = disp
         warn('these files are not the build of %s that profile %s registers (%s).\n'
