@@ -268,12 +268,13 @@ jobs:
           python3 "$GITHUB_WORKSPACE/fork/dm/tools/supported_list.py" \
               --games "$TREE/dm/games" --md "$RUNNER_TEMP/SUPPORTED.md" \
               --tsv "$GITHUB_WORKSPACE/dist/${V}-supported.tsv"
-          # The page in the repository is generated from the profiles this repository carries, so it has to agree with
-          # them. A stale page lies, but it is only a page -- never fail a release over it.
+          # The page in the repository is generated from the same tree, so it can be compared against it: a page that
+          # lags behind upstream is a page that tells someone their game is unsupported when it is not. Still only a
+          # warning -- a page is not a release, and upstream adding a game should not fail a build.
           if ! python3 "$GITHUB_WORKSPACE/fork/dm/tools/supported_list.py" \
-                 --games "$GITHUB_WORKSPACE/fork/dm/games" \
+                 --games "$TREE/dm/games" \
                  --md "$GITHUB_WORKSPACE/fork/docs/SUPPORTED.md" --check; then
-            echo "::warning::docs/SUPPORTED.md is out of date with this repository's dm/games: run 'python3 dm/tools/supported_list.py' and commit it. (The release copy was regenerated and is correct.)"
+            echo "::warning::docs/SUPPORTED.md is out of date with the tree this release is built from: regenerate it and commit the page. (The release asset above is already correct.)"
           fi
 
       - name: Summarise
