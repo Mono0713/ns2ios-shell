@@ -150,6 +150,10 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
 ## Notes and caveats
 
 - **The IPA contains your game files.** It is for your own use; do not distribute it.
+- **Each game is a separate app, so several install side by side.** The bundle ID comes from the title ID
+  (`org.nxnative.<title ID>`), so a second game does not replace the first and their saves are separate. Repacking the same
+  game updates it in place, saves intact. Packages built before this change still carried the shell's `org.nxnative.shell`
+  and did collide — repack, and delete the old one by hand.
 - **The shell and the packer belong together.** Use the shell from the same release rather than a zip kept from earlier: an
   old shell may not understand what a new packer writes into it (the usual symptom is an app that dies while loading with
   `unknown gate kind spin` in its log). The packer now reads the shell's own `dm/shell_info.txt` and stops at pack time

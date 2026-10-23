@@ -672,10 +672,16 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))
 
-    # App identity: name, version, bundle ID stays the shell's (the sideloading tool replaces it anyway), icon.
+    # App identity: name, version, bundle ID, icon.
+    #
+    # The bundle ID has to be per game. iOS identifies an app by it, so every package carrying the shell's
+    # org.nxnative.shell is the same app: installing the second game replaces the first, however different the two look on
+    # the home screen. Upstream derives it from the title ID (build_ipa_from_nsp.py), which also keeps a repack of the same
+    # game an update of it rather than a second copy.
     ip = A / 'Info.plist'
     try:
         with open(ip, 'rb') as f: pl = plistlib.load(f)
+        pl['CFBundleIdentifier'] = 'org.nxnative.%016x' % int(tid, 16)
         pl['CFBundleDisplayName'] = name
         pl['CFBundleShortVersionString'] = version
         pl['CFBundleVersion'] = version
@@ -860,7 +866,12 @@ def main():
             try: shutil.move(str(probed / 'extract'), str(dst))
             except OSError as e: warn('cannot move the probe extraction into %s (%s): it will be extracted again' % (dst, e))
         shutil.rmtree(probed, ignore_errors=True)
-    out_ipa = Path(a.out).resolve() if a.out else folder / one(rows, 'ipa', 'game.ipa')
+    # Default output name: the profile's own, else the game's name. A shared fallback like "game.ipa" would let two games
+    # in one folder overwrite each other's package.
+    ipa_name = one(rows, 'ipa', '')
+    if not ipa_name:
+        ipa_name = (re.sub(r'[^0-9A-Za-z._ -]+', '', one(rows, 'name', tid)).strip() or tid) + '.ipa'
+    out_ipa = Path(a.out).resolve() if a.out else folder / ipa_name
     say('game: %s (%s)' % (one(rows, 'name', tid), tid))
     say('shell: %s' % shell.name)
     say('versions to pack: %s (packing %s)' % (', '.join(versions), pkg))
