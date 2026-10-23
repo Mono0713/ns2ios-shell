@@ -47,7 +47,9 @@ class Game:
 
 
 def extra_dirs():   # profile folders outside the repository (DM_GAMES_DIR), searched after dm/games
-    return [Path(p) for p in os.environ.get('DM_GAMES_DIR', '').split(':') if p]
+    # os.pathsep, not ':': a Windows path is C:\... and already contains a colon, so splitting on ':' there turns every
+    # folder into fragments and the profile is never found (scripts/nxn_pack.py points this at a derived profile).
+    return [Path(p) for p in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if p]
 
 
 def search_dirs():   # dm/games, then DM_GAMES_DIR; DM_GAMES_FIRST=1 the other way round

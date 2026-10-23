@@ -287,6 +287,15 @@ def one(rows, key, default=None):
 
 # ---------------------------------------------------------------- NSP scanning
 
+def tid_sidecar(xci):
+    """`<file>.xci.tid` next to the dump: the title ID found by extracting it once.
+
+    Without it, every run would extract the whole cartridge again just to find out what it is, because nothing inside a
+    dump names it. It holds one line of hex.
+    """
+    return xci.with_name(xci.name + '.tid')
+
+
 def probe_xci(nx, keys, xci, out):
     """The title ID of a cartridge dump, read by nx_extract.
 
@@ -305,7 +314,10 @@ def probe_xci(nx, keys, xci, out):
         warn('nx_extract could not read %s (see %s): %s'
              % (xci.name, out / 'probe.log', (text.strip().splitlines() or ['no output'])[-1]))
         return None
-    return m.group(1).upper()
+    tid = m.group(1).upper()
+    try: tid_sidecar(xci).write_text(tid + '\n', encoding='utf-8')
+    except OSError: pass
+    return tid
 
 
 def nsp_meta(path):
@@ -386,8 +398,15 @@ def scan_nsps(folder):
             tid, ver = meta['id'], 'v%d' % meta['version']
             kind = {'Application': 'base', 'Patch': 'update', 'AddOnContent': 'dlc'}.get(meta['type'], 'base')
         else:
-            # an XCI, or an NSP without the metadata XML: fall back to the name, and to the title ID's low bits for the kind
+            # an XCI, or an NSP without the metadata XML: fall back to the name, then to what an earlier run recorded, and
+            # to the title ID's low bits for the kind
             tid, ver = name_tid(p), name_ver(p)
+            if not tid:
+                try: rec = tid_sidecar(p).read_text(encoding='utf-8').strip().upper()
+                except OSError: rec = ''
+                if re.fullmatch(r'[0-9A-F]{16}', rec):
+                    tid = rec
+                    say('using the title ID an earlier run recorded for %s' % p.name)
             if not tid:
                 if p.suffix.lower() != '.xci':
                     warn('cannot read %s: no metadata inside and no [XXXXXXXXXXXXX000] in the name' % p.name)
@@ -444,10 +463,22 @@ def step_extract(nx, keys, folder, picks, work, versions):
     return dirs
 
 
+# Files a derived profile leaves out: the build makes all of these again from the packed version's own files.
+DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv',
+                'dmsh_chain.h', 'vk_capture.tsv'}
+
+
+def module_build_id(nso):
+    with open(nso, 'rb') as f:
+        f.seek(0x40)
+        return f.read(16).hex()
+
+
 def check_build_ids(game, rows, ver, mods):
-    """A profile registers one build ID per module per version. If the files carry a different one, the NSP is not the
-    version the profile's rewriter patches and shader tables were made for: the app would build fine and misbehave only
-    on the phone, so stop here instead."""
+    """The build IDs of the extracted modules against the ones the profile registers for this version.
+
+    A mismatch does not have to stop the pack: upstream derives a profile from the files and carries on ("Any version works"),
+    which is what derive_profile below does. Returns the mismatches so main can decide, and whether there was a row at all."""
     want = {}
     for line in rows.get('build', []):
         f = line.split('\t')
@@ -455,18 +486,50 @@ def check_build_ids(game, rows, ver, mods):
         for item in f[2:]:
             if '=' in item: k, v = item.split('=', 1); want[k] = v
     if not want:
-        warn('the profile registers no build IDs for %s: skipping the check' % ver); return
+        return ['the profile registers no build IDs for %s' % ver], False
     bad = []
     for m in mods:
         p = game / 'ExeFS' / m
-        if not p.is_file(): bad.append('%-8s missing' % m); continue
-        with open(p, 'rb') as f: head = f.read(0x50)
-        got = head[0x40:0x50].hex()
-        if m in want and got != want[m]: bad.append('%-8s profile %s / file %s' % (m, want[m], got))
-    if bad:
-        die('the game files are not version %s of this profile:\n  - %s\n    (the profile registers: %s)'
-            % (ver, '\n  - '.join(bad), ', '.join('%s=%s' % kv for kv in want.items())))
-    say('build IDs match the profile for %s (%s)' % (ver, ', '.join(sorted(want))))
+        if not p.is_file(): bad.append('%s missing' % m); continue
+        got = module_build_id(p)
+        if m in want and got != want[m]: bad.append('%s %s (registered %s)' % (m, got, want[m]))
+    return bad, True
+
+
+def derive_profile(gdir, tid, ver, game, mods, dest, disp):
+    """The profile for a version it was not brought up on, written into `dest` (outside the repository).
+
+    Its keys as they are, with this version's own build row, package and shader versions; the shader tables, the chain header
+    and the capture list are left out because the build makes them again from this version's files. Callers then put `dest`
+    on DM_GAMES_DIR with DM_GAMES_FIRST=1, which every tool in the chain honours -- the same mechanism upstream uses for a
+    provisional profile.
+    """
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in gdir.iterdir():
+        if p.is_file() and p.name not in DERIVED_SKIP:
+            shutil.copyfile(p, dest / p.name)
+    row = '\t'.join(['build', ver, disp] + ['%s=%s' % (m, module_build_id(game / 'ExeFS' / m))
+                                            for m in mods if (game / 'ExeFS' / m).is_file()])
+    out, put = ['# Derived from %s for %s (%s), a version that profile was not brought up on:' % (gdir, ver, disp),
+                '# its keys as they are, this version\'s build row, and shader tables made from this version\'s own files'], False
+    for line in (gdir / 'game.tsv').read_text(encoding='utf-8').splitlines():
+        if line.split('\t', 1)[0] in ('build', 'package', 'shader_versions'):
+            if not put: out += [row, 'package\t%s' % ver, 'shader_versions\t%s' % ver]; put = True
+            continue
+        out.append(line)
+    (dest / 'game.tsv').write_text('\n'.join(out) + '\n', encoding='utf-8')
+    return dest
+
+
+def load_rows(d):
+    rows = {}
+    for line in (d / 'game.tsv').read_text(encoding='utf-8').splitlines():
+        if not line.strip() or line.lstrip().startswith('#'): continue
+        k, _, v = line.partition('\t')
+        rows.setdefault(k.strip(), []).append(v)
+    return rows
+
 
 
 def step_rewrite(exe_dir, mods, out, work, force=False):
@@ -536,9 +599,12 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         say('the toolchain differs from dmsh_chain.lock: registering this machine')
         run([PY, nometal, GFX / 'dmsh_chain.py', '--update-lock'], env=genv,
             log=work / 'logs' / 'chain_lock.log', what='dmsh_chain --update-lock')
-        run([PY, nometal, GFX / 'dmsh_chain.py', '--header'], env=genv,
-            log=work / 'logs' / 'chain_header.log', what='dmsh_chain --header')
-        warn('dmsh_chain.lock and dm/games/%s/dmsh_chain.h now describe this machine (do not commit them)' % tid)
+        warn('dmsh_chain.lock now describes this machine (do not commit it)')
+    # dmsh_build.py refuses to start unless the game profile's dmsh_chain.h holds the chain version it computed, and that
+    # header is per game: packing a second game on the same machine fails with "run --header first" if this only happens
+    # when the toolchain lock changes. It reads the tables, so it costs nothing to do every time.
+    run([PY, nometal, GFX / 'dmsh_chain.py', '--header'], env=genv,
+        log=work / 'logs' / 'chain_header.log', what='dmsh_chain --header')
     run([PY, nometal, GFX / 'dmsh_build.py', pkg, work / 'shader' / 'cache'],
         env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8'), 'DM_GAME': tid},
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
@@ -764,10 +830,11 @@ def main():
     # already cover any version the profile registers, and a version it does not register is reported rather than refused.
     #
     # A cartridge dump is the exception: it carries no version at all, so "the newest in the folder" means nothing there and
-    # the profile decides. The build ID check below still proves the dump really is that version.
+    # the profile decides. That holds whether it was identified just now or by a title ID an earlier run recorded.
+    is_dump = fam['base'].suffix.lower() == '.xci'
     upds = sorted(fam['updates'], key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
-    pkg = a.package or (upds[-1] if upds else (one(rows, 'package', 'v0') if probed else 'v0'))
-    if not probed and pkg != 'v0' and pkg not in fam['updates']:
+    pkg = a.package or (upds[-1] if upds else (one(rows, 'package', 'v0') if is_dump else 'v0'))
+    if not is_dump and pkg != 'v0' and pkg not in fam['updates']:
         die('no update for %s in %s (the folder has: %s)'
             % (pkg, folder, ', '.join(upds) if upds else 'only the base game'))
     if pkg not in builds:
@@ -777,9 +844,9 @@ def main():
         warn('%s is registered, but the shader tables were built from %s -- shaders this version adds may be missing'
              % (pkg, ' '.join(need)))
     versions = [pkg]
-    picks = {pkg: (fam['base'], None if probed or pkg == 'v0' else fam['updates'][pkg])}
+    picks = {pkg: (fam['base'], None if is_dump or pkg == 'v0' else fam['updates'][pkg])}
     say('files: base %s%s' % (fam['base'].name,
-        (', update %s' % fam['updates'][pkg].name) if not probed and pkg != 'v0' else ', no update')
+        (', update %s' % fam['updates'][pkg].name) if not is_dump and pkg != 'v0' else ', no update')
         + (('; ignoring %d DLC' % len(fam['dlc'])) if fam['dlc'] else ''))
 
     work = folder / (tid + '_pack')
@@ -803,7 +870,33 @@ def main():
     dirs = step_extract(nx, keys, folder, picks, work, versions)
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
-    check_build_ids(game, rows, pkg, mods)
+    derived_dir = None
+    bad, had_row = check_build_ids(game, rows, pkg, mods)
+    if not bad:
+        say('build IDs match the profile for %s' % pkg)
+    else:
+        # Upstream packs any version: when the files are not the build the profile was brought up on, it derives a profile
+        # from them instead of refusing. Refusing here would turn away a dump that plays fine -- the shader tables are made
+        # from these files anyway, and the rewriter's observation gates simply do not apply to an unknown build.
+        sys.path.insert(0, str(TOOLS))
+        try:
+            import nacp
+            disp = nacp.version(game / 'control.nacp') or '?'
+        except Exception:
+            disp = '?'
+        reg = gdir
+        derived = work / 'profile' / tid
+        derive_profile(reg, tid, pkg, game, mods, derived, disp)
+        os.environ['DM_GAMES_DIR'] = os.pathsep.join(
+            [str(derived.parent)] + [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d])
+        os.environ['DM_GAMES_FIRST'] = '1'
+        gdir, rows = derived, load_rows(derived)
+        derived_dir = derived
+        builds[pkg] = disp
+        warn('these files are not the build of %s that profile %s registers (%s).\n'
+             '    Packing %s from a profile derived from them, as upstream does: the shader tables come from these files, '
+             'and the observation gates registered for the other build do not apply.' % (pkg, reg.name, '; '.join(bad), pkg))
+        say('derived profile: %s (%s)' % (derived, disp))
 
     patched = work / 'build' / 'patched'
     step_rewrite(game / 'ExeFS', mods, patched, work, a.force)
@@ -813,6 +906,12 @@ def main():
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
     pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
+    if derived_dir is not None:
+        # The shader tool reads its tables from the profile it loads, and a derived profile has none (the split just made
+        # them). Without this it falls back to the registered profile's tables, which name shader packs this version lacks.
+        for f in sorted(tb.glob('*.tsv')):
+            shutil.copyfile(f, derived_dir / f.name)
+        say('derived profile tables: %s' % ', '.join(f.name for f in sorted(tb.glob('*.tsv'))))
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
     # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,

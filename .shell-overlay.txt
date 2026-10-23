@@ -35,6 +35,8 @@
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL)
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name
 ~ dm/gfx/tools/shader_split.py  # posix separators in the recorded RomFS paths (Windows)
+~ dm/games/game.py              # DM_GAMES_DIR split with os.pathsep: ':' cannot hold a Windows path
+
 ~ dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
 ~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host
