@@ -390,6 +390,9 @@ jobs:
           }
           pl = plistlib.loads(z.read('Payload/DmIOS.app/Info.plist'))
           checks['named after the game'] = bool(pl.get('CFBundleDisplayName'))
+          # iOS identifies an app by its bundle ID: keeping the shell's would make every game replace the last one.
+          bid = pl.get('CFBundleIdentifier') or ''
+          checks['own bundle ID'] = bid.startswith('org.nxnative.') and bid != 'org.nxnative.shell'
           for k, v in checks.items(): print(('  ok   ' if v else '  FAIL ') + k)
           print('  %s: %.1f MB, %d entries, %d shader libraries' % (os.path.basename(ipa), os.path.getsize(ipa) / 1048576, len(names), len(libs)))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
