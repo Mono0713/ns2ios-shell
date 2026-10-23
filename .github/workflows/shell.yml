@@ -385,6 +385,8 @@ jobs:
               'romfs present': any('/romfs/' in n for n in names),
               'env.txt carries the memory layout': 'DM_APP_POOL=' in env,
               'shell declares its gate kinds': 'GATES=' in info,
+              # upstream's settings screen before the game needs this file; without it the launcher starts the game at once
+              'settings screen data': 'Payload/DmIOS.app/dm/launcher.json' in names,
           }
           pl = plistlib.loads(z.read('Payload/DmIOS.app/Info.plist'))
           checks['named after the game'] = bool(pl.get('CFBundleDisplayName'))

@@ -1,11 +1,12 @@
 diff --git a/dm/ios/tools/pack_ipa.py b/dm/ios/tools/pack_ipa.py
-index 3aee7e0..56b2a85 100644
 --- a/dm/ios/tools/pack_ipa.py
 +++ b/dm/ios/tools/pack_ipa.py
-@@ -18,6 +18,27 @@ DIR_MODE = stat.S_IFDIR | 0o755   # a parent folder no source folder stands for
+@@ -16,6 +16,27 @@
+ L32, L16 = 0xFFFFFFFF, 0xFFFF
+ DIR_MODE = stat.S_IFDIR | 0o755   # a parent folder no source folder stands for (Payload/, msl/)
  Entry = collections.namedtuple('Entry', 'name path st')   # st None: such a parent folder
- 
- 
++
++
 +def ios_mode(name):
 +    """The Unix mode for an iOS app bundle, derived from the archive path.
 +    Needed on Windows, where os.stat carries no x bit (a file there is 0o666): packed as is, the app's main binary would lose
@@ -25,12 +26,10 @@ index 3aee7e0..56b2a85 100644
 +def entry_mode(e):
 +    if e.st is None: return DIR_MODE                             # a parent folder this writer made up
 +    return ios_mode(e.name) if os.name == 'nt' else e.st.st_mode  # Windows: no x bit, no symlinks; derive it from the path
-+
-+
+ 
+ 
  def entries(maps, skip):
-     """The archive's entries in order: for each mapping its parent folders (unless an earlier entry gave them), its root, then its tree depth first, sorted by name,
-     without the skipped paths and without other mappings' roots (each adds its own)"""
-@@ -78,7 +99,7 @@ class Zip:
+@@ -78,7 +99,7 @@
          off, nb, fl, t, d = h
          z = [v for v in (usize, csize, off) if v >= L32]   # zip64 extra: the fields that do not fit, in this order
          ext = struct.pack(f'<HH{len(z)}Q', 1, 8 * len(z), *z) if z else b''

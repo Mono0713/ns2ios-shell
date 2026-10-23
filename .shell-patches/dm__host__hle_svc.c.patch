@@ -1,5 +1,4 @@
 diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
-index 6f1d9df..fdbaf1a 100644
 --- a/dm/host/hle_svc.c
 +++ b/dm/host/hle_svc.c
 @@ -15,7 +15,20 @@
@@ -24,7 +23,7 @@ index 6f1d9df..fdbaf1a 100644
  static uint8_t *g_as;              // ASLR region base = the whole block
  static uint8_t *g_heap; static size_t g_heap_cur, g_heap_cap;
  // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
-@@ -29,6 +42,11 @@ int dm_guest_as_contains(uintptr_t a) { uintptr_t b = (uintptr_t)g_as; return g_
+@@ -29,6 +42,11 @@
  static void *alias_windows_thread(void *arg);
  static void mem_init(void) {
      if (g_as) return;
@@ -36,7 +35,7 @@ index 6f1d9df..fdbaf1a 100644
      g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
      if (g_as == MAP_FAILED) die("reserve guest AS");
      // Fixed partition (all inside the reserved block): alias 2.875 GB, stack 256 MB, heap the remaining 1.625 GB.
-@@ -37,8 +55,8 @@ static void mem_init(void) {
+@@ -37,8 +55,8 @@
      //   and resource loading then MapPhysicalMemory's into the alias region after the node area on demand. With a 1.25 GB alias region only about 256 MB was left there, and 3 MB-class layout archives (WipeCourseIn / WipeWarp)
      //   got no address, were skipped, and crashed on a null pointer when used (main +0x373e04). So alias = node area + 1.75 GB + slack; the heap needs only 1.47 GB, and 2.625 GB is plenty.
      // The alias and stack sizes come from the game profile (mem_alias / mem_stack), the heap takes the rest; Mario: alias 0xB8000000, stack 0x10000000 → stack at +0xC8000000, heap at +0xD8000000
@@ -47,7 +46,7 @@ index 6f1d9df..fdbaf1a 100644
      g_heap  = g_stack + g_stack_cap; g_heap_cap  = RESERVE - (size_t)(g_heap - g_as);
      if (!(g_alias_bits = calloc((g_alias_cap >> 18) + 1, sizeof *g_alias_bits))) die("alias region page bitmap calloc");
      LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)RESERVE, g_heap, g_alias, g_stack);
-@@ -50,7 +68,7 @@ static void mem_init(void) {
+@@ -50,7 +68,7 @@
  // and hands the whole block to its own StandardAllocator (main+0x32137a0) -- so heap size = pool − image footprint, it has only as much as the host reports.
  // Previously 3 GB was reported here and SetHeapSize never failed: the heap was about 150 MB smaller than on the real device, at the run entry peak the main heap had only about 18 MB left, and under high local load a timing shift made a 128 KB request return null,
  // which the guest writes to without a null check (CRASH main+0x1b36138, re-verified after merge with inv_tap).
@@ -56,7 +55,7 @@ index 6f1d9df..fdbaf1a 100644
  static size_t image_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++) n += g_mod[i].size; return (n + 0x1fffff) & ~(size_t)0x1fffff; }
  // Giant bss (modules with the patch area before the base, patch_nso.py FAR): the image bytes beyond the file part. Used memory was reported as "heap + 64 MB", where the 64 MB covers ordinary modules' code and data (Mario's two modules are about 74 MB together,
  // and the heap it opens = pool − 64 MB − 1.75 GB virtual address memory − 1 MB = 0x5be00000, as on hardware); Metroid Dread's main has about 1.8 GB of bss, the engine's static heap, which the Switch counts as used;
-@@ -140,7 +158,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
+@@ -140,7 +158,7 @@
              // Logged once (Mario's retries would repeat it): a game that sizes its heap as pool − used memory and does not retry stops here when its modules are larger than the used memory reported
              // (profile mem_used; the NSP script's probe boot reads this line, and sets mem_used when no SetHeapSize succeeds afterwards)
              static int once; if (!once++) LOG("[mem] SetHeapSize %#zx + modules %#zx > app pool %#llx (used memory reported %#llx + bss %#zx)", size, image_bytes() - big_bss_bytes(),
@@ -65,7 +64,7 @@ index 6f1d9df..fdbaf1a 100644
              regs[0] = 0x10801; return 0;
          }
          int rc = 0;
-@@ -233,7 +251,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
+@@ -233,7 +251,7 @@
          // Off by default: Ace Attorney Investigations Collection maps a little more than the 1 GB pool its profile reports
          if (DM_GAME_MEM_MAP_LIMIT && num == 0x2C) {
              pthread_mutex_lock(&g_phys_mu);
@@ -74,7 +73,7 @@ index 6f1d9df..fdbaf1a 100644
              if (need > room) {
                  pthread_mutex_unlock(&g_phys_mu);
                  static _Atomic int nref; if (atomic_fetch_add(&nref, 1) < 8) LOG("[mem] MapPhysicalMemory +%#zx refused: %.2f GB mapped, the application pool is full (ResultLimitReached, the SDK frees cached pages and retries)",
-@@ -285,7 +303,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
+@@ -285,7 +303,7 @@
          case I_AslrAddr:  v = (uint64_t)g_as;    break;   case I_AslrSize:  v = RESERVE;     break;
          case I_StackAddr: v = (uint64_t)g_stack; break;   case I_StackSize: v = g_stack_cap; break;
          case I_TotalMem: case I_TotalNonSys: v = APP_POOL; break;

@@ -222,18 +222,60 @@ def need_tool(name, why, hint):
 
 # ---------------------------------------------------------------- profile
 
+UPSTREAM_API = 'https://api.github.com/repos/seedds/nxnative/contents/dm/games/{tid}?ref=main'
+UPSTREAM_RAW = 'https://raw.githubusercontent.com/seedds/nxnative/main/dm/games/{tid}/{name}'
+
+
+def fetch_profile(tid):
+    """A game upstream added after this copy of the repository was made: take its profile from upstream instead of refusing.
+
+    The shell is game-agnostic, so a shell built this morning runs a game whose profile did not exist when this repository
+    was cloned. The profile -- build IDs, module list, memory layout, the shader tables -- lives only in the packer, so
+    without this a new game is unpackable here while the shell would happily run it. Returns True when the profile is now
+    on disk; never raises, because the caller has a message for the failure anyway.
+    """
+    d = DM / 'games' / tid
+    say('no local profile for %s: asking upstream for it' % tid)
+    try:
+        import urllib.request
+        with urllib.request.urlopen(UPSTREAM_API.format(tid=tid), timeout=30) as r:
+            entries = json.load(r)
+        if not isinstance(entries, list): return False
+        d.mkdir(parents=True, exist_ok=True)
+        total = 0
+        for e in entries:
+            name = e.get('name', '')
+            if e.get('type') != 'file' or not name or '/' in name: continue
+            with urllib.request.urlopen(UPSTREAM_RAW.format(tid=tid, name=name), timeout=120) as r:
+                data = r.read()
+            (d / name).write_bytes(data)
+            total += len(data)
+        say('  got %d files, %.1f MB into %s' % (len(entries), total / 1048576, d))
+        return (d / 'game.tsv').is_file()
+    except Exception as e:                                   # noqa: BLE001 - offline is the same as "not available"
+        warn('could not fetch the profile for %s (%s)' % (tid, e))
+        return False
+
+
 def load_profile(tid):
     """dm/games/<title ID>/game.tsv: key<TAB>value, several values per key, one `build` row per version."""
     d = DM / 'games' / tid
     f = d / 'game.tsv'
-    if not f.is_file(): die('no game profile for title ID %s (%s)\n'
-                            '    Supported games: %s' % (tid, f, ', '.join(sorted(p.name for p in (DM / 'games').iterdir() if (p / 'game.tsv').is_file()))))
+    if not f.is_file():
+        fetch_profile(tid)
+    if not f.is_file():
+        die('no game profile for title ID %s (%s)\n'
+            '    Supported games: %s\n'
+            '    This one is neither here nor upstream: check the title ID (the packer reads it from the package itself), or '
+            'use a shell and a packer that upstream has a profile for.'
+            % (tid, f, ', '.join(sorted(p.name for p in (DM / 'games').iterdir() if (p / 'game.tsv').is_file()))))
     rows = {}
     for line in f.read_text(encoding='utf-8').splitlines():
         if not line.strip() or line.lstrip().startswith('#'): continue
         k, _, v = line.partition('\t')
         rows.setdefault(k.strip(), []).append(v)
     return d, rows
+
 
 
 def one(rows, key, default=None):
@@ -524,6 +566,8 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv'):
         if (gdir / n).is_file(): shutil.copyfile(gdir / n, A / 'dm' / n)
 
+    step_launcher(tid, patched, game, A, work)
+
     # The shell was built from the placeholder profile, so the memory layout baked into its host is the placeholder's. Write
     # the game's real values here: main.m turns dm/env.txt into environment variables before the host starts, and hle_svc.c
     # reads them. Getting this wrong does not crash immediately -- the game asks for the wrong heap size and aborts in
@@ -562,6 +606,32 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     except Exception as e:
         warn('could not edit Info.plist (%s); the app keeps the shell identity' % e)
     return A
+
+
+def step_launcher(tid, patched, game, A, work):
+    """The settings screen that upstream put in front of the game (Launcher.swift) is drawn from dm/launcher.json, which
+    dm/games/settings.py writes: the rows of dm/games/settings.tsv whose condition holds for this game, with its defaults.
+
+    Upstream's build_ipa.sh does this step; a packer that does not leaves the screen empty, and Launcher.swift then starts the
+    game at once -- so this warns instead of failing, unlike the steps whose output the game itself needs.
+    """
+    s = DM / 'games' / 'settings.py'
+    if not s.is_file(): return                     # upstream before the launcher existed
+    nacp = game / 'control.nacp'
+    if not nacp.is_file():
+        warn('no control.nacp beside the RomFS: no dm/launcher.json, so the game starts without the settings screen')
+        return
+    out = A / 'dm' / 'launcher.json'
+    r = subprocess.run([str(PY), str(s), tid, str(patched), str(nacp), str(out)],
+                       capture_output=True, text=True, env=dict(os.environ, PYTHONUTF8='1'))
+    log = work / 'logs' / 'launcher.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text((r.stdout or '') + (r.stderr or ''), encoding='utf-8', errors='replace')
+    if r.returncode or not out.is_file():
+        msg = ((r.stderr or r.stdout or '').strip().splitlines() or ['no output'])[-1]
+        warn('dm/launcher.json could not be written (%s: see %s), so the game starts without the settings screen' % (msg, log))
+        return
+    say('launcher settings: %s' % (r.stdout or '').strip())
 
 
 def step_pack(A, out_ipa, rows, work):

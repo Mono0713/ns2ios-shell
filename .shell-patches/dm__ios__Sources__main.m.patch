@@ -1,5 +1,4 @@
 diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
-index 16e2367..950ffbc 100644
 --- a/dm/ios/Sources/main.m
 +++ b/dm/ios/Sources/main.m
 @@ -9,16 +9,27 @@
@@ -32,7 +31,7 @@ index 16e2367..950ffbc 100644
      return nil;
  }
  
-@@ -65,6 +76,12 @@ static int boot_env(void) {
+@@ -69,6 +80,12 @@
      if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
      chdir(doc.fileSystemRepresentation);
      g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
@@ -42,10 +41,10 @@ index 16e2367..950ffbc 100644
 +    { const char *mods[12]; int nm = dm_shell_modules(mods, 12);
 +      for (int k = 0; k < nm && g_argc < 16; k++) { g_argv[g_argc++] = strdup(mods[k]); fprintf(stderr, "boot: module '%s' (from the Guest library)\n", mods[k]); } }
 +#endif
-     dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup
+     dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup (and the launcher: the settings it sets are read when the game starts)
      return 1;
  }
-@@ -77,11 +94,19 @@ static void *boot_thread(void *p) {
+@@ -81,11 +98,19 @@
      fprintf(stderr, "boot: dm_main returned %d\n", rc);
      return NULL;
  }

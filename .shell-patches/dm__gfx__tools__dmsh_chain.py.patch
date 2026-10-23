@@ -1,8 +1,7 @@
 diff --git a/dm/gfx/tools/dmsh_chain.py b/dm/gfx/tools/dmsh_chain.py
-index c544eae..619009d 100644
 --- a/dm/gfx/tools/dmsh_chain.py
 +++ b/dm/gfx/tools/dmsh_chain.py
-@@ -33,13 +33,19 @@ def version():
+@@ -33,13 +33,19 @@
      h.update(options().encode())
      return h.hexdigest()[:12]
  
@@ -24,7 +23,7 @@ index c544eae..619009d 100644
      sc = subprocess.run(['which', 'spirv-cross'], capture_output=True, text=True).stdout.strip()
      t['spirv-cross'] = sha16(sc) if sc else 'missing'
      for sdk in ('macosx', 'iphoneos'):
-@@ -53,14 +59,19 @@ def xlate_source_sha():   # same convention as dmsh_xlate --source-sha: the embe
+@@ -53,14 +59,19 @@
  def check_tools():
      want = dict(l.rstrip('\n').split('\t', 1) for l in open(LOCK) if '\t' in l and not l.startswith('#'))
      now = tools_now(); bad = [f'{k}: lock {want.get(k)} / actual {v}' for k, v in now.items() if want.get(k) != v]

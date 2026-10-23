@@ -1,8 +1,7 @@
 diff --git a/dm/host/loader.c b/dm/host/loader.c
-index bb00865..3a8100f 100644
 --- a/dm/host/loader.c
 +++ b/dm/host/loader.c
-@@ -356,7 +356,65 @@ static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned lo
+@@ -363,7 +363,65 @@
      if (kr != KERN_SUCCESS || a != to) die("%s vm_remap %p → %#lx (%#lx bytes) failed: %d", m->name, from, (unsigned long)to, size, kr);
      if ((cur & need) != need) die("%s permissions after vm_remap %#x, missing %#x", m->name, cur, need);
  }
