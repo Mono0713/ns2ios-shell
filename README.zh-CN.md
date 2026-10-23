@@ -143,10 +143,13 @@ shell_build.sh ──► nxn_pack.py
   | 安装方式 | 是否保留 |
   |---|---|
   | AltStore Classic 2.2+、Impactor、Xcode + 个人团队 | 保留 |
+  | LiveContainer | 保留（2026-10-23 实测：iPhone 16 Pro Max 上 `6140 MB`） |
   | SideStore + 免费 Apple ID | 保留，但需要对 App ID 做一次性修正 |
   | Sideloadly | 不保留（等于没加，游戏仍在 3.4 GB 上限下跑） |
 
   判断是否生效：看 `Documents/log.txt` 的启动行 `boot: memory limit N MB`——约 3,375 MB 表示没生效，6–8 GB 表示生效。
+  **任何游戏都能看出来**，不需要拿大作试：这一行说的是进程能拿多少内存，跟游戏要用多少无关。游戏跑起来之后，
+  `[nvn-mtl] memory up to frame N ... headroom to the system memory limit` 那行还会持续报剩余额度。
 - **每个游戏是独立的应用，可以同时装多个。** bundle ID 由 title ID 生成（`org.nxnative.<title ID>`），所以第二个游戏
   装上不会顶掉第一个，存档也各自独立。同一个游戏重打包则是覆盖升级（存档保留）。
   早于这个改动打出来的包仍是壳的 `org.nxnative.shell`，会和别的游戏冲突——重打一次即可，旧的记得手动删掉。

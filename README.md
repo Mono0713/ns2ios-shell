@@ -159,11 +159,14 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
   | How it is installed | Entitlement kept |
   |---|---|
   | AltStore Classic 2.2+, Impactor, Xcode with a personal team | yes |
+  | LiveContainer | yes (measured 2026-10-23: `6140 MB` on an iPhone 16 Pro Max) |
   | SideStore with a free Apple ID | yes, after a one-off fix to the App ID |
   | Sideloadly | no (the game runs under the 3.4 GB cap as before) |
 
   To tell: the boot line in `Documents/log.txt`, `boot: memory limit N MB` — about 3,375 MB means it did not take effect,
-  6–8 GB means it did.
+  6–8 GB means it did. **Any game shows it**; there is no need for a big one, because the line is about what the process may
+  keep, not about what the game asks for. Once the game runs, `[nvn-mtl] memory up to frame N … headroom to the system memory
+  limit` keeps reporting the remainder.
 - **Each game is a separate app, so several install side by side.** The bundle ID comes from the title ID
   (`org.nxnative.<title ID>`), so a second game does not replace the first and their saves are separate. Repacking the same
   game updates it in place, saves intact. Packages built before this change still carried the shell's `org.nxnative.shell`
