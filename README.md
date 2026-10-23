@@ -19,40 +19,60 @@ repository or CI.
 
 ## Quick start (Windows)
 
-**1. Download two files** from the [Releases](../../releases) page:
+**You need four things:**
 
-- `shell-<date>-<commit>-shell.zip` — the shell
-- `nxnative-windows-tools.zip` — `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe` (self-contained, no .NET SDK needed)
+| What | Where from | Where it goes |
+|---|---|---|
+| **The whole repository** | `git clone https://github.com/xinerqu/ns2ios-shell`, or the source zip on the Releases page | anywhere, e.g. `D:\nxn` |
+| **The shell** | `shell-<date>-<commit>.zip` on the Releases page | e.g. `D:\nxn\shell.zip` |
+| **The three executables** | `nxnative-windows-tools.zip` on the Releases page (self-contained, no .NET SDK) | unpack to e.g. `D:\nxn-tools` |
+| **Your game files + `prod.keys`** | your own machine | e.g. `D:\games\hades2\` |
 
-Unpack the tools anywhere, e.g. `D:\nxn-tools`.
+> **Why the whole repository, and not just `nxn_pack.py`?**
+> The script is only the entry point; the work is done by `dm/` in the repository. Each supported game's parameters (module
+> list, memory layout, rewriter tables, shader tables) live in `dm/games/<title ID>/`, and the rewriter and shader tools in
+> `dm/tools/` and `dm/gfx/tools/`. Without `dm/` it says so immediately rather than failing halfway. Laying it out flat —
+> `nxn_pack.py` next to `dm/` — works too; the script accepts both.
 
-**2. Put one game's files in a folder.** The file name must carry the title ID and version:
+**1. Install the packages** (into **the interpreter you will run the packer with** — they are per interpreter):
+
+```bash
+python -m pip install lz4 capstone fonttools backports.zstd pillow
+```
+
+**2. Put one game's files in a folder.** The name does not matter: the game is identified from the package's contents (see
+"File names do not matter" below).
 
 ```
 D:\games\hades2\
-  Hades II [0100A00019DE0000][v0].nsp
+  Hades II.nsp          ← or .xci, any name
+  (optional) update.nsp ← same folder; the newest version present is the one packed
 ```
 
-**3. Run:**
+**3. Run it from the repository folder:**
 
 ```bash
-python scripts/nxn_pack.py shell-<date>-<commit>-shell.zip D:\games\hades2 ^
+cd D:\nxn
+python scripts\nxn_pack.py shell.zip D:\games\hades2 ^
     -k D:\keys\prod.keys --tools D:\nxn-tools
 ```
 
-**4. Sideload the IPA** it writes next to your NSPs (SideStore, Sideloadly, LiveContainer…). The first launch compiles the
-shaders once, with a progress page that estimates how long it will take.
+The IPA is written next to the game files by default (`-o` to choose). The run unpacks the game, rewrites the modules,
+translates the shaders, assembles the app and packs the IPA, reporting each step and how long it took.
+
+**4. Sideload the IPA** (SideStore, Sideloadly, LiveContainer…). The first launch compiles the shaders once, with a progress
+page that estimates how long it will take.
+
+### After the pack
 
 The **temporary files are removed as soon as the IPA is written**: the extraction, the rewritten modules, the split shaders
 and the assembled app tree add up to several times the size of the game (a 4 GB game leaves ~16 GB behind) and none of it is
 worth keeping. Only the few-KB log (`<title ID>_pack\logs\`) stays, because that is what explains a package that misbehaves
 on the phone.
 
-Add `--keep-work` to keep that tree when you repack the same game repeatedly, or clear out an earlier run:
-
-```bash
-python scripts/nxn_pack.py --clean D:\games\hades2
-```
+- `--keep-work` keeps that tree, so repacking the same game skips the unpack and the translation
+- `--clean <game folder>` clears out what an earlier run left
+- a cartridge dump (`.xci`) gets a `<file>.xci.tid` next to it on the first pack, so the next one does not unpack it again
 
 ## Requirements
 
@@ -60,12 +80,23 @@ On the **packing machine**:
 
 | Need | How |
 |---|---|
-| Python 3.9+ | `pip install lz4 capstone fonttools backports.zstd pillow` |
+| The whole repository | `git clone` or the source zip — **`dm/` must be there**, see above |
+| Python 3.9+ | `python -m pip install lz4 capstone fonttools backports.zstd pillow`, into **the interpreter that runs the packer** |
 | Three executables | From `nxnative-windows-tools.zip`, passed with `--tools` |
 | `prod.keys` | Dumped from your own console. It never leaves your machine: it is passed to `nx_extract` as an argument and is not written to any log |
 
 No .NET SDK, no C++ toolchain, no Mac. (Building the tools yourself is possible: `dotnet publish dm/tools/nx_extract -r win-x64
 --self-contained`, same for `dm/gfx/tools/dmsh_xlate`; SPIRV-Cross must be the `vulkan-sdk-1.4.357.0` tag.)
+
+**About Python**: a machine often has more than one, and the one `pip install` writes to must be the one that runs
+`nxn_pack.py`. The reliable form uses the same executable for both:
+
+```
+C:\path\to\python.exe -m pip install lz4 capstone fonttools backports.zstd pillow
+C:\path\to\python.exe scripts\nxn_pack.py ...
+```
+
+The packer checks for all five packages before it starts and prints the commands to run, rather than failing halfway.
 
 ## File names do not matter
 
@@ -73,8 +104,10 @@ The packer identifies the game from the **metadata inside the NSP** — the plai
 files, which carries the title ID, the content type (base game / update / DLC) and the version. So files can be named
 anything at all.
 
-The `[XXXXXXXXXXXXX000]` and `[vN]` in a name are only read when a file carries no such metadata: **XCI cartridges** (a
-cartridge has no metadata XML). If you rename an XCI, keep the title ID in the name.
+The `[XXXXXXXXXXXXX000]` and `[vN]` in a name are only read when a file carries no such metadata. **XCI cartridges** carry
+neither a ticket nor a readable header (an NCA header is encrypted with a key from its own key area), so on the first pack
+the packer unpacks the dump and takes the title ID from the result, recording it in `<file>.xci.tid`; later packs read that
+instead of unpacking again.
 
 Formats: **NSP** (base game, updates, DLC) and **XCI** (base game only). **NSZ is not supported** — unpack it first with
 `nsz -D "file.nsz"`.
@@ -130,12 +163,16 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
 
 ## Repository layout
 
+Only the first two entries have to exist for **packing**; the rest is what they depend on, plus what builds the shell.
+
 ```
+scripts/nxn_pack.py              the packer; it lives in the repository, with dm/ beside scripts/
+dm/                              everything packing needs -- nothing works without it:
+dm/games/<title ID>/             each supported game's parameters (modules, memory layout, rewriter and shader tables)
+dm/tools/                        the rewriter (patch_nso.py), guest_dylib.py, nacp.py
+dm/gfx/tools/                    the shader chain (shader_split, dmsh_build, nometal_run…)
+dm/host/ dm/ios/                 host and iOS app sources (used to build the shell)
 dm/ios/tools/shell_build.sh      builds the shell (CI, needs the macOS 26 SDK)
-scripts/nxn_pack.py              packs the shell + your game files into an IPA (any OS)
-dm/tools/guest_dylib.py          writes Frameworks/Guest.framework from the rewritten modules
-dm/gfx/tools/nometal_run.py      runs the shader chain without Apple's metal compiler
-dm/ios/Sources/dm_shader_prep.m  first-launch shader compilation page
 dm/games/0000000000000000/       neutral profile the shell is compiled against
 .shell-overlay.txt               files this fork adds or changes on top of upstream
 docs/SHELL.md                    the split in more detail

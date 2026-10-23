@@ -447,12 +447,17 @@ jobs:
 
           ## Use it / 用法
 
-          1. Download both and unpack the tools, e.g. to `D:/nxn-tools`. <br> 下载两个文件，把工具解压到例如 `D:/nxn-tools`。
+          1. Take the **whole repository** (`git clone` or the source zip) — the packer needs `dm/` beside `scripts/`; the
+             script alone cannot work. Unpack the tools too, e.g. to `D:/nxn-tools`.
+             <br> 下载**完整仓库**（`git clone` 或源码压缩包）——打包器需要 `scripts/` 旁边的 `dm/`，只拷那个脚本跑不了。
+             另外把工具解压到例如 `D:/nxn-tools`。
           2. Put one game's files in a folder. **File names do not matter** — the game is identified from inside the package,
              so any naming scheme works. NSP and XCI both work. Updates and DLC can go in the same folder; the newest
              version present is the one packed. <br> 把一个游戏的文件放进目录。**文件名不重要**——游戏是从包内容里认出来的，
              随便怎么命名都行。NSP 和 XCI 都支持；更新包和 DLC 可以放进同一个目录，会打包目录里最新的那个版本。
-          3. `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D:/nxn-tools`
+          3. `cd` into the repository, then
+             `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D:/nxn-tools`
+             <br> 进仓库目录，然后执行上面这条命令。
           4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer). The first launch compiles the shaders once.
              <br> 用自签工具装上它产出的 IPA；首次启动会编译一遍着色器。
 

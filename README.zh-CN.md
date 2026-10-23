@@ -17,58 +17,86 @@ macOS 皆可，不需要 Xcode。
 
 ## 快速开始（Windows）
 
-**1. 下载两个文件**（到 [Releases](../../releases) 页面）：
+**需要四样东西：**
 
-- `shell-<日期>-<提交>-shell.zip` —— 壳
-- `nxnative-windows-tools.zip` —— `nx_extract.exe`、`dmsh_xlate.exe`、`spirv-cross.exe`（自包含，不需要 .NET SDK）
+| 要什么 | 从哪来 | 放哪 |
+|---|---|---|
+| **仓库（必须完整）** | `git clone https://github.com/xinerqu/ns2ios-shell`，或 Releases 页面的源码压缩包 | 任意位置，例 `D:\nxn` |
+| **壳** | Releases 页面的 `shell-<日期>-<提交>.zip` | 例 `D:\nxn\shell.zip` |
+| **三个可执行文件** | Releases 页面的 `nxnative-windows-tools.zip`（自包含，不需要 .NET SDK） | 解压到例 `D:\nxn-tools` |
+| **你的游戏文件 + `prod.keys`** | 你自己的机器 | 例 `D:\games\hades2\` |
 
-把工具解压到任意位置，例如 `D:\nxn-tools`。
+> **为什么仓库必须完整，不能只拷 `nxn_pack.py`？**
+> 脚本只是入口，真正的活靠仓库里的 `dm/`：每个游戏的支持参数（模块列表、内存布局、改写表、着色器表）在
+> `dm/games/<title ID>/`，改写器和着色器工具在 `dm/tools/`、`dm/gfx/tools/`。缺了 `dm/` 它会当场说清楚，不会跑一半才崩。
+> 想把它和 `dm/` 平铺在一个目录里也行，脚本两种布局都认。
 
-**2. 把一个游戏的文件放进一个目录。** 文件名必须带 title ID 和版本号：
+**1. 装依赖**（装给**你将要用的那个** Python —— 打包器用哪个解释器，包装进哪个）：
+
+```bash
+python -m pip install lz4 capstone fonttools backports.zstd pillow
+```
+
+**2. 把一个游戏的文件放进一个目录。** 文件名随便，游戏是从**包内容**里认出来的（见下文「文件名无所谓」）：
 
 ```
 D:\games\hades2\
-  Hades II [0100A00019DE0000][v0].nsp
+  Hades II.nsp          ← 或者 .xci，名字随意
+  (可选) 更新包.nsp      ← 同目录，会打包里面最新的版本
 ```
 
-**3. 运行：**
+**3. 在仓库目录里运行：**
 
 ```bash
-python scripts/nxn_pack.py shell-<日期>-<提交>-shell.zip D:\games\hades2 ^
+cd D:\nxn
+python scripts\nxn_pack.py shell.zip D:\games\hades2 ^
     -k D:\keys\prod.keys --tools D:\nxn-tools
 ```
 
-**4. 侧载**它生成在你 NSP 旁边的 IPA（SideStore、Sideloadly、LiveContainer 都行）。**首次启动会编译一遍着色器**，屏幕上  
-有进度页，会告诉你还要多久。
+IPA 默认写在游戏文件旁边（`-o` 可指定）。过程会解开游戏、改写程序、翻译着色器、拼装 app、压成 IPA，进度和耗时都会打印。
 
-打完包**临时文件会自动删掉**：中途解出来的游戏、改写后的模块、拆出的着色器、拼装好的 app 树，加起来是游戏体积的好几倍  
+**4. 侧载**（SideStore、Sideloadly、LiveContainer 都行）。**首次启动会编译一遍着色器**，屏幕上有进度页，会告诉你还要多久。
+
+### 打完包之后
+
+临时文件会**自动删掉**：中途解出来的游戏、改写后的模块、拆出的着色器、拼装好的 app 树，加起来是游戏体积的好几倍
 （4 GB 的游戏会留下十几 GB），留着没用。只保留几 KB 的日志（`<title ID>_pack\logs\`），手机上有异常时看它。
 
-想反复给同一个游戏重打包、省掉解包和翻译的时间，加 `--keep-work` 保留那棵工作树；想单独清掉之前留下的：
-
-```bash
-python scripts/nxn_pack.py --clean D:\games\hades2
-```
+- 反复给同一个游戏重打包、省掉解包和翻译的时间：加 `--keep-work`
+- 单独清掉之前留下的：`python scripts\nxn_pack.py --clean D:\games\hades2`
+- 卡带转储（`.xci`）第一次打包后会生成 `你的文件.xci.tid`，记住它是什么游戏，下次不用再解一遍
 
 ## 环境要求
 
 **打包机器**上需要：
 
-| 需要什么        | 怎么弄                                                        |
-| ----------- | ---------------------------------------------------------- |
-| Python 3.9+ | `pip install lz4 capstone fonttools backports.zstd pillow` |
-| 三个可执行文件     | 来自 `nxnative-windows-tools.zip`，用 `--tools` 指过去            |
-| `prod.keys` | 从你自己的主机导出。**永远不离开你的机器**：它只作为参数传给 `nx_extract`，不会写进任何日志     |
+| 需要什么 | 怎么弄 |
+|---|---|
+| 完整仓库 | `git clone` 或源码压缩包——**必须有 `dm/`**，见上面的说明 |
+| Python 3.9+ | `python -m pip install lz4 capstone fonttools backports.zstd pillow`。装给**运行打包器的那一个**解释器 |
+| 三个可执行文件 | 来自 `nxnative-windows-tools.zip`，用 `--tools` 指过去 |
+| `prod.keys` | 从你自己的主机导出。**永远不离开你的机器**：它只作为参数传给 `nx_extract`，不会写进任何日志 |
 
 不需要 .NET SDK、不需要 C++ 工具链、不需要 Mac。（想自己编工具也行：`dotnet publish dm/tools/nx_extract -r win-x64 --self-contained`，`dm/gfx/tools/dmsh_xlate` 同理；SPIRV-Cross 必须用 `vulkan-sdk-1.4.357.0` 这个 tag。）
+
+**关于 Python**：机器上可能装了不止一个 Python，`pip install` 装到哪个、`nxn_pack.py` 用哪个，必须是同一个。
+最省事的写法是用同一个解释器跑两件事：
+
+```
+C:\path\to\python.exe -m pip install lz4 capstone fonttools backports.zstd pillow
+C:\path\to\python.exe scripts\nxn_pack.py ...
+```
+
+打包器开跑前会自己检查这五个包，缺了会列出该执行的命令，不会跑到一半才失败。
 
 ## 文件名无所谓
 
 打包器从 **NSP 内部的元数据**识别游戏——加密内容旁边的 `cnmt.xml` 是明文的，里面有 title ID、内容类型（本体／更新／DLC）  
 和版本号。所以文件叫什么都行。
 
-名字里的 `[XXXXXXXXXXXXX000]` 和 `[vN]` 只在文件**不含这种元数据**时才读：也就是 **XCI 卡带**（卡带没有元数据 XML）。  
-如果你重命名 XCI，请保留 title ID。
+名字里的 `[XXXXXXXXXXXXX000]` 和 `[vN]` 只在文件**不含这种元数据**时才读。**XCI 卡带**里既没有 ticket，NCA 头也是
+加密的（密钥在它自己的 key area 里），所以打包器第一次会先解包一遍、从解包结果里认出 title ID，并把结果记在
+`<文件>.xci.tid`；之后重打包直接读这个文件，不再解一遍。
 
 支持格式：**NSP**（本体、更新、DLC）和 **XCI**（只能当本体）。**不支持 NSZ**：先用 `nsz -D "文件.nsz"` 解压。
 
@@ -119,12 +147,16 @@ shell_build.sh ──► nxn_pack.py
 
 ## 仓库结构
 
+只有前两项是**打包时必须存在**的，其余是它们依赖的、和构建壳用的部分。
+
 ```
+scripts/nxn_pack.py              打个包的入口；必须在仓库里，旁边要有 dm/
+dm/                              打包时的全部依赖，缺了跑不了：
+dm/games/<title ID>/             每个游戏的支持参数（模块、内存布局、改写表、着色器表）
+dm/tools/                        改写器（patch_nso.py）、guest_dylib.py、nacp.py
+dm/gfx/tools/                    着色器链（shader_split、dmsh_build、nometal_run…）
+dm/host/ dm/ios/                 宿主与 iOS 应用源码（构建壳用）
 dm/ios/tools/shell_build.sh      构建壳（CI 上用，需要 macOS 26 SDK）
-scripts/nxn_pack.py              把壳和你的游戏文件打成 IPA（任意系统）
-dm/tools/guest_dylib.py          把改写后的模块写成 Frameworks/Guest.framework
-dm/gfx/tools/nometal_run.py      在没有苹果 metal 编译器的情况下跑着色器链
-dm/ios/Sources/dm_shader_prep.m  首启编译着色器的进度页
 dm/games/0000000000000000/       壳编译时用的中性 profile
 .shell-overlay.txt               本分支相对上游新增/修改的文件清单
 docs/SHELL.md                    拆分的详细说明
