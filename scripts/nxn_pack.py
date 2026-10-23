@@ -32,6 +32,8 @@ from pathlib import Path
 PY = sys.executable
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
+if not (REPO / 'dm').is_dir() and (HERE / 'dm').is_dir():
+    REPO = HERE      # also works laid out flat, as nxn_pack.py next to the dm/ it drives
 DM = REPO / 'dm'
 GFX = DM / 'gfx' / 'tools'
 IOS = DM / 'ios'
@@ -285,6 +287,27 @@ def one(rows, key, default=None):
 
 # ---------------------------------------------------------------- NSP scanning
 
+def probe_xci(nx, keys, xci, out):
+    """The title ID of a cartridge dump, read by nx_extract.
+
+    An XCI cannot be identified the way an NSP is: a dump carries no ticket (the keys sit in each NCA's own key area), and an
+    NCA header -- where the title ID lives -- is encrypted with a key from prod.keys. nx_extract has both the keys and LibHac,
+    so it extracts into `out` and reports `title <id>`; the extraction is the one the pack needs anyway, so nothing is done
+    twice. Returns the title ID, or None.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([str(nx), str(keys), str(xci), '-', str(out)],
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
+    text = (r.stdout or '') + (r.stderr or '')
+    (out / 'probe.log').write_text(text, encoding='utf-8', errors='replace')
+    m = re.search(r'^title\s+([0-9a-fA-F]{16})', text, re.M)
+    if r.returncode or not m:
+        warn('nx_extract could not read %s (see %s): %s'
+             % (xci.name, out / 'probe.log', (text.strip().splitlines() or ['no output'])[-1]))
+        return None
+    return m.group(1).upper()
+
+
 def nsp_meta(path):
     """Title ID, content type and version, read from the package itself.
 
@@ -366,7 +389,11 @@ def scan_nsps(folder):
             # an XCI, or an NSP without the metadata XML: fall back to the name, and to the title ID's low bits for the kind
             tid, ver = name_tid(p), name_ver(p)
             if not tid:
-                warn('cannot read %s: no metadata inside and no [XXXXXXXXXXXXX000] in the name' % p.name); continue
+                if p.suffix.lower() != '.xci':
+                    warn('cannot read %s: no metadata inside and no [XXXXXXXXXXXXX000] in the name' % p.name)
+                # an .xci saying nothing here is normal (a dump has no ticket and its NCA headers are encrypted): it is
+                # identified by extracting it, which happens below when it is the only file in the folder
+                continue
             low = int(tid, 16) & 0xFFF
             kind = 'base' if low == 0 else ('update' if low == 0x800 else 'dlc')
         base_id = int(tid, 16) - (int(tid, 16) & 0xFFF)   # updates sit at +0x800, DLC above +0x1000
@@ -681,6 +708,10 @@ def main():
         clean_folders(Path(a.clean).resolve()); return
     if not a.shell: die("give the shell zip, or --clean <NSP folder> to remove an earlier run's temporary files")
     if not a.nsp_dir: die("give the folder holding the game's NSP/XCI files")
+    if not (DM / 'games').is_dir():
+        die('this script needs the repository\'s dm/ folder beside it; it is not a file to copy out on its own.\n'
+            '    expected <repo>/scripts/nxn_pack.py with <repo>/dm/ next to scripts/, or nxn_pack.py next to dm/.\n'
+            '    looked for %s -- the game profiles, the rewriter and the shader tools all live there.' % DM)
 
     shell = Path(a.shell).resolve()
     folder = Path(a.nsp_dir).resolve()
@@ -699,6 +730,21 @@ def main():
         say('tools: %s' % tools_dir)
     dotnet = check_env(keys, tools_dir)
     apps = scan_nsps(folder)
+    probed = nx = None
+    if not apps:
+        xcis = sorted(folder.glob('*.xci'))
+        if len(xcis) == 1:
+            # The only thing here is a cartridge dump, which carries nothing that identifies it without the keys: extract it
+            # (work the pack needs anyway) and take the title ID from nx_extract's report.
+            probed = folder / (xcis[0].stem + '.probe')
+            nx = build_nx_extract(dotnet, probed, tools_dir)
+            tid = probe_xci(nx, keys, xcis[0], probed / 'extract')
+            if tid:
+                apps = {tid: {'base': xcis[0], 'updates': {}, 'dlc': [], 'all': [('base', 'v0', xcis[0])]}}
+    if not apps:
+        die('no game could be identified in %s.\n'
+            '    An .nsp is read from the package itself; an .xci is read by extracting it, which needs prod.keys that match '
+            'that cartridge.' % folder)
     if len(apps) != 1:
         die('the folder holds %d different games (%s); keep one game per folder' % (len(apps), ', '.join(sorted(apps))))
     tid = next(iter(apps)); fam = apps[tid]
@@ -716,9 +762,12 @@ def main():
     # Which version to pack: the newest one in the folder, as upstream does ("the script packs the newest version in the
     # folder"), or -p. Only that version is extracted -- the profile's shader tables are a union of several versions, so they
     # already cover any version the profile registers, and a version it does not register is reported rather than refused.
+    #
+    # A cartridge dump is the exception: it carries no version at all, so "the newest in the folder" means nothing there and
+    # the profile decides. The build ID check below still proves the dump really is that version.
     upds = sorted(fam['updates'], key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
-    pkg = a.package or (upds[-1] if upds else 'v0')
-    if pkg != 'v0' and pkg not in fam['updates']:
+    pkg = a.package or (upds[-1] if upds else (one(rows, 'package', 'v0') if probed else 'v0'))
+    if not probed and pkg != 'v0' and pkg not in fam['updates']:
         die('no update for %s in %s (the folder has: %s)'
             % (pkg, folder, ', '.join(upds) if upds else 'only the base game'))
     if pkg not in builds:
@@ -728,21 +777,29 @@ def main():
         warn('%s is registered, but the shader tables were built from %s -- shaders this version adds may be missing'
              % (pkg, ' '.join(need)))
     versions = [pkg]
-    picks = {pkg: (fam['base'], None if pkg == 'v0' else fam['updates'][pkg])}
+    picks = {pkg: (fam['base'], None if probed or pkg == 'v0' else fam['updates'][pkg])}
     say('files: base %s%s' % (fam['base'].name,
-        (', update %s' % fam['updates'][pkg].name) if pkg != 'v0' else ', no update')
+        (', update %s' % fam['updates'][pkg].name) if not probed and pkg != 'v0' else ', no update')
         + (('; ignoring %d DLC' % len(fam['dlc'])) if fam['dlc'] else ''))
 
     work = folder / (tid + '_pack')
     work.mkdir(parents=True, exist_ok=True)
     (work / 'logs').mkdir(exist_ok=True)
+    if probed and (probed / 'extract').is_dir():
+        # the probe extraction is this version's extraction: move it in rather than unpack the same few GB again
+        dst = work / 'extract' / pkg
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try: shutil.move(str(probed / 'extract'), str(dst))
+            except OSError as e: warn('cannot move the probe extraction into %s (%s): it will be extracted again' % (dst, e))
+        shutil.rmtree(probed, ignore_errors=True)
     out_ipa = Path(a.out).resolve() if a.out else folder / one(rows, 'ipa', 'game.ipa')
     say('game: %s (%s)' % (one(rows, 'name', tid), tid))
     say('shell: %s' % shell.name)
     say('versions to pack: %s (packing %s)' % (', '.join(versions), pkg))
     say('work folder: %s' % work)
 
-    nx = build_nx_extract(dotnet, work, tools_dir)
+    nx = nx or build_nx_extract(dotnet, work, tools_dir)
     dirs = step_extract(nx, keys, folder, picks, work, versions)
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
