@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <os/proc.h>          // os_proc_available_memory: the line at boot saying whether the memory entitlement took effect
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
@@ -66,6 +67,13 @@ static int boot_env(void) {
     NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
     if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
     fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
+    // How much memory iOS will let this process keep. With com.apple.developer.kernel.increased-memory-limit in the package's
+    // signature it is several GB (6-8 on a 12 GB phone); without it, about 3,375 MB, which the bigger games fill exactly to the
+    // limit and are then killed for, with no crash log to explain it. One line, so that case can be told apart from a crash.
+    { unsigned long long av = os_proc_available_memory();
+      fprintf(stderr, "boot: memory limit %llu MB (%s)\n", av >> 20,
+              av < (5ull << 30) ? "no increased-memory-limit entitlement: the bigger games will be killed for memory"
+                                : "entitlement in effect"); }
     NSString *romfs = romfs_locate();
     if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);

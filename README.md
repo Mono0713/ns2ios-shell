@@ -150,6 +150,20 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
 ## Notes and caveats
 
 - **The IPA contains your game files.** It is for your own use; do not distribute it.
+- **The memory limit is about 3.4 GB, and the shell asks to raise it.** Without the `increased-memory-limit` entitlement iOS
+  allows a process about 3,375 MB, while the emulated game alone asks for 3,285 MiB, so a big title sits right against the
+  wall — and going over it is a **memory kill with no crash log**, not a crash. The shell is signed ad hoc at build time with
+  that entitlement inside `DmIOS`, because an unsigned binary has no signature for an install tool to read it from; whether it
+  survives the re-sign depends on the tool:
+
+  | How it is installed | Entitlement kept |
+  |---|---|
+  | AltStore Classic 2.2+, Impactor, Xcode with a personal team | yes |
+  | SideStore with a free Apple ID | yes, after a one-off fix to the App ID |
+  | Sideloadly | no (the game runs under the 3.4 GB cap as before) |
+
+  To tell: the boot line in `Documents/log.txt`, `boot: memory limit N MB` — about 3,375 MB means it did not take effect,
+  6–8 GB means it did.
 - **Each game is a separate app, so several install side by side.** The bundle ID comes from the title ID
   (`org.nxnative.<title ID>`), so a second game does not replace the first and their saves are separate. Repacking the same
   game updates it in place, saves intact. Packages built before this change still carried the shell's `org.nxnative.shell`

@@ -385,6 +385,10 @@ jobs:
               'romfs present': any('/romfs/' in n for n in names),
               'env.txt carries the memory layout': 'DM_APP_POOL=' in env,
               'shell declares its gate kinds': 'GATES=' in info,
+              # iOS gives an app without this entitlement about 3,375 MB, which the bigger games fill exactly. The shell is
+              # signed ad hoc with it so that an install tool can carry it over; losing it would only show on the phone, as
+              # a game killed for memory with no crash log.
+              'memory entitlement': b'increased-memory-limit' in z.read('Payload/DmIOS.app/DmIOS'),
               # upstream's settings screen before the game needs this file; without it the launcher starts the game at once
               'settings screen data': 'Payload/DmIOS.app/dm/launcher.json' in names,
           }

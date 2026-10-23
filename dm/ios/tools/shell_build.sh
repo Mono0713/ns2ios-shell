@@ -79,6 +79,19 @@ cp -R "$APP" "$A" || die "copy the app"; A=$O/app
 # What must not be in the shell. The packer writes all of these into the app it produces.
 for p in romfs msl aoc Frameworks; do [ -e "$A/$p" ] && die "the shell must not carry $p/"; done
 rm -rf "$A/_CodeSignature" "$A/embedded.mobileprovision"
+# The memory limit is part of the package, not of the phone: iOS gives an app without com.apple.developer.kernel.increased-
+# memory-limit about 3,375 MB, which the bigger games fill (Tears of the Kingdom was killed entering the overworld with 33 MB
+# of headroom left). An unsigned binary has no signature for an install tool to read entitlements from, so put one there: sign
+# the app ad hoc with the entitlement and ship the signature. Tools that preserve entitlements carry it to the device; the
+# others fall back to today's behaviour, and the log line at boot says which one happened.
+ENT=$DM/ios/DmIOS.entitlements
+[ -f "$ENT" ] || die "no $ENT"
+codesign --force --sign - --timestamp=none --entitlements "$ENT" "$A" > "$O/sign.log" 2>&1 \
+  || { cat "$O/sign.log"; die "ad-hoc sign with $ENT (codesign)"; }
+codesign -d --entitlements :- "$A" 2>/dev/null | plutil -p - > "$O/entitlements.txt" 2>/dev/null || true
+grep -q 'increased-memory-limit' "$O/entitlements.txt" \
+  || { cat "$O/entitlements.txt" 2>/dev/null; die "the signed app does not carry increased-memory-limit"; }
+t "entitlement: $(tr -d '\n' < "$O/entitlements.txt" | sed 's/  */ /g')"
 n=$(otool -l "$A/DmIOS" | grep -c -E 'sectname __dm|segname __DM'); [ "$n" = 0 ] || die "the shell executable still has $n module image sections"
 # dm/font is ours (the shared-font stand-ins: Arial Unicode alone is ~23 MB), so it is exempt from the size check; anything else big
 # would be game content that slipped in (a shader library, the RomFS).
@@ -97,7 +110,7 @@ GUEST=0; grep -q 'dm_shell_modules' ../host/loader.c && GUEST=1
 ENV=0; grep -q 'env.txt' Sources/main.m && ENV=1
 [ "$GUEST" = 1 ] || die "host/loader.c has no dm_shell_modules: this tree is not the shell route"
 [ "$ENV" = 1 ] || die "Sources/main.m does not read dm/env.txt: the packer's memory layout would be ignored"
-printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\n' \
+printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\n' \
   "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" \
   > "$A/dm/shell_info.txt"
 t "shell understands gates: $GATES"

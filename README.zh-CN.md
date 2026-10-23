@@ -135,6 +135,18 @@ shell_build.sh ──► nxn_pack.py
 ## 注意事项
 
 - **IPA 里含你的游戏文件。** 仅供自己使用，不要分发。
+- **内存上限大约 3.4 GB，壳里已经请求了提高它的权限。** 没有 `increased-memory-limit` 这个 entitlement 时，iOS 只给
+  应用约 3,375 MB；被模拟的游戏自己就要 3,285 MiB，所以大作很容易贴到墙上——**超了是被系统杀掉，不是崩溃，日志里看不到
+  crash**。壳在构建时用 ad-hoc 占位签名把这个 entitlement 写进了 `DmIOS` 的签名里（没有签名的话，侧载工具无处可读，
+  请求会丢失），重签时是否保留取决于工具：
+
+  | 安装方式 | 是否保留 |
+  |---|---|
+  | AltStore Classic 2.2+、Impactor、Xcode + 个人团队 | 保留 |
+  | SideStore + 免费 Apple ID | 保留，但需要对 App ID 做一次性修正 |
+  | Sideloadly | 不保留（等于没加，游戏仍在 3.4 GB 上限下跑） |
+
+  判断是否生效：看 `Documents/log.txt` 的启动行 `boot: memory limit N MB`——约 3,375 MB 表示没生效，6–8 GB 表示生效。
 - **每个游戏是独立的应用，可以同时装多个。** bundle ID 由 title ID 生成（`org.nxnative.<title ID>`），所以第二个游戏
   装上不会顶掉第一个，存档也各自独立。同一个游戏重打包则是覆盖升级（存档保留）。
   早于这个改动打出来的包仍是壳的 `org.nxnative.shell`，会和别的游戏冲突——重打一次即可，旧的记得手动删掉。

@@ -127,6 +127,12 @@ def check_shell(stamp):
     if missing:
         warn('this shell predates %s in dm/shell_info.txt, so it cannot be checked against this packer. If the app stops '
              'on the phone with "unknown gate kind ...", this is why: use the shell from the same release.' % ', '.join(missing))
+    if stamp.get('MEM') != '1':
+        # Not fatal: every game profile fits in 3,285 MiB, which an unentitled app is allowed. It shows up when a game needs
+        # more than that, and then it is a memory kill with no crash log rather than a crash.
+        warn('this shell carries no increased-memory-limit entitlement, so iOS caps the app at about 3,375 MB (the boot line '
+             'in Documents/log.txt says which). The bigger games can be killed for memory on it: use the shell from the '
+             'current release.')
 
 
 def check_gates(stamp, patched, mods):
