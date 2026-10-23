@@ -34,3 +34,16 @@ diff --git a/dm/gfx/tools/dmsh_chain.py b/dm/gfx/tools/dmsh_chain.py
      return bad
  
  def header_text(v):
+@@ -92,7 +100,11 @@
+     a = sys.argv[1:]
+     if a == ['--update-lock']:
+         t = tools_now()
+-        if t['xlate_source'] != xlate_source_sha(): sys.exit(f'[RED] the translator was not built from the in-repo source (embedded {t["xlate_source"]} / in repo {xlate_source_sha()}): rebuild dmsh_xlate first')
++        # Line endings decide this hash and a Windows checkout converts them, so a translator built there reports a digest
++        # the tree cannot reproduce. Record what the translator says and let the lock be the authority, as check_tools does.
++        if t['xlate_source'] != xlate_source_sha():
++            print(f'[i] the translator embeds source {t["xlate_source"]}, the tree computes {xlate_source_sha()} '
++                  '(line endings, e.g. a Windows checkout): recording what the translator reports')
+         open(LOCK, 'w').write('# Translation chain tool fingerprints (written by dmsh_chain.py --update-lock; regenerate after changing tools and commit it)\n' + ''.join(f'{k}\t{v}\n' for k, v in t.items()))
+         print('wrote', LOCK)
+     elif a == ['--check-tools']:

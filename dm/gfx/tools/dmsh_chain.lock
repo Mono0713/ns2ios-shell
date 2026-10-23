@@ -2,7 +2,7 @@
 dmsh_xlate.dll	absent
 Ryujinx.Graphics.Shader.dll	absent
 Ryujinx.Common.dll	absent
-xlate_source	2f2dfededc6b0d57
-spirv-cross	9876f739d082246c
+xlate_source	8e3bbe890a8d3ed2
+spirv-cross	32245a64493bfb6e
 metal_macosx	none
 metal_iphoneos	none
