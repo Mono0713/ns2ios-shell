@@ -34,6 +34,8 @@ repository or CI.
 > `dm/tools/` and `dm/gfx/tools/`. Without `dm/` it says so immediately rather than failing halfway. Laying it out flat —
 > `nxn_pack.py` next to `dm/` — works too; the script accepts both.
 
+**Which games work**: see [docs/SUPPORTED.md](docs/SUPPORTED.md) — every one with its title ID and the version it was verified on, so you can match the hex in your file name against it.
+
 **1. Install the packages** (into **the interpreter you will run the packer with** — they are per interpreter):
 
 ```bash

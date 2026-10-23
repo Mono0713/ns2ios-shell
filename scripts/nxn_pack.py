@@ -538,6 +538,25 @@ def load_rows(d):
 
 
 
+def check_free_space(folder, factor=3.5):
+    """Refuse to start when the disk cannot hold the peak.
+
+    Packing keeps three copies of the game on disk at once -- the extraction, the assembled app tree and the IPA -- which
+    measured 9.0 GiB for a 2.96 GiB cartridge dump, about 3x. Starting without that room fails halfway through the
+    extraction, which leaves a partial tree of the same size to clean up, so say it up front instead.
+    """
+    src = sum(p.stat().st_size for p in folder.iterdir()
+              if p.is_file() and p.suffix.lower() in ('.nsp', '.xci', '.nsz'))
+    if not src: return                       # nothing recognised yet: scan_nsps says so with a better message
+    need, free = int(src * factor), shutil.disk_usage(folder).free
+    if free >= need:
+        say('disk: %.1f GiB free, about %.1f GiB needed' % (free / 2**30, need / 2**30)); return
+    die('not enough space on the disk holding %s: %.1f GiB free, about %.1f GiB needed.\n'
+        '    %.1f GiB of game files, and packing holds three copies at once (the extraction, the assembled app and the '
+        'IPA).\n    Free some space, or move the game folder to another disk.'
+        % (folder, free / 2**30, need / 2**30, src / 2**30))
+
+
 def step_rewrite(exe_dir, mods, out, work, force=False):
     # patch_nso.py is pure Python (capstone + lz4): its stubs are hand-assembled machine code, not built at run time,
     # so no C compiler is needed here even though its comments mention clang.
@@ -795,6 +814,7 @@ def main():
     folder = Path(a.nsp_dir).resolve()
     if not shell.is_file(): die('no shell file: %s' % shell)
     if not folder.is_dir(): die('no such folder: %s' % folder)
+    check_free_space(folder)
     if not a.keys: die('give prod.keys with -k')
     keys = Path(a.keys).resolve()
     stamp = shell_stamp(shell)

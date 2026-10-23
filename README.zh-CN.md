@@ -31,6 +31,8 @@ macOS 皆可，不需要 Xcode。
 > `dm/games/<title ID>/`，改写器和着色器工具在 `dm/tools/`、`dm/gfx/tools/`。缺了 `dm/` 它会当场说清楚，不会跑一半才崩。
 > 想把它和 `dm/` 平铺在一个目录里也行，脚本两种布局都认。
 
+**支持哪些游戏**：见 [docs/SUPPORTED.md](docs/SUPPORTED.md)——每一款都列出 title ID 和已验证版本，拿你文件名里的那一串十六进制对上即可。
+
 **1. 装依赖**（装给**你将要用的那个** Python —— 打包器用哪个解释器，包装进哪个）：
 
 ```bash

@@ -259,6 +259,23 @@ jobs:
           cp "$DM_ROOT/build/shell/nxnative-shell-build-input.zip" "$GITHUB_WORKSPACE/dist/${V}.zip"   # V already begins with shell-
           cp "$DM_ROOT/build/shell/shell_files.tsv" "$GITHUB_WORKSPACE/dist/${V}-contents.tsv"
 
+      - name: Generate the supported-games list
+        run: |
+          set -euo pipefail
+          # The release copy answers "is my game supported by this release": generated from the tree being built, which is
+          # upstream's latest plus this fork's diff. The packer fetches a profile it does not carry from upstream, so
+          # upstream's folder is the honest source, and the file rides into the release with dist/*.tsv.
+          python3 "$GITHUB_WORKSPACE/fork/dm/tools/supported_list.py" \
+              --games "$TREE/dm/games" --md "$RUNNER_TEMP/SUPPORTED.md" \
+              --tsv "$GITHUB_WORKSPACE/dist/${V}-supported.tsv"
+          # The page in the repository is generated from the profiles this repository carries, so it has to agree with
+          # them. A stale page lies, but it is only a page -- never fail a release over it.
+          if ! python3 "$GITHUB_WORKSPACE/fork/dm/tools/supported_list.py" \
+                 --games "$GITHUB_WORKSPACE/fork/dm/games" \
+                 --md "$GITHUB_WORKSPACE/fork/docs/SUPPORTED.md" --check; then
+            echo "::warning::docs/SUPPORTED.md is out of date with this repository's dm/games: run 'python3 dm/tools/supported_list.py' and commit it. (The release copy was regenerated and is correct.)"
+          fi
+
       - name: Summarise
         if: always()
         run: |
