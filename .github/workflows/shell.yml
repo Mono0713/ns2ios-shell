@@ -262,19 +262,20 @@ jobs:
       - name: Generate the supported-games list
         run: |
           set -euo pipefail
-          # The release copy answers "is my game supported by this release": generated from the tree being built, which is
-          # upstream's latest plus this fork's diff. The packer fetches a profile it does not carry from upstream, so
-          # upstream's folder is the honest source, and the file rides into the release with dist/*.tsv.
+          # Generated from the profiles this repository carries, which is what the packer in it is built for: a profile
+          # that arrived upstream after this snapshot may need rewriter patches this fork's snapshot does not have
+          # (upstream moved per-game patches into the profile's patches.py), so listing it would promise more than it can
+          # deliver. Those games are best effort, and the page says so.
           python3 "$GITHUB_WORKSPACE/fork/dm/tools/supported_list.py" \
-              --games "$TREE/dm/games" --md "$RUNNER_TEMP/SUPPORTED.md" \
+              --games "$GITHUB_WORKSPACE/fork/dm/games" --md "$RUNNER_TEMP/SUPPORTED.md" \
               --tsv "$GITHUB_WORKSPACE/dist/${V}-supported.tsv"
           # The page in the repository is generated from the same tree, so it can be compared against it: a page that
           # lags behind upstream is a page that tells someone their game is unsupported when it is not. Still only a
           # warning -- a page is not a release, and upstream adding a game should not fail a build.
           if ! python3 "$GITHUB_WORKSPACE/fork/dm/tools/supported_list.py" \
-                 --games "$TREE/dm/games" \
+                 --games "$GITHUB_WORKSPACE/fork/dm/games" \
                  --md "$GITHUB_WORKSPACE/fork/docs/SUPPORTED.md" --check; then
-            echo "::warning::docs/SUPPORTED.md is out of date with the tree this release is built from: regenerate it and commit the page. (The release asset above is already correct.)"
+            echo "::warning::docs/SUPPORTED.md is out of date with dm/games: regenerate it and commit the page. (The release asset above is already correct.)"
           fi
 
       - name: Summarise
