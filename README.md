@@ -209,6 +209,13 @@ between the two projects. They are two separate projects by two different author
 The shell route here follows d2r-mobile's `shell_build.sh`; `guest_dylib.py`, `nometal_run.py`, `dm_shader_prep.m` and
 `shell_build.sh` are ported from it.
 
+**The memory limit** is credited to **[LNPANDY/nxnative-romfs-archive](https://github.com/LNPANDY/nxnative-romfs-archive)**
+(MIT): `com.apple.developer.kernel.increased-memory-limit` has to be inside a placeholder ad-hoc signature, because an
+unsigned binary has no signature for an install tool to read it from — declaring it in the project alone does nothing. The
+measurements behind this (about 3,375 MB without it, Tears of the Kingdom killed at 3,342 MB resident) and which install
+tools keep the entitlement are theirs as well. The build-time signing here (`dm/ios/DmIOS.entitlements` and the `codesign`
+step in `shell_build.sh`) is written for this fork; no code was copied.
+
 `nx_extract` uses **[LibHac](https://github.com/Thealexbarney/LibHac)**; the shader translator embeds Ryujinx's shader library;
 shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**.
 

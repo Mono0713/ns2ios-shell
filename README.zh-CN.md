@@ -189,6 +189,12 @@ NVN-on-Metal 层和 iOS app 外壳——两个项目之间的修复是**双向**
 本分支的「壳」路线沿用 d2r-mobile 的 `shell_build.sh` 做法；`guest_dylib.py`、`nometal_run.py`、`dm_shader_prep.m`、  
 `shell_build.sh` 是从那里移植的。
 
+**内存上限**这一块来自 **LNPANDY** 的 **[nxnative-romfs-archive](https://github.com/LNPANDY/nxnative-romfs-archive)**（MIT）：
+`com.apple.developer.kernel.increased-memory-limit` 要嵌进「占位」的 ad-hoc 签名里——未签名的二进制没有签名可供侧载工具
+读取，光在工程里声明是不会生效的；无该权限时 iOS 只给约 3,375 MB、《王国之泪》在常驻 3,342 MB 时被杀、以及各家侧载工具
+是否保留这个权限，也都是他实测并写下来的。壳的构建时签名（`dm/ios/DmIOS.entitlements` + `shell_build.sh`）是按这个思路
+自己实现的，代码没有拷贝。
+
 `nx_extract` 使用 **[LibHac](https://github.com/Thealexbarney/LibHac)**；着色器翻译器内嵌了 Ryujinx 的着色器库；着色器由  
 **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** 翻译。
 
