@@ -564,6 +564,32 @@ def check_free_space(folder, factor=3.5):
         % (folder, free / 2**30, need / 2**30, src / 2**30))
 
 
+def fill_mem_used(patched, mods, gdir, rows):
+    """The used memory GetInfo reports beside the heap: 64 MB unless the rewritten modules need more (dm/games/README.md).
+
+    A profile that was brought up on one build can carry less than a later build's modules need, and a derived profile
+    inherits exactly that. The game then sizes its heap as total - used, asks for more than the pool holds, and the SDK
+    aborts during nninitStartup -- which is what Absolum 1.0.4 did: 138 MB of modules against a 64 MB default. Returns the
+    value written, or None when the profile already has enough.
+    """
+    if one(rows, 'sys_resource'): return None                # with a system resource the heap is sized by the alias split
+    total = sum((patched / m).stat().st_size for m in mods if (patched / m).is_file())
+    have = one(rows, 'mem_used')
+    if have and int(have, 0) >= total: return None
+    if total <= 0x4000000 and not have: return None          # the default covers it
+    value = '0x%X' % ((total + 0xFFFFFF) & ~0xFFFFFF)        # a 16 MB granule above the measured size
+    lines = (gdir / 'game.tsv').read_text(encoding='utf-8').splitlines()
+    out, done = [], False
+    for line in lines:
+        if line.split('\t', 1)[0] == 'mem_used':
+            out.append('mem_used\t' + value); done = True
+        else:
+            out.append(line)
+    if not done: out.append('mem_used\t' + value)
+    (gdir / 'game.tsv').write_text('\n'.join(out) + '\n', encoding='utf-8')
+    return value, total
+
+
 def step_rewrite(exe_dir, mods, out, work, force=False):
     # patch_nso.py is pure Python (capstone + lz4): its stubs are hand-assembled machine code, not built at run time,
     # so no C compiler is needed here even though its comments mention clang.
@@ -945,6 +971,15 @@ def main():
 
     patched = work / 'build' / 'patched'
     step_rewrite(game / 'ExeFS', mods, patched, work, a.force)
+    # After the rewrite, not before: only the rewritten modules' bytes reach GetInfo's UsedMemorySize.
+    # Only for a derived profile: a game the profile was brought up on has its mem_used settled by the profile author,
+    # and second-guessing it would resize the heap of titles that already work.
+    filled = fill_mem_used(patched, mods, gdir, rows) if derived_dir is not None else None
+    if filled:
+        value, total = filled
+        rows = load_rows(gdir)
+        say('mem_used %s: the rewritten modules are %.0f MB, more than the default 64 MB the heap is sized against'
+            % (value, total / 2**20))
     if a.stop_after == 'rewrite': return say('stopped after rewrite')
     check_gates(stamp, patched, mods)
 
