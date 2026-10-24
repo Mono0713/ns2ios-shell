@@ -43,5 +43,7 @@ public class AlignedReadStorage : IStorage
 
     public void Write(long offset, ReadOnlySpan<byte> source) => throw new NotSupportedException();
 
-    public void Flush() { }
+    public void SetSize(long size) => _base.SetSize(size);
+
+    public void Flush() => _base.Flush();
 }
