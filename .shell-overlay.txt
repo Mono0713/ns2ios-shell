@@ -38,6 +38,7 @@
 # --- modified (patched onto upstream) ---
 
 ~ dm/host/loader.c              # module images from Frameworks/Guest.framework instead of the executable (+ dm_shell_modules)
+~ dm/host/main.c                # nninitStartup from the SDK module when the profile says so (DM_INIT_STARTUP)
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL)
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name
 ~ dm/gfx/gl/hle_gl.m            # a shader library the packing computer could not compile is compiled on the device instead

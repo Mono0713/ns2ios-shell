@@ -104,6 +104,12 @@ void *guest_sym(const char *name) {
     pthread_rwlock_rdlock(&g_modules_mu); void *p = loaded_sym(name); pthread_rwlock_unlock(&g_modules_mu);
     return p;
 }
+void *guest_sym_in(const char *modname, const char *name) {
+    pthread_rwlock_rdlock(&g_modules_mu); void *p = NULL;
+    for (int i = 0; i < g_nloaded && !p; i++) if (!strcmp(g_loaded[i]->name, modname)) p = module_sym(g_loaded[i], name);
+    pthread_rwlock_unlock(&g_modules_mu);
+    return p;
+}
 // For modules with the patch area before the base (patch_off < 0) addresses in the patch area count too, as for modules whose patch area follows the image (crash reports, the GC pause's "in guest code" test)
 module_t *module_of(const void *p) {
     for (int i = 0; i < g_nmod; i++) {
