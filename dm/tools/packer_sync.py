@@ -15,7 +15,10 @@ import os
 import shutil
 import sys
 
-TOPS = ('dm/tools', 'dm/gfx/tools', 'dm/games')
+# Every folder the packer or the host build reads and this fork does not patch: dm/gfx covers the graphics layer the
+# Mac host compiles (dm/gfx, dm/gfx/nvn, dm/gfx/tex, dm/gfx/vk, dm/gfx/gl), which drifted unnoticed until a build
+# failed on a header upstream had added.
+TOPS = ('dm/tools', 'dm/gfx', 'dm/games', 'dm/host')
 ALWAYS_SKIP = {'dm/gfx/tools/dmsh_xlate_bin', 'dm/gfx/tools/dmsh_chain.lock'}
 SKIP_NAMES = {'c1_full.tsv', 'cb_extent.tsv', 'dmsh_chain.h'}   # made per profile at build time, not sources
 
