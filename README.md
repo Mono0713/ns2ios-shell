@@ -62,7 +62,8 @@ python scripts\nxn_pack.py shell.zip D:\games\hades2 ^
 The IPA is written next to the game files by default (`-o` to choose). The run unpacks the game, rewrites the modules,
 translates the shaders, assembles the app and packs the IPA, reporting each step and how long it took.
 
-**4. Sideload the IPA** (SideStore, Sideloadly, LiveContainer…). The first launch compiles the shaders once, with a progress
+**4. Sideload the IPA** (SideStore, [Sideloadly](#notes-and-caveats) — which drops an entitlement, see the notes — or
+LiveContainer). The first launch compiles the shaders once, with a progress
 page that estimates how long it will take.
 
 ### After the pack
@@ -153,18 +154,19 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
 
 The packer works from the game's own files, and two kinds of game keep their shaders somewhere else.
 
-**A LÖVE game needs no capture.** LÖVE carries its shader wrapper as plain Lua inside the binary, so
-`dm/gfx/tools/gl_prebuilt.py` runs that wrapper instead of the game: feed it the `resources/shaders/*.fs` files and it
-produces the exact GLSL the game would compile at run time. Balatro's 19 `.fs` files become 35 shaders, and all 35 hashes
-match the ones the game computes. `nxn_pack.py` does this by itself — nothing to install, nothing to run first.
+**A LÖVE game just packs and plays.** LÖVE carries its shader wrapper as plain Lua inside the binary, so
+`dm/gfx/tools/gl_prebuilt.py` runs that wrapper instead of the game: handed the `resources/shaders/*.fs` files it produces
+the exact GLSL the game would compile at run time — the hashes match, because it is the same code doing the same work.
+`nxn_pack.py` does this by itself: nothing to install, nothing to run first. (Balatro's 19 `.fs` files come out as 35
+shaders; that is the mechanism, not a step you perform.)
 
 **Two games need one capture: Super Mario Galaxy 1 and 2.** Their shaders are not programs in a file; they are what a
 GameCube/Wii GX pipeline configuration *becomes*, computed inside Hagi (a C++ shader compiler compiled to machine code) from
 `pipelineDB.pip`. There is nothing readable to run on a PC, and rewriting that compiler is a different project. Collecting
 them takes about a minute per game.
 
-Why, and the three steps: **[docs/CAPTURE.md](docs/CAPTURE.md)** ([中文](docs/CAPTURE.zh-CN.md)). Everything else on the
-supported list — all 47 NVN games, Hades and its 74 SPIR-V files, Balatro — packs into something playable in one run.
+Why, and the three steps: **[docs/CAPTURE.md](docs/CAPTURE.md)** ([中文](docs/CAPTURE.zh-CN.md)). Every other game on the
+supported list packs and plays from its own files.
 
 ## Notes and caveats
 

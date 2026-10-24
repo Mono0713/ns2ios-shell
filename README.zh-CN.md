@@ -57,7 +57,8 @@ python scripts\nxn_pack.py shell.zip D:\games\hades2 ^
 
 IPA 默认写在游戏文件旁边（`-o` 可指定）。过程会解开游戏、改写程序、翻译着色器、拼装 app、压成 IPA，进度和耗时都会打印。
 
-**4. 侧载**（SideStore、Sideloadly、LiveContainer 都行）。**首次启动会编译一遍着色器**，屏幕上有进度页，会告诉你还要多久。
+**4. 侧载**（SideStore、[Sideloadly](#注意事项)（会丢一个权限，见下面的注意事项）、LiveContainer 都行）。
+**首次启动会编译一遍着色器**，屏幕上有进度页，会告诉你还要多久。
 
 ### 打完包之后
 
@@ -139,10 +140,12 @@ shell_build.sh ──► nxn_pack.py
 OpenGL 游戏的文件里没有 GLSL：它们是跑起来之后一个个拼出来的（小丑牌的 LÖVE 在 Lua 里拼），`shader_split.py`
 没有东西可拆。
 
-**LÖVE 游戏不用抓取，打一次就能玩。** `dm/gfx/tools/gl_prebuilt.py` 直接跑**游戏自己带的**
+**LÖVE 游戏打一次就是成品。** `dm/gfx/tools/gl_prebuilt.py` 直接跑**游戏自己带的**
 `wrap_GraphicsShader.lua`——LÖVE 把这份 Lua 以文本形式编进 `main`——把它对 `resources/shaders/*.fs` 的拼接原样
-跑一遍，得到的就是游戏运行时生成的那份 GLSL，**逐字节相同**，所以哈希也对得上。小丑牌 19 个 `.fs` → 35 个着色器
-（15 顶点 + 20 片元，含 LÖVE 自己的 4 个内置），与手机上抓取的 35 个 key 完全一致。
+跑一遍，得到的就是游戏运行时生成的那份 GLSL，**逐字节相同**，所以哈希也对得上——同一份代码做同一件事。
+
+这件事 `nxn_pack.py` 自己做，不用装东西、不用先跑一遍游戏。小丑牌 19 个 `.fs` 出来 35 个着色器
+（15 顶点 + 20 片元，含 LÖVE 自己的 4 个内置）——那是**机制**，不是你要做的步骤。
 
 ```bash
 python scripts/nxn_pack.py <shell.zip> <小丑牌文件夹> -k prod.keys --tools <工具目录>

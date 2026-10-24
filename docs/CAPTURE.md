@@ -14,7 +14,7 @@ A shader has to exist as a file or as something we can rebuild before the game e
 | Where the shaders live | Example | What the packer does |
 |---|---|---|
 | In the game files, already compiled | NVN games (47 of the supported list), Hades (74 SPIR-V files in its RomFS) | reads and translates them |
-| The engine carries its own generator as readable code | Balatro's LÖVE (`resources/shaders/*.fs` + `wrap_GraphicsShader.lua`) | runs that generator, which produces the exact shaders the game would compile |
+| The engine carries its own generator as readable code | a LÖVE game | runs that generator, which produces the exact shaders the game would compile — nothing for you to do |
 | The engine generates them from hardware state, in compiled code | **Galaxy 1 and 2** (Hagi turns GameCube/Wii GX pipeline state into SPIR-V) | **nothing to read — the shaders only exist while the game runs** |
 
 Galaxy's shaders are not programs in a file. They are what a GX pipeline configuration *becomes*, computed inside Hagi (a C++ shader compiler, compiled to machine code) from `pipelineDB.pip`. To produce them on a PC we would have to rewrite that compiler — a GX state → SPIR-V translator — which is a different project, not a missing step. Collecting them once takes a minute.
