@@ -926,6 +926,8 @@ def main():
             '    expected <repo>/scripts/nxn_pack.py with <repo>/dm/ next to scripts/, or nxn_pack.py next to dm/.\n'
             '    looked for %s -- the game profiles, the rewriter and the shader tools all live there.' % DM)
 
+    if a.capture_gl and a.shell and not a.nsp_dir:      # capture mode takes only the game folder
+        a.shell, a.nsp_dir = '', a.shell
     if not a.capture_gl and not a.shell: die('give the shell file (unzipped or .zip), or --capture-gl to only capture shaders')
     shell = Path(a.shell).resolve() if a.shell else Path('.')
     folder = Path(a.nsp_dir).resolve()
