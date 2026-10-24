@@ -33,7 +33,13 @@ jobs:
           python3 --version
 
       - name: Install the packer's packages
-        run: python3 -m pip install --quiet lz4 capstone fonttools pillow backports.zstd
+        # The runner's Homebrew Python refuses a plain pip install (PEP 668), and a venv keeps its packages off the system.
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --quiet --upgrade pip
+          .venv/bin/python -m pip install --quiet lz4 capstone fonttools pillow backports.zstd
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Fetch the game and the keys
         env:
