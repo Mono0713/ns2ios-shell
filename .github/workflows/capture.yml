@@ -32,14 +32,15 @@ jobs:
           dotnet --version
           python3 --version
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'   # backports.zstd (the RomFS zstd frames) has no build for the runner's default 3.14
+
       - name: Install the packer's packages
-        # The runner's Homebrew Python refuses a plain pip install (PEP 668), and a venv keeps its packages off the system.
         run: |
           set -euo pipefail
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --quiet --upgrade pip
-          .venv/bin/python -m pip install --quiet lz4 capstone fonttools pillow backports.zstd
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet lz4 capstone fonttools pillow backports.zstd
 
       - name: Fetch the game and the keys
         env:
