@@ -39,6 +39,7 @@
 ~ dm/host/loader.c              # module images from Frameworks/Guest.framework instead of the executable (+ dm_shell_modules)
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL)
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name
+~ dm/gfx/gl/hle_gl.m            # a shader library the packing computer could not compile is compiled on the device instead
 ~ dm/gfx/tools/shader_split.py  # posix separators in the recorded RomFS paths (Windows)
 ~ dm/games/game.py              # DM_GAMES_DIR split with os.pathsep: ':' cannot hold a Windows path
 ~ dm/tools/nx_extract/Program.cs      # wraps the stacked storage in AlignedReadStorage

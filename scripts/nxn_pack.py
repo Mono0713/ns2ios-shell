@@ -26,7 +26,7 @@ dmsh_xlate, spirv-cross) on PATH or in --tools. Every step says what is missing 
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, time, zipfile
+import argparse, concurrent.futures as cf, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile
 from pathlib import Path
 
 PY = sys.executable
@@ -672,6 +672,70 @@ def capture_gl(game, gdir, patched, work, tid):
     return out
 
 
+def find_tool(name, tools_dir):
+    """A helper executable: --tools first, then the release's own folder, then PATH."""
+    for d in ([tools_dir] if tools_dir else []) + [GFX]:
+        for n in (name, name + '.exe'):
+            if (Path(d) / n).is_file(): return Path(d) / n
+    w = shutil.which(name)
+    return Path(w) if w else None
+
+
+def step_gl_shaders(cap, out, gdir, tid, tools_dir):
+    """A GL capture (the phone's DM_GL_CAPTURE folder) → the layer's shader table and one Metal source per shader.
+
+    dm/gfx/tools/gl_shaders.py translates GLSL → SPIR-V → MSL with glslang and spirv-cross and then calls `xcrun metal`,
+    which only a Mac has; the translation is driven from here and stops before that step. The layer compiles each source
+    on the phone instead: at first launch for all of them (dm/ios/Sources/dm_shader_prep.m, which leaves them in the
+    system's shader cache), and on demand for any it missed. Carrying sources rather than a library is what the NVN route
+    already does when the packing computer has no Apple compiler (nometal_run.py).
+    """
+    want, have = capture_wanted(gdir), capture_have(cap)
+    if not have: die('no shaders in %s: it needs <key>.vert / <key>.frag, which a capture run writes' % cap)
+    if want:
+        miss = want - have
+        if miss: warn('%d of the %d shaders the profile lists are not in the capture (%s%s).\n'
+                      '    They are translated from nothing, so the game will report those as missing -- only the shaders '
+                      'of the scenes the capture run reached are in the package.'
+                      % (len(miss), len(want), ', '.join(sorted(miss)[:6]), ', ...' if len(miss) > 6 else ''))
+        else: say('capture: all %d shaders the profile lists are here' % len(want))
+    for n in ('glslangValidator', 'spirv-cross'):
+        p = find_tool(n, tools_dir)
+        if not p: die('no %s: the shaders are translated with it, so pass --tools <folder> holding the release\'s '
+                      'executables, or put it on PATH' % n)
+        os.environ['PATH'] = str(p.parent) + os.pathsep + os.environ.get('PATH', '')
+    sys.path.insert(0, str(GFX))
+    import gl_shaders as G                       # dm/gfx/tools/gl_shaders.py: the same translation the Mac route uses
+    items, seen = [], set()
+    for s, st, where in G.sources([str(cap)]):
+        if (s, st) in seen: continue
+        seen.add((s, st)); items.append((s, st, where))
+    with tempfile.TemporaryDirectory() as tmp:
+        with cf.ThreadPoolExecutor(os.cpu_count()) as ex:
+            rows = [r for rs in ex.map(lambda it: G.one(it, tmp), items) for r in rs]
+        good, failed = {}, []
+        for key, stage, f, msl, where in rows:
+            if not stage: failed.append((key, where, f)); continue
+            if (key, stage) not in good: good[(key, stage)] = (stage, f, msl, where)
+        for key, where, errs in failed:
+            if not any(k == key for k, _ in good): warn('%s (%s) does not translate: %s' % (where, key, ' / '.join(errs)))
+        if not good: die('none of the %d shaders in %s translates' % (len(items), cap))
+        src = out / 'src'
+        shutil.rmtree(out, ignore_errors=True); src.mkdir(parents=True)
+        for (key, stage), (st, f, msl, where) in good.items(): shutil.copyfile(msl, src / ('%s_%s.metal' % (key, stage[0])))
+        tsv = ['# GL shaders (dm/gfx/tools/gl_shaders.py): key = sha256(GLSL source)[:16], Metal function gl_<key>_v / gl_<key>_f; '
+               'a: vertex inputs, u: default uniform block members (offset:type:count:stride), b: the block (slot:size), '
+               't: combined samplers (slot:type), o: fragment outputs',
+               '# source form (src/<key>_<v|f>.metal): the packing computer had no Apple Metal compiler, so the layer '
+               'compiles these on the phone at first launch']
+        tsv += ['%s\t%s\t%s\t%s' % (k[0], v[0], ' '.join(v[1]), v[3]) for k, v in sorted(good.items())]
+        (out / 'gl_shaders.tsv').write_text('\n'.join(tsv) + '\n', encoding='utf-8')
+        (out / 'inputs.tsv').write_text('game\t%s\n' % tid, encoding='utf-8')
+    nv = sum(1 for v in good.values() if v[0] == 'vert')
+    say('GL shaders: %d translated (%d vertex, %d fragment) → %s' % (len(good), nv, len(good) - nv, out))
+    return len(good)
+
+
 def fill_mem_used(patched, mods, gdir, rows):
     """The used memory GetInfo reports beside the heap: 64 MB unless the rewritten modules need more (dm/games/README.md).
 
@@ -869,7 +933,8 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     if msl_dir.is_dir():
         dst = A / 'msl' / msl_dir.name
         shutil.copytree(msl_dir, dst)
-        say('shader source for %d shaders -> msl/%s' % (len(list(dst.glob('*_b.metallib'))), msl_dir.name))
+        n = len(list(dst.glob('*_b.metallib')))
+        if n: say('shader source for %d shaders -> msl/%s' % (n, msl_dir.name))   # empty for a GL package, whose shaders go to msl/gl instead
 
     shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True)
     say('RomFS in place')
@@ -990,6 +1055,10 @@ def main():
     ap.add_argument('--allow-damaged', action='store_true', help='read files that fail their hash check as they are: a dump with a few bad files (a couple of music tracks) still packs')
     ap.add_argument('--diagnose', action='store_true', help='extract, rewrite and build the Mac host, then stop: for running the game under lldb (macOS)')
     ap.add_argument('--capture-gl', default='', help='boot the game in the Mac host and capture the GLSL it assembles at run time, then stop (macOS, Apple silicon)')
+    ap.add_argument('--gl-capture', default='', metavar='FOLDER',
+                    help="an OpenGL game's captured shaders (<key>.vert / <key>.frag, which DM_GL_CAPTURE writes on the "
+                         'phone): translated to Metal sources and packed, so the game draws. Needs glslangValidator and '
+                         'spirv-cross on PATH or in --tools.')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
                          'modules and the shaders (it is several times the size of the game)')
@@ -1171,15 +1240,21 @@ def main():
     # Mac. Until this packer has that capture route, such a game is built without a shader library -- it boots, plays its music
     # and draws nothing -- which is exactly the state DM_GL_CAPTURE needs to collect the sources (Documents/env.txt).
     route = graphics_route(gdir, reg)
-    if route != 'nvn' and not a.no_shaders:
+    gl_out = None
+    if route == 'gl' and a.gl_capture:
+        gl_out = work / 'build' / 'gl'
+        step_gl_shaders(Path(a.gl_capture).resolve(), gl_out, gdir, tid, a.tools)
+    # A GL game with a capture needs neither: its shaders came from the capture, and there is nothing left to refuse.
+    if route != 'nvn' and not a.no_shaders and gl_out is None:
         # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
         # would only see a black screen with no explanation. The flag exists for the capture run that produces the shaders.
         die('%s game: its shaders are %s, so no game file holds them; upstream captures them by booting the game on a Mac.\n'
             '    Without that capture this packer cannot make a playable package.\n'
             '    To build one anyway -- it boots and plays its music but draws nothing, which is what a capture run needs --\n'
-            '    add --no-shaders, then run it on the phone with Documents/env.txt holding DM_GL_CAPTURE=<writable dir>.'
+            '    add --no-shaders, then run it on the phone with Documents/env.txt holding DM_GL_CAPTURE=<writable dir>,\n'
+            '    and pack the folder it wrote with --gl-capture <folder>.'
             % ('this', 'put together at run time' if route == 'gl' else 'generated at run time'))
-    if route != 'nvn':
+    if route != 'nvn' and gl_out is None:
         say('%s game: no NVN shaders to split or translate; building without a shader library (--no-shaders)'
             % ('OpenGL' if route == 'gl' else 'Vulkan'))
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
@@ -1195,12 +1270,13 @@ def main():
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
     if route != 'nvn':
-        # No library at all: the app keeps a msl/ directory (the GL and Vulkan layers look there) and reports every shader it is
-        # given as missing, which is the state a capture run needs.
+        # The b- directory is what the app looks for (main.m points DM_MSL_DIR at <App>/msl, and the chain version names one
+        # directory inside it). Beyond the stamp it is empty here: a GL package's shaders are under msl/gl, which is where
+        # the GL layer reads them from, and are copied there after assembly.
         msl_out = work / 'build' / 'ios' / 'none' / 'b-000000000000'
         msl_out.mkdir(parents=True, exist_ok=True)
         (msl_out / 'inputs.tsv').write_text('game\t%s\n' % tid, encoding='utf-8')
-        say('no shader library: the app will run without drawing until its shaders are captured')
+        if gl_out is None: say('no shader library: the app will run without drawing until its shaders are captured')
     else:
         # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
         # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
@@ -1221,6 +1297,13 @@ def main():
     stage = work / 'stage'
     A = step_assemble(shell, stage, game, patched, mods, gdir, rows,
                       one(rows, 'name', tid), builds[pkg], tid, msl_out, work)
+    if gl_out is not None:
+        # <App>/msl/gl: hle_gl.m reads gl_shaders.tsv and gl/src from DM_MSL_DIR itself, not from the chain version's directory.
+        dst = A / 'msl' / 'gl'
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(gl_out, dst)
+        say('GL shader table and %d sources → msl/gl (the phone compiles them at first launch)'
+            % len(list((dst / 'src').glob('*.metal'))))
     step_pack(A, out_ipa, rows, work)
     say('done: %s (%.0f MB)' % (out_ipa, out_ipa.stat().st_size / 1048576))
     say('next: sign it with a sideloading tool (SideStore / Sideloadly / LiveContainer) and install it on the phone')

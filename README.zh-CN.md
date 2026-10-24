@@ -134,6 +134,21 @@ shell_build.sh ──► nxn_pack.py
 
 壳还是用中性占位 profile 编的，所以游戏的内存布局（`mem_used`、`app_pool` 等）由打包器写进应用的 `dm/env.txt`，宿主启动时读取。
 
+### 着色器在运行时才拼出来的游戏（OpenGL、Vulkan）
+
+OpenGL / Vulkan 游戏的文件里没有着色器：它们是跑起来之后一个个拼出来的（小丑牌用的 LÖVE 在 Lua 里拼），
+`shader_split.py` 没有东西可拆。这类游戏的着色器只能从跑着的游戏里收一次：
+
+1. 先用 `--no-shaders` 打一个不带着色器库的包装上——它能启动、有音乐、没有画面，这正是抓取需要的状态；
+2. 在应用的 `Documents/env.txt` 里写 `DM_GL_CAPTURE=<一个可写目录>` 后启动游戏，它每编译一个着色器就在那里写一个
+   `<key>.vert` / `<key>.frag`（OpenGL 用这个变量；Vulkan 是 `DM_VK_CAPTURE`）。玩到你想看的场景都出来过；
+3. 用 `--gl-capture <那个目录>` 再打一次包（别的参数不变）。打包器用 `glslangValidator` 和 `spirv-cross` 把
+   GLSL 译成 SPIR-V 再译成 MSL——这两个在 Windows 上也能跑——把每个着色器写成一份 Metal 源码放进 `msl/gl/src`，
+   手机首次启动时编译成库。
+
+苹果自己的 Metal 编译器（`xcrun metal`）只有 Mac 上有，所以包里带的是**源码**而不是编好的库——这和本项目在没有 Xcode
+的机器上打 NVN 游戏时的做法是同一个。包里只有**抓取那一轮跑到的场景**的着色器，打包器会打印拿到了 profile 表里的几个。
+
 ## 注意事项
 
 - **IPA 里含你的游戏文件。** 仅供自己使用，不要分发。

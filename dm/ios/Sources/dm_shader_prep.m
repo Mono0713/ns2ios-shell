@@ -20,48 +20,59 @@
 static void pl(NSString *s) { fprintf(stderr, "[dm] %s\n", s.UTF8String); }
 static int lg(void) { NSString *l = NSLocale.preferredLanguages.firstObject; return [l hasPrefix:@"zh"] ? 1 : [l hasPrefix:@"es"] ? 2 : 0; }   // 系统首选语言：1 中文 / 2 西语 / 0 其余英文 | System preferred language: 1 Chinese / 2 Spanish / 0 English otherwise
 #define L3(zh, en, es) (lg() == 1 ? (zh) : lg() == 2 ? (es) : (en))
+static NSString *msldir(void) { return [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"]; }
 static NSString *libdir(void) {   // <包>/msl/b-<链版本>：壳里只有一个版本目录 | <package>/msl/b-<chain version>: the shell has only one version directory
-    NSString *msl = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
+    NSString *msl = msldir();
     for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[]) if ([d hasPrefix:@"b-"]) return [msl stringByAppendingPathComponent:d];
     return nil;
 }
-static NSString *marker(NSString *dir) {
+// 编好的库以 MTLB 开头；不是的就是源码 | a compiled library starts with MTLB; anything else is source
+static BOOL is_source(NSString *path) {
+    FILE *f = fopen(path.fileSystemRepresentation, "rb"); if (!f) return NO; char h[4] = {0}; size_t n = fread(h, 1, 4, f); fclose(f);
+    return n == 4 && memcmp(h, "MTLB", 4) != 0;
+}
+// 以源码形式放进包的着色器：NVN 的是 b-<链版本> 下的 *.metallib（还是源码，不是 MTLB），GL 的是 msl/gl/src 下的 *.metal
+// （打包的电脑上没有苹果的编译器时，gl_shaders.py 只写这两样：PC 上能装 glslang 和 spirv-cross，装不了 xcrun metal）
+// The shaders a package holds as source: NVN's are the *.metallib that are not MTLB under b-<chain version>, GL's the
+// *.metal under msl/gl/src (what gl_shaders.py writes when the packing computer has no Apple compiler).
+static NSArray<NSString *> *shader_sources(void) {
+    NSMutableArray<NSString *> *a = [NSMutableArray array];
+    NSString *d = libdir();
+    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil] sortedArrayUsingSelector:@selector(compare):] ?: @[]) {
+        NSString *p = [d stringByAppendingPathComponent:f];
+        if ([f hasSuffix:@".metallib"] && is_source(p)) [a addObject:p];
+    }
+    NSString *gs = [msldir() stringByAppendingPathComponent:@"gl/src"];
+    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:gs error:nil] sortedArrayUsingSelector:@selector(compare):] ?: @[])
+        if ([f hasSuffix:@".metal"]) [a addObject:[gs stringByAppendingPathComponent:f]];
+    return a;
+}
+static NSString *marker(NSArray<NSString *> *src, NSString *dir) {
     // The key has to name this package's shaders, not just the source tree: the chain version (b-<V>) follows the source tree
     // and is the same for every game, so a marker keyed by it alone says "done" for a different game's package, or for a
     // repack whose shaders changed -- and the app then loads source-form .metallib files as if they were compiled, which
     // Metal rejects as "Invalid library file" and the game runs on with no picture at all. The package's own stamp
     // (inputs.tsv: the game and the digest of the profile inputs) is what distinguishes one package from another; a package
     // without it falls back to a digest of the directory's contents.
-    NSString *tag = dir.lastPathComponent;
-    NSString *stamp = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"inputs.tsv"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *tag = dir.lastPathComponent ?: @"gl";
+    NSString *stamp = [NSString stringWithContentsOfFile:[(dir ?: [msldir() stringByAppendingPathComponent:@"gl"]) stringByAppendingPathComponent:@"inputs.tsv"] encoding:NSUTF8StringEncoding error:nil];
     for (NSString *ln in [stamp componentsSeparatedByString:@"\n"]) {
         NSArray *c = [ln componentsSeparatedByString:@"\t"];
         if (c.count == 2 && ([c[0] isEqual:@"inputs"] || [c[0] isEqual:@"game"])) tag = [tag stringByAppendingFormat:@"-%@", c[1]];
     }
     unsigned long long n = 0, bytes = 0;
-    for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
-        if (![f hasSuffix:@".metallib"]) continue;
-        NSDictionary *a = [NSFileManager.defaultManager attributesOfItemAtPath:[dir stringByAppendingPathComponent:f] error:nil];
-        n++; bytes += a.fileSize;
-    }
+    for (NSString *p in src) { n++; bytes += [NSFileManager.defaultManager attributesOfItemAtPath:p error:nil].fileSize; }
     if (n) tag = [tag stringByAppendingFormat:@"-%llux%llu", n, bytes];
     NSString *c = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
     return [c stringByAppendingPathComponent:[NSString stringWithFormat:@"dm_shader_prep_%@_%@.done", tag, NSProcessInfo.processInfo.operatingSystemVersionString.length ? @(NSProcessInfo.processInfo.operatingSystemVersion.majorVersion * 100 + NSProcessInfo.processInfo.operatingSystemVersion.minorVersion).stringValue : @"0"]];
 }
-static BOOL is_source(NSString *path) {   // 编好的库以 MTLB 开头；不是的就是源码 | a compiled library starts with MTLB; anything else is source
-    FILE *f = fopen(path.fileSystemRepresentation, "rb"); if (!f) return NO; char h[4] = {0}; size_t n = fread(h, 1, 4, f); fclose(f);
-    return n == 4 && memcmp(h, "MTLB", 4) != 0;
-}
-
 // 要不要做：返回 1 = 已接手（显示进度页，做完调 done）；0 = 不用做（没有源码着色器，或上次已经做完）
 // Whether it needs to run: returns 1 = taken over (shows the progress page, calls done when finished); 0 = nothing to do (no source shaders, or already finished last time)
 int dm_shader_prep_begin(void (^done)(void)) {
-    NSString *dir = libdir(); if (!dir) return 0;
-    NSString *mk = marker(dir); if ([NSFileManager.defaultManager fileExistsAtPath:mk]) return 0;
-    NSMutableArray<NSString *> *src = [NSMutableArray array];
-    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil] sortedArrayUsingSelector:@selector(compare:)] ?: @[])
-        if ([f hasSuffix:@".metallib"] && is_source([dir stringByAppendingPathComponent:f])) [src addObject:[dir stringByAppendingPathComponent:f]];
+    NSString *dir = libdir();   // NVN 的版本目录；GL 包没有，源码在 msl/gl/src | the chain version's directory; a GL package has none, its sources are in msl/gl/src
+    NSMutableArray<NSString *> *src = [shader_sources() mutableCopy];
     if (!src.count) return 0;
+    NSString *mk = marker(src, dir); if ([NSFileManager.defaultManager fileExistsAtPath:mk]) return 0;
     UIWindow *win = nil;
     for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (!win || w.isKeyWindow) win = w;
     UIView *host = win.rootViewController.view ?: win; if (!host) { pl(@"【红】着色器准备：没有窗口可放进度页，跳过（进游戏后会边玩边编，第一次进新场景会顿）"); return 0; }

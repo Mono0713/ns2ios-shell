@@ -149,6 +149,24 @@ Two things make one shell work for every game, both moved from compile time to r
 The shell is also compiled against a neutral placeholder profile, so the game's memory layout (`mem_used`, `app_pool`, …) is
 written by the packer into the app's `dm/env.txt` and read by the host at startup.
 
+### Games that build their shaders at run time (OpenGL, Vulkan)
+
+A GL or Vulkan game keeps no shaders in its files: it assembles each one while it runs (Balatro's LÖVE does it in Lua), so
+`shader_split.py` has nothing to split. The shaders have to be collected from a running game once:
+
+1. build a package without a library -- `--no-shaders` -- and install it. It boots, plays its music and draws nothing, which
+   is the state the capture needs;
+2. put `DM_GL_CAPTURE=<a writable folder>` in the app's `Documents/env.txt` and start the game; it writes every shader it
+   compiles there as `<key>.vert` / `<key>.frag` (OpenGL; Vulkan uses `DM_VK_CAPTURE`). Play far enough that the scenes you
+   care about have drawn;
+3. pack again with `--gl-capture <that folder>` (nothing else changes). The packer translates GLSL → SPIR-V → MSL with
+   `glslangValidator` and `spirv-cross`, which run on Windows too, and writes one Metal source per shader into `msl/gl/src`;
+   the phone compiles them on first launch.
+
+Apple's own Metal compiler (`xcrun metal`) only exists on a Mac, so the package carries sources and not a compiled library —
+the same thing this project already does for NVN shaders when the packing computer has no Xcode. Only the shaders of the
+scenes the capture run reached are in the package; the packer prints how many of the profile's list it got.
+
 ## Notes and caveats
 
 - **The IPA contains your game files.** It is for your own use; do not distribute it.
