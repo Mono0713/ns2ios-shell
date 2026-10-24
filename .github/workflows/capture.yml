@@ -54,7 +54,8 @@ jobs:
           if [ -z "${GH_TOKEN:-}" ]; then echo "::error::SMOKE_TOKEN is not set: this job needs read access to xinerqu/ns2ios-smoke"; exit 1; fi
           mkdir -p data games/balatro
           gh release download smoke-data -R xinerqu/ns2ios-smoke -p 'prod.keys' -O data/prod.keys --clobber
-          gh release download smoke-data -R xinerqu/ns2ios-smoke -p 'balatro-*.nsp' -D games/balatro --clobber
+          # base only: stacking the update trips a LibHac alignment error in the RomFS patch path, on every platform
+          gh release download smoke-data -R xinerqu/ns2ios-smoke -p 'balatro-base.nsp' -D games/balatro --clobber
           ls -l data games/balatro
 
       - name: Boot the game and capture its shaders
