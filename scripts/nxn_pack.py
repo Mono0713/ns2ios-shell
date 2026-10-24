@@ -1161,31 +1161,48 @@ def main():
         return say('stopped after the capture')
     check_gates(stamp, patched, mods)
 
+    # NVN games hold their shaders in the game files, so they are split out and translated here. A GL or Vulkan game does not:
+    # its shaders only exist once it runs (LÖVE assembles each one in Lua), and upstream captures them by booting the game on a
+    # Mac. Until this packer has that capture route, such a game is built without a shader library -- it boots, plays its music
+    # and draws nothing -- which is exactly the state DM_GL_CAPTURE needs to collect the sources (Documents/env.txt).
+    route = graphics_route(gdir)
+    if route != 'nvn':
+        say('%s game: no NVN shaders to split or translate; building without a shader library'
+            % ('OpenGL' if route == 'gl' else 'Vulkan'))
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
-    pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
-    if derived_dir is not None:
-        # The shader tool reads its tables from the profile it loads, and a derived profile has none (the split just made
-        # them). Without this it falls back to the registered profile's tables, which name shader packs this version lacks.
-        for f in sorted(tb.glob('*.tsv')):
-            shutil.copyfile(f, derived_dir / f.name)
-        say('derived profile tables: %s' % ', '.join(f.name for f in sorted(tb.glob('*.tsv'))))
+    if route == 'nvn':
+        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
+        if derived_dir is not None:
+            # The shader tool reads its tables from the profile it loads, and a derived profile has none (the split just made
+            # them). Without this it falls back to the registered profile's tables, which name shader packs this version lacks.
+            for f in sorted(tb.glob('*.tsv')):
+                shutil.copyfile(f, derived_dir / f.name)
+            say('derived profile tables: %s' % ', '.join(f.name for f in sorted(tb.glob('*.tsv'))))
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
-    # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
-    # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
-    # profile header is a compile-time constant that only the Xcode route needs. The shell reads the version back from
-    # the directory name at run time, so dmsh_build.py is left to compute it and we take whatever directory it makes.
-    iosout = work / 'build' / 'ios' / 'dmsh_b'          # dmsh_build.py creates b-<chain version> inside it
-    cands = ([tools_dir / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')] if tools_dir else []) + \
-            [GFX / 'dmsh_xlate_bin' / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')]
-    xlate = next((c for c in cands if c.is_file()), None)
-    if not xlate: die('no shader translator: pass --tools <folder> with dmsh_xlate, or build it with dotnet publish')
-    step_translate(pkg_dir, work, xlate, iosout, tid, a.force)
-    libs = sorted(p for p in iosout.glob('b-*') if p.is_dir()) if iosout.is_dir() else []
-    if not libs: die('no shader library directory under %s' % iosout)
-    msl_out = libs[-1]
-    say('shader libraries: %s (%d)' % (msl_out.name, len(list(msl_out.glob('*_b.metallib')))))
+    if route != 'nvn':
+        # No library at all: the app keeps a msl/ directory (the GL and Vulkan layers look there) and reports every shader it is
+        # given as missing, which is the state a capture run needs.
+        msl_out = work / 'build' / 'ios' / 'none' / 'b-000000000000'
+        msl_out.mkdir(parents=True, exist_ok=True)
+        (msl_out / 'inputs.tsv').write_text('game\t%s\n' % tid, encoding='utf-8')
+        say('no shader library: the app will run without drawing until its shaders are captured')
+    else:
+        # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
+        # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
+        # profile header is a compile-time constant that only the Xcode route needs. The shell reads the version back from
+        # the directory name at run time, so dmsh_build.py is left to compute it and we take whatever directory it makes.
+        iosout = work / 'build' / 'ios' / 'dmsh_b'          # dmsh_build.py creates b-<chain version> inside it
+        cands = ([tools_dir / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')] if tools_dir else []) + \
+                [GFX / 'dmsh_xlate_bin' / n for n in ('dmsh_xlate.exe', 'dmsh_xlate')]
+        xlate = next((c for c in cands if c.is_file()), None)
+        if not xlate: die('no shader translator: pass --tools <folder> with dmsh_xlate, or build it with dotnet publish')
+        step_translate(pkg_dir, work, xlate, iosout, tid, a.force)
+        libs = sorted(p for p in iosout.glob('b-*') if p.is_dir()) if iosout.is_dir() else []
+        if not libs: die('no shader library directory under %s' % iosout)
+        msl_out = libs[-1]
+        say('shader libraries: %s (%d)' % (msl_out.name, len(list(msl_out.glob('*_b.metallib')))))
     if a.stop_after == 'guest': return say('stopped before assembly')
 
     stage = work / 'stage'
