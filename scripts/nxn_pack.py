@@ -606,14 +606,14 @@ def build_mac_host(work, gid):
     return out
 
 
-def capture_gl(game, gdir, patched, work):
+def capture_gl(game, gdir, patched, work, tid):
     """The GLSL LÖVE-style games put together at run time: boot the game in the Mac host with DM_GL_CAPTURE, which writes
     each shader it is given to that folder, until every key the profile's table names is there."""
     want = capture_wanted(gdir)
     out = game / 'gl_capture'
     if want and capture_have(out) >= want:
         say('reusing the captured shaders in %s' % out); return out
-    host = build_mac_host(work, game.parent.name)
+    host = build_mac_host(work, tid)
     cap, rd = game / 'gl_capture.partial', work / 'tmp' / 'gl_run'
     shutil.rmtree(cap, ignore_errors=True); shutil.rmtree(rd, ignore_errors=True)
     cap.mkdir(parents=True)
@@ -1070,7 +1070,7 @@ def main():
     if a.stop_after == 'rewrite': return say('stopped after rewrite')
     if a.capture_gl:
         # A capture run is the whole point of this invocation: the shell, the shader chain and the IPA are not involved.
-        out = capture_gl(game, gdir, patched, work)
+        out = capture_gl(game, gdir, patched, work, tid)
         want = a.capture_gl
         if want:
             dst = Path(want).resolve()
