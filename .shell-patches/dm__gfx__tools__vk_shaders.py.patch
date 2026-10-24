@@ -10,7 +10,43 @@ diff --git a/dm/gfx/tools/vk_shaders.py b/dm/gfx/tools/vk_shaders.py
  
  MAGIC = 0x07230203
  OP_DECORATE, OP_MEMBER_DECORATE, OP_TYPE_ARRAY, OP_TYPE_RTARRAY, OP_TYPE_STRUCT = 71, 72, 28, 29, 30
-@@ -154,6 +154,10 @@
+@@ -75,13 +75,16 @@
+     if not add: return words
+     return words[:at] + [w for t, s in add.items() for w in ((4 << 16) | OP_DECORATE, t, DEC_ARRAY_STRIDE, s)] + words[at:]
+ 
++# Every child gets stdin=DEVNULL: a packing run has no terminal, and a spirv-cross that decides to read its input from
++# stdin waits forever on an inherited pipe (one shader in Super Mario Galaxy's 3,089 hung the whole translation for
++# 20 minutes at 0.05 s of CPU time, and looked like a slow translator rather than a deadlock)
+ def one(path, tmp, root):
+     data = open(path, 'rb').read()
+     if len(data) % 4: red(f'{path}: SPIR-V length {len(data)} is not a multiple of 4')
+     key = hashlib.sha256(data).hexdigest()[:16]   # of the game's words, which the host hashes
+     words = fix_strides(list(struct.unpack(f'<{len(data) // 4}I', data)))
+     src_spv = os.path.join(tmp, key + '.in.spv'); open(src_spv, 'wb').write(struct.pack(f'<{len(words)}I', *words))
+-    refl = json.loads(subprocess.run(['spirv-cross', src_spv, '--reflect'], capture_output=True, text=True, check=True).stdout)
++    refl = json.loads(subprocess.run(['spirv-cross', src_spv, '--reflect'], capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL).stdout)
+     eps = refl.get('entryPoints', [])
+     if len(eps) != 1: red(f'{path}: entry points {eps} are not exactly one')
+     stage = eps[0]['mode']
+@@ -115,7 +118,7 @@
+     open(spv, 'wb').write(struct.pack(f'<{len(words)}I', *words))
+     cmd = ['spirv-cross', spv, '--msl', '--msl-version', '20300', '--msl-decoration-binding', '--rename-entry-point', 'main', f'vk_{key}', stage, '--output', msl]
+     if stage == 'vert': cmd.append('--flip-vert-y')
+-    r = subprocess.run(cmd, capture_output=True, text=True)
++    r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+     if r.returncode: red(f'{path}: spirv-cross failed: {r.stderr.strip()[:300]}')
+     # The reflection lists every declared resource; the Metal entry point only takes the ones the shader uses (Hades' ShadowMap.frag declares a buffer it never reads,
+     # which the game's own pipeline layout leaves out): keep the rows whose slot is an argument of the entry point, so the host only binds, and only reports, real ones
+@@ -143,7 +146,7 @@
+     airs = []
+     def comp(m):
+         a = m[:-6] + f'.{sdk}.air'
+-        r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fpreserve-invariance', *extra, m, '-o', a], capture_output=True, text=True)
++        r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '-c', '-fpreserve-invariance', *extra, m, '-o', a], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+         if r.returncode: red(f'{m}: metal compile failed: {r.stderr.strip()[:400]}')
+         return a
+     with cf.ThreadPoolExecutor(os.cpu_count()) as ex: airs = list(ex.map(comp, msls))
+@@ -154,6 +157,10 @@
  def main():
      a = sys.argv[1:]
      ios = None
@@ -21,7 +57,15 @@ diff --git a/dm/gfx/tools/vk_shaders.py b/dm/gfx/tools/vk_shaders.py
      if '--ios' in a: i = a.index('--ios'); ios = a[i + 1]; del a[i:i + 2]
      if len(a) < 2: sys.exit('usage: vk_shaders.py <SPIR-V dir>... <out dir> [--ios <dir>]')
      roots, out = a[:-1], a[-1]
-@@ -177,8 +181,13 @@
+@@ -170,15 +177,20 @@
+         if skipped: print('[RED] skipped shader stages Metal does not have: ' + ', '.join(f'{k} {v}' for k, v in sorted(skipped.items())))
+         msls = [m for v in seen.values() for m in v[2]]
+         tsv = ['# Vulkan shaders (dm/gfx/tools/vk_shaders.py): key = sha256(SPIR-V)[:16], Metal function vk_<key>; resources kind:set.binding=slot (u uniform buffer, b storage buffer, t image, s sampler, c combined, p push constants)',
+-               '# spirv-cross ' + ' '.join((lambda r: r.stdout + r.stderr)(subprocess.run(['spirv-cross', '--revision'], capture_output=True, text=True)).split())]
++               '# spirv-cross ' + ' '.join((lambda r: r.stdout + r.stderr)(subprocess.run(['spirv-cross', '--revision'], capture_output=True, text=True, stdin=subprocess.DEVNULL)).split())]
+         tsv += [f'{k}\t{v[0]}\t{" ".join(v[1])}\t{v[3]}' for k, v in sorted(seen.items())]
+         dirs = [(os.path.join(out, 'vk'), 'macosx', [])]
+         # The iPhone library is compiled with -fmetal-math-mode=relaxed, as the NVN chain's (dm/ios/tools/ios_metal.py): the default fast mode lets the GPU compiler assume there is
          # no NaN / Inf, which would let it drop the NaN handling of the precise:: functions above
          if ios: dirs.append((os.path.join(ios, 'vk'), 'iphoneos', ['-mios-version-min=18.0', '-fmetal-math-mode=relaxed']))
          for d, sdk, extra in dirs:
