@@ -800,6 +800,13 @@ def graphics_route(prof_dir, registered=None):
     for d in ([prof_dir, registered] if registered and registered != prof_dir else [prof_dir]):
         if (d / 'vk_capture.tsv').is_file(): return 'vulkan'
         if (d / 'gl_capture.tsv').is_file(): return 'gl'
+        # An NVN shader table with no rows is the profile saying "this game has no NVN shaders": Hades' table is a header
+        # and one comment, its 74 shaders are SPIR-V in the RomFS. Without this it falls through to 'nvn' and shader_split
+        # fails on a game that never had any.
+        m = d / 'shader_map.tsv'
+        if m.is_file():
+            rows = [l for l in m.read_text(encoding='utf-8', errors='replace').splitlines() if l.strip() and not l.startswith('#')]
+            if len(rows) <= 1: return 'vulkan'          # only the column header: no NVN shader at all
     return 'nvn'
 
 
@@ -1069,6 +1076,10 @@ def main():
     ap.add_argument('--allow-damaged', action='store_true', help='read files that fail their hash check as they are: a dump with a few bad files (a couple of music tracks) still packs')
     ap.add_argument('--diagnose', action='store_true', help='extract, rewrite and build the Mac host, then stop: for running the game under lldb (macOS)')
     ap.add_argument('--capture-gl', default='', help='boot the game in the Mac host and capture the GLSL it assembles at run time, then stop (macOS, Apple silicon)')
+    ap.add_argument('--vk-capture', default='', metavar='FOLDER',
+                    help="a Vulkan game's captured SPIR-V (<key>.spv, which DM_VK_CAPTURE writes on the phone) for a game "
+                         'whose modules are generated at run time. Games that ship SPIR-V in their RomFS need no capture '
+                         'at all (Hades keeps 74 in Content/EffectsForgeSwitch).')
     ap.add_argument('--gl-capture', default='', metavar='FOLDER',
                     help="an OpenGL game's captured shaders (<key>.vert / <key>.frag, which DM_GL_CAPTURE writes on the "
                          'phone): translated to Metal sources and packed, so the game draws. Needs glslangValidator and '
@@ -1270,8 +1281,22 @@ def main():
             if tab.is_file(): args += ['--expect', tab]
             run(args, log=work / 'logs' / 'gl_prebuilt.log', what='generating the GLSL from the game files')
         step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
+    vk_out = None
+    if route == 'vulkan':
+        # SPIR-V, not GLSL: vk_shaders.py only needs spirv-cross here (Apple's Metal compiler is the missing half, and
+        # --source-only skips it), so a Windows machine produces the same table a Mac does. Most Vulkan games keep their
+        # SPIR-V in the RomFS (Hades: 74 files in Content/EffectsForgeSwitch), so nothing has to be captured; a game that
+        # builds its modules at run time needs --vk-capture with what DM_VK_CAPTURE wrote.
+        root = work / 'build' / 'vkroot'
+        ins = [game / 'RomFS'] + ([Path(a.vk_capture).resolve()] if a.vk_capture else [])
+        run([PY, GFX / 'vk_shaders.py', *ins, root, '--source-only'],
+            log=work / 'logs' / 'vk_shaders.log', what='translating the SPIR-V to Metal source')
+        vk_out = root / 'vk'
+        if not (vk_out / 'vk_shaders.tsv').is_file(): die('vk_shaders.py wrote no table under %s' % vk_out)
+        tbl = [l for l in (vk_out / 'vk_shaders.tsv').read_text(encoding='utf-8').splitlines() if l and not l.startswith('#')]
+        say('Vulkan shaders: %d translated (%d sources) -> %s' % (len(tbl), len(list((vk_out / 'src').glob('*.metal'))), vk_out))
     # A GL game with a capture needs neither: its shaders came from the capture, and there is nothing left to refuse.
-    if route != 'nvn' and not a.no_shaders and gl_out is None:
+    if route != 'nvn' and not a.no_shaders and gl_out is None and vk_out is None:
         # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
         # would only see a black screen with no explanation. The flag exists for the capture run that produces the shaders.
         die('%s game: its shaders are %s, so no game file holds them; upstream captures them by booting the game on a Mac.\n'
@@ -1323,6 +1348,12 @@ def main():
     stage = work / 'stage'
     A = step_assemble(shell, stage, game, patched, mods, gdir, rows,
                       one(rows, 'name', tid), builds[pkg], tid, msl_out, work)
+    if vk_out is not None:
+        dst = A / 'msl' / 'vk'
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(vk_out, dst)
+        say('Vulkan shader table and %d sources → msl/vk (the phone compiles them at first launch)'
+            % len(list((dst / 'src').glob('*.metal'))))
     if gl_out is not None:
         # <App>/msl/gl: hle_gl.m reads gl_shaders.tsv and gl/src from DM_MSL_DIR itself, not from the chain version's directory.
         dst = A / 'msl' / 'gl'

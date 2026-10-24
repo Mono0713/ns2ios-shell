@@ -21,7 +21,7 @@
 # Table rows: key <TAB> stage (vert / frag) <TAB> resources, space-separated kind:set.binding=slot[*count] (count: an array of descriptors in consecutive slots; u uniform buffer, b storage buffer, t image, s sampler, c combined image sampler = texture and sampler slot n,
 #   p push constants)
 # Usage: vk_shaders.py <SPIR-V dir>... <out dir> [--ios <dir>]   (SPIR-V dirs: the RomFS, capture folders)
-import concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys, tempfile
+import concurrent.futures as cf, hashlib, json, os, re, shutil, struct, subprocess, sys, tempfile
 
 MAGIC = 0x07230203
 OP_DECORATE, OP_MEMBER_DECORATE, OP_TYPE_ARRAY, OP_TYPE_RTARRAY, OP_TYPE_STRUCT = 71, 72, 28, 29, 30
@@ -154,6 +154,10 @@ def metallib(msls, out, sdk, extra):
 def main():
     a = sys.argv[1:]
     ios = None
+    # --source-only: no Apple Metal compiler on this machine, so write one Metal source per shader instead of a library and
+    # let the device compile them at first launch (dm/ios/Sources/dm_shader_prep.m), as gl_shaders.py's --source-only does.
+    source_only = '--source-only' in a
+    if source_only: a.remove('--source-only')
     if '--ios' in a: i = a.index('--ios'); ios = a[i + 1]; del a[i:i + 2]
     if len(a) < 2: sys.exit('usage: vk_shaders.py <SPIR-V dir>... <out dir> [--ios <dir>]')
     roots, out = a[:-1], a[-1]
@@ -177,8 +181,13 @@ def main():
         # no NaN / Inf, which would let it drop the NaN handling of the precise:: functions above
         if ios: dirs.append((os.path.join(ios, 'vk'), 'iphoneos', ['-mios-version-min=18.0', '-fmetal-math-mode=relaxed']))
         for d, sdk, extra in dirs:
-            lib = metallib(msls, d, sdk, extra)
-            open(os.path.join(d, 'vk_shaders.tsv'), 'w').write('\n'.join(tsv) + '\n')
+            if source_only:
+                os.makedirs(d, exist_ok=True)
+                lib = os.path.join(d, 'src'); os.makedirs(lib, exist_ok=True)
+                for m in msls: shutil.copyfile(m, os.path.join(lib, os.path.basename(m)))
+            else:
+                lib = metallib(msls, d, sdk, extra)
+            with open(os.path.join(d, 'vk_shaders.tsv'), 'w', newline='\n') as f: f.write('\n'.join(tsv) + '\n')
             print(f'{sdk}: {len(seen)} shaders → {lib}')
 
 if __name__ == '__main__': main()

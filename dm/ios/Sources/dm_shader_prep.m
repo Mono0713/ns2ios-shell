@@ -45,6 +45,9 @@ static NSArray<NSString *> *shader_sources(void) {
     NSString *gs = [msldir() stringByAppendingPathComponent:@"gl/src"];
     for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:gs error:nil] sortedArrayUsingSelector:@selector(compare:)] ?: @[])
         if ([f hasSuffix:@".metal"]) [a addObject:[gs stringByAppendingPathComponent:f]];
+    NSString *vs = [msldir() stringByAppendingPathComponent:@"vk/src"];
+    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:vs error:nil] sortedArrayUsingSelector:@selector(compare:)] ?: @[])
+        if ([f hasSuffix:@".metal"]) [a addObject:[vs stringByAppendingPathComponent:f]];
     return a;
 }
 static NSString *marker(NSArray<NSString *> *src, NSString *dir) {
