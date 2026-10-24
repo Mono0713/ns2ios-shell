@@ -484,6 +484,9 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         shutil.rmtree(tmp, ignore_errors=True)
         run([nx, keys, base, upd if upd else '-', tmp] + (['--allow-damaged'] if allow_damaged else []), log=work / 'logs' / ('extract_%s.log' % ver),
             what='extracting %s (%s)' % (ver, base.name))
+        # A previous run can leave <ver> behind without an ExeFS (an interrupted extraction, or one made before the folder
+        # held an update as well), and a rename onto a non-empty directory fails on Windows. Clear it and take the new one.
+        if dst.exists(): shutil.rmtree(dst, ignore_errors=True)
         tmp.replace(dst)
         dirs[ver] = dst
     return dirs
@@ -1176,9 +1179,13 @@ def main():
         warn('%s is registered, but the shader tables were built from %s -- shaders this version adds may be missing'
              % (pkg, ' '.join(need)))
     versions = [pkg]
-    picks = {pkg: (fam['base'], None if is_dump or pkg == 'v0' else fam['updates'][pkg])}
+    # A cartridge dump carries no version of its own, which decides how the version is chosen (above) -- not whether an
+    # update in the same folder is used. An XCI of the base game plus an NSP update is an ordinary pairing: dropping the
+    # update packed the cartridge's v0 files under the update's version number, and the module build IDs then matched
+    # nothing in the profile.
+    picks = {pkg: (fam['base'], fam['updates'][pkg] if pkg != 'v0' and pkg in fam['updates'] else None)}
     say('files: base %s%s' % (fam['base'].name,
-        (', update %s' % fam['updates'][pkg].name) if not is_dump and pkg != 'v0' else ', no update')
+        (', update %s' % fam['updates'][pkg].name) if pkg != 'v0' and pkg in fam['updates'] else ', no update')
         + (('; ignoring %d DLC' % len(fam['dlc'])) if fam['dlc'] else ''))
 
     work = folder / (tid + '_pack')
