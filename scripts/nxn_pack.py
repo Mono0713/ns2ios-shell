@@ -535,12 +535,21 @@ def derive_profile(gdir, tid, ver, game, mods, dest, disp):
     for p in gdir.iterdir():
         if p.is_file() and p.name not in DERIVED_SKIP:
             shutil.copyfile(p, dest / p.name)
-    # The module list has to follow the files too: a build may ship fewer modules than the profile was brought up on
-    # (Absolum 1.0.4 has no subsdk2), and a rewrite that is told to load one the dump does not have dies on the missing file.
+    # The module list has to follow the files, but only downwards: this build may ship a module the profile names and not
+    # have it (Absolum 1.0.4 has no subsdk2), and a rewrite told to load a file the dump lacks dies on the missing file.
+    # What it must NOT do is load a module the profile leaves out, because a game's ExeFS also holds things that must never
+    # run on this host: Absolum ships NVIDIA's OpenGL and Vulkan drivers as subsdk0 / subsdk1 (their `_nv*` symbols), and
+    # loading either one aborts inside nninitStartup. So the profile's list, minus what this build does not have.
     present = [q.name for q in (game / 'ExeFS').iterdir() if q.is_file() and q.name not in ('rtld', 'main.npdm')]
     order = lambda m: (m != 'main', 2 if m == 'sdk' else (1 if m.startswith('subsdk') and m[6:].isdigit() else 3),
                        int(m[6:]) if m.startswith('subsdk') and m[6:].isdigit() else 0)
-    mods_now = sorted(present, key=order)
+    mods_now = [m for m in mods if m in present] or sorted(present, key=order)
+    left_out = [m for m in present if m not in mods_now]
+    if left_out:
+        warn('%s ships %s, which profile %s does not load: leaving them out (a driver module aborts in nninitStartup)'
+             % (disp, ', '.join(left_out), gdir.name))
+    gone = [m for m in mods if m not in present]
+    if gone: say('%s has no %s: loading %s' % (disp, ', '.join(gone), ' '.join(mods_now)))
     row = '\t'.join(['build', ver, disp] + ['%s=%s' % (m, module_build_id(game / 'ExeFS' / m)) for m in mods_now])
     out, put = ['# Derived from %s for %s (%s), a version that profile was not brought up on:' % (gdir, ver, disp),
                 '# its keys as they are, this version\'s build row and module list, and shader tables from its own files'], False
