@@ -908,11 +908,7 @@ def env_for(rows):
              ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED')]
     lines = ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
     ge = one(rows, 'game_env')
-    if ge:
-        lines.append('DM_GAME_ENV=' + ge)
-        # A DM_ name in there is the host's own, not the game's: it goes on its own line too, so the host reads it with a
-        # plain getenv (DM_INIT_STARTUP=sdk, for a build whose main exports nninitStartup as a trap).
-        lines += [t for t in ge.split() if t.startswith('DM_')]
+    if ge: lines.append('DM_GAME_ENV=' + ge)
     sr = one(rows, 'sys_resource')
     if sr:
         try: v = int(sr, 0)

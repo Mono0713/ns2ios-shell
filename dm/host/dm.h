@@ -67,10 +67,6 @@ int dm_sdk_major(void);   // SDK major version from the sdk module's version str
 #define DM_SDK_OLD(major) ((major) > 0 && (major) <= 10)   // SDK 10 and older: NVN API 53, the shared-font address points at the TTF itself
 int dm_main_imports(const char *prefix);   // main imports a symbol whose name starts with prefix (loader.c)
 void *guest_sym(const char *name);
-// A symbol from one named module only. ELF resolution takes the first loaded module that defines a name, which is main;
-// that is right when a game keeps its own initialisation there, and wrong for a build that exports a trap under a name
-// the SDK also defines (Absolum's .NET NativeAOT main defines nninitStartup as a call to nn::diag::Abort).
-void *guest_sym_in(const char *modname, const char *name);
 module_t *module_of(const void *p);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);

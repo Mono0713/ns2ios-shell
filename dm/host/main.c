@@ -9,16 +9,6 @@
 void probe_install(void); void hid_keys_init(void); void stubs_report(void); void crash_install(void); void guest_thread_init(void); uint32_t svc_thread_main_init(void);
 typedef void (*fn0)(void); typedef void (*fn2)(uint64_t, uint64_t); typedef void (*fnp)(void *);
 static void *req(const char *n){ void *p=guest_sym(n); if(!p) die("missing symbol %s", n); return p; }
-// SDK initialisation from the SDK module instead of wherever ELF resolution lands first: a build can export a trap under
-// one of these names next to its real entry point (Absolum's .NET NativeAOT main defines nninitStartup as a call to
-// nn::diag::Abort, 0x190 bytes before its nnMain), and calling it ends the process before anything starts. Other games
-// keep the default -- Unreal Engine's own nninitStartup is where it reads the memory options, so main comes first.
-static void *req_init(const char *n){
-    const char *m = getenv("DM_INIT_STARTUP");
-    void *p = (m && *m) ? guest_sym_in(m, n) : NULL;
-    if (p) { LOG(">>> %s from module '%s' (DM_INIT_STARTUP)", n, m); return p; }
-    return req(n);
-}
 
 // Game arguments: argv[0] is fixed to "game", and whatever follows "--" is appended as is (on a real device nn::init takes them from the process argument area and hands them to the SDK through SetHostArgc/Argv)
 static char *g_argv[64] = {"game"}; static int g_argc = 1;
@@ -37,7 +27,7 @@ static void guest_main(void) {
     // (Octopath Traveler 0, main+0x12afc) reads -SwitchVirtualAddressSpaceSize= and its other memory options there
     ((fnp)req("_ZN2nn2os11SetHostArgcEi"))((void *)(uint64_t)g_argc);
     ((fnp)req("_ZN2nn2os11SetHostArgvEPPc"))(g_argv);
-    LOG(">>> nninitStartup"); ((fn0)req_init("nninitStartup"))();
+    LOG(">>> nninitStartup"); ((fn0)req("nninitStartup"))();
     ((fn0)req("_init_libc2"))();
     run_module_inits();   // rtld callback B: each module's DT_INIT (global constructors)
     { void dm_guest_spawn_selftest(void); dm_guest_spawn_selftest(); }   // DM_GUEST_SPAWN_TEST self-test of host-created guest threads (hle_guestthread.c)
