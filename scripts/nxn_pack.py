@@ -709,7 +709,7 @@ def step_rewrite(exe_dir, mods, out, work, force=False):
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
 
 
-def graphics_route(prof_dir):
+def graphics_route(prof_dir, registered=None):
     """Which shader route this game takes, from what its profile carries.
 
     NVN games hold their shaders in the game files, so shader_split.py can read them. A Vulkan game may generate its SPIR-V
@@ -717,8 +717,11 @@ def graphics_route(prof_dir):
     those with vk_capture.tsv / gl_capture.tsv, the keys its Mac run captured. Those two routes need that capture and
     vk_shaders.py / gl_shaders.py; upstream runs them after booting the game on a Mac.
     """
-    if (prof_dir / 'vk_capture.tsv').is_file(): return 'vulkan'
-    if (prof_dir / 'gl_capture.tsv').is_file(): return 'gl'
+    # A derived profile does not carry vk_capture.tsv (the packer leaves it out: it names a capture, not a source), so the
+    # registered profile answers for a build that has one of its own.
+    for d in ([prof_dir, registered] if registered and registered != prof_dir else [prof_dir]):
+        if (d / 'vk_capture.tsv').is_file(): return 'vulkan'
+        if (d / 'gl_capture.tsv').is_file(): return 'gl'
     return 'nvn'
 
 
@@ -1165,7 +1168,7 @@ def main():
     # its shaders only exist once it runs (LÖVE assembles each one in Lua), and upstream captures them by booting the game on a
     # Mac. Until this packer has that capture route, such a game is built without a shader library -- it boots, plays its music
     # and draws nothing -- which is exactly the state DM_GL_CAPTURE needs to collect the sources (Documents/env.txt).
-    route = graphics_route(gdir)
+    route = graphics_route(gdir, reg)
     if route != 'nvn':
         say('%s game: no NVN shaders to split or translate; building without a shader library'
             % ('OpenGL' if route == 'gl' else 'Vulkan'))
