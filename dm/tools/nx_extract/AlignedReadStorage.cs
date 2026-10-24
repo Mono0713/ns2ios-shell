@@ -13,16 +13,16 @@ using LibHac.Fs;
 /// inner storage only ever sees aligned offsets. A wrapper, not a fix: if libhac learns to align its own reads this
 /// class can go.
 /// </summary>
-public class AlignedReadStorage : StorageBase
+public class AlignedReadStorage : IStorage
 {
     private const int Align = 16;
     private readonly IStorage _base;
 
     public AlignedReadStorage(IStorage storage) => _base = storage;
 
-    public override long Size => _base.Size;
+    public long Size => _base.Size;
 
-    public override int Read(long offset, Span<byte> destination)
+    public int Read(long offset, Span<byte> destination)
     {
         if (destination.Length == 0) return 0;
 
@@ -41,5 +41,7 @@ public class AlignedReadStorage : StorageBase
         return n;
     }
 
-    public override void Write(long offset, ReadOnlySpan<byte> source) => throw new NotSupportedException();
+    public void Write(long offset, ReadOnlySpan<byte> source) => throw new NotSupportedException();
+
+    public void Flush() { }
 }

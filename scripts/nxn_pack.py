@@ -404,6 +404,15 @@ def scan_nsps(folder):
         if meta:
             tid, ver = meta['id'], 'v%d' % meta['version']
             kind = {'Application': 'base', 'Patch': 'update', 'AddOnContent': 'dlc'}.get(meta['type'], 'base')
+            if not meta['type']:
+                # A dump whose control metadata carries no CNMT type: the title ID's low bits say what it is, the same
+                # rule the name fallback below uses (an update sits at +0x800). Without this an update NSP is taken for
+                # the base game and overwrites it, which is how Balatro's update came to be packed as "v0".
+                low = int(tid, 16) & 0xFFF
+                kind = 'base' if low == 0 else ('update' if low == 0x800 else 'dlc')
+            if not meta['version']:
+                nv = name_ver(p)          # ... and the display version is only in the file name
+                if nv: ver = nv
         else:
             # an XCI, or an NSP without the metadata XML: fall back to the name, then to what an earlier run recorded, and
             # to the title ID's low bits for the kind
