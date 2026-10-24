@@ -1305,7 +1305,7 @@ def main():
             '    add --no-shaders, then run it on the phone with Documents/env.txt holding DM_GL_CAPTURE=<writable dir>,\n'
             '    and pack the folder it wrote with --gl-capture <folder>.'
             % ('this', 'put together at run time' if route == 'gl' else 'generated at run time'))
-    if route != 'nvn' and gl_out is None:
+    if route != 'nvn' and gl_out is None and vk_out is None:
         say('%s game: no NVN shaders to split or translate; building without a shader library (--no-shaders)'
             % ('OpenGL' if route == 'gl' else 'Vulkan'))
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
@@ -1327,7 +1327,8 @@ def main():
         msl_out = work / 'build' / 'ios' / 'none' / 'b-000000000000'
         msl_out.mkdir(parents=True, exist_ok=True)
         (msl_out / 'inputs.tsv').write_text('game\t%s\n' % tid, encoding='utf-8')
-        if gl_out is None: say('no shader library: the app will run without drawing until its shaders are captured')
+        if gl_out is None and vk_out is None:
+            say('no shader library: the app will run without drawing until its shaders are captured')
     else:
         # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
         # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
