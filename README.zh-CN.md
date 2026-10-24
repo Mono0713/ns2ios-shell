@@ -134,20 +134,32 @@ shell_build.sh ──► nxn_pack.py
 
 壳还是用中性占位 profile 编的，所以游戏的内存布局（`mem_used`、`app_pool` 等）由打包器写进应用的 `dm/env.txt`，宿主启动时读取。
 
-### 着色器在运行时才拼出来的游戏（OpenGL、Vulkan）
+### 着色器在运行时才拼出来的游戏（OpenGL）
 
-OpenGL / Vulkan 游戏的文件里没有着色器：它们是跑起来之后一个个拼出来的（小丑牌用的 LÖVE 在 Lua 里拼），
-`shader_split.py` 没有东西可拆。这类游戏的着色器只能从跑着的游戏里收一次：
+OpenGL 游戏的文件里没有 GLSL：它们是跑起来之后一个个拼出来的（小丑牌的 LÖVE 在 Lua 里拼），`shader_split.py`
+没有东西可拆。
 
-1. 先用 `--no-shaders` 打一个不带着色器库的包装上——它能启动、有音乐、没有画面，这正是抓取需要的状态；
-2. 在应用的 `Documents/env.txt` 里写 `DM_GL_CAPTURE=<一个可写目录>` 后启动游戏，它每编译一个着色器就在那里写一个
-   `<key>.vert` / `<key>.frag`（OpenGL 用这个变量；Vulkan 是 `DM_VK_CAPTURE`）。玩到你想看的场景都出来过；
-3. 用 `--gl-capture <那个目录>` 再打一次包（别的参数不变）。打包器用 `glslangValidator` 和 `spirv-cross` 把
-   GLSL 译成 SPIR-V 再译成 MSL——这两个在 Windows 上也能跑——把每个着色器写成一份 Metal 源码放进 `msl/gl/src`，
-   手机首次启动时编译成库。
+**LÖVE 游戏不用抓取，打一次就能玩。** `dm/gfx/tools/gl_prebuilt.py` 直接跑**游戏自己带的**
+`wrap_GraphicsShader.lua`——LÖVE 把这份 Lua 以文本形式编进 `main`——把它对 `resources/shaders/*.fs` 的拼接原样
+跑一遍，得到的就是游戏运行时生成的那份 GLSL，**逐字节相同**，所以哈希也对得上。小丑牌 19 个 `.fs` → 35 个着色器
+（15 顶点 + 20 片元，含 LÖVE 自己的 4 个内置），与手机上抓取的 35 个 key 完全一致。
 
-苹果自己的 Metal 编译器（`xcrun metal`）只有 Mac 上有，所以包里带的是**源码**而不是编好的库——这和本项目在没有 Xcode
-的机器上打 NVN 游戏时的做法是同一个。包里只有**抓取那一轮跑到的场景**的着色器，打包器会打印拿到了 profile 表里的几个。
+```bash
+python scripts/nxn_pack.py <shell.zip> <小丑牌文件夹> -k prod.keys --tools <工具目录>
+```
+
+两个容易踩的细节，都在脚本里注释了：源文件必须**按字节读**（CRLF 是文本的一部分，按文本读会把 153 行变成 153 处差异），
+以及本机的 EGL 是桌面 GL 3.3（`gles=false`，LÖVE 于是把 GLSL 1 风格的源码包成 GLSL 3）。
+
+如果某个 GL 游戏**不是 LÖVE**，或者它的构建把包装器放进 C++（`main` 里找不到那份 Lua），离线生成会直接报错而不是
+猜——那时才需要抓取：
+
+1. `--no-shaders` 打一个不带着色器库的包并装上（能启动、有音乐、没有画面）；
+2. 应用的 `Documents/env.txt` 里写 `DM_GL_CAPTURE=<可写目录>`，启动游戏，玩到想看的场景都出来过；
+3. `--gl-capture <那个目录>` 重新打包。
+
+苹果的 Metal 编译器（`xcrun metal`）只有 Mac 上有，所以包里带的是**源码**而不是编好的库——和本项目在没有 Xcode 的
+机器上打 NVN 游戏时是同一个做法：手机首次启动统一编译（有进度页），平时按 key 懒加载。
 
 ## 注意事项
 

@@ -14,6 +14,7 @@
 
 + dm/tools/guest_dylib.py                 # writes Frameworks/Guest.framework (pure standard library, any OS)
 + dm/gfx/tools/nometal_run.py             # runs the shader chain without Apple's compiler
++ dm/gfx/tools/gl_prebuilt.py              # a LOVE game's GLSL from its own files: what DM_GL_CAPTURE would have written
 + dm/ios/Sources/dm_shader_prep.m         # first-launch shader compilation page
 + dm/ios/tools/shell_build.sh             # builds the game-free shell
 + dm/ios/DmIOS.entitlements               # increased-memory-limit: the shell is signed ad hoc with it so install tools see it

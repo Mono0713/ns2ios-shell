@@ -1255,9 +1255,21 @@ def main():
     # and draws nothing -- which is exactly the state DM_GL_CAPTURE needs to collect the sources (Documents/env.txt).
     route = graphics_route(gdir, reg)
     gl_out = None
-    if route == 'gl' and a.gl_capture:
+    if route == 'gl':
         gl_out = work / 'build' / 'gl'
-        step_gl_shaders(Path(a.gl_capture).resolve(), gl_out, gdir, tid, a.tools)
+        if a.gl_capture:
+            cap = Path(a.gl_capture).resolve()
+        else:
+            # Nothing to capture: dm/gfx/tools/gl_prebuilt.py runs the game's own LÖVE wrapper (the Lua source a LÖVE
+            # binary carries) over its .fs files, which produces exactly the GLSL the game would have compiled, byte for
+            # byte -- so the package is complete from the game files alone, and a user never runs the game first. The
+            # capture stays as the yardstick: --gl-capture pins one, and the profile's gl_capture.tsv checks this route.
+            cap = work / 'gl_prebuilt'
+            args = [PY, GFX / 'gl_prebuilt.py', game, cap]
+            tab = gdir / 'gl_capture.tsv'
+            if tab.is_file(): args += ['--expect', tab]
+            run(args, log=work / 'logs' / 'gl_prebuilt.log', what='generating the GLSL from the game files')
+        step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
     # A GL game with a capture needs neither: its shaders came from the capture, and there is nothing left to refuse.
     if route != 'nvn' and not a.no_shaders and gl_out is None:
         # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
