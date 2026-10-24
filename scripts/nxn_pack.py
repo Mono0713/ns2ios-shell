@@ -97,6 +97,7 @@ def clean_folders(folder):
 def shell_stamp(shell):
     """What the shell says it can do: dm/shell_info.txt, written by dm/ios/tools/shell_build.sh. A shell from before that
     stamp grew these keys has an empty or partial answer, which is itself the answer."""
+    if not Path(shell).is_file(): return {}     # a capture run has no shell, and needs none
     with zipfile.ZipFile(shell) as z:
         names = [n for n in z.namelist() if n.startswith('Payload/') and n.endswith('/dm/shell_info.txt')]
         if not names: return {}
