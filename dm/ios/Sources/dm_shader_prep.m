@@ -38,12 +38,12 @@ static BOOL is_source(NSString *path) {
 static NSArray<NSString *> *shader_sources(void) {
     NSMutableArray<NSString *> *a = [NSMutableArray array];
     NSString *d = libdir();
-    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil] sortedArrayUsingSelector:@selector(compare):] ?: @[]) {
+    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil] sortedArrayUsingSelector:@selector(compare:)] ?: @[]) {
         NSString *p = [d stringByAppendingPathComponent:f];
         if ([f hasSuffix:@".metallib"] && is_source(p)) [a addObject:p];
     }
     NSString *gs = [msldir() stringByAppendingPathComponent:@"gl/src"];
-    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:gs error:nil] sortedArrayUsingSelector:@selector(compare):] ?: @[])
+    for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:gs error:nil] sortedArrayUsingSelector:@selector(compare:)] ?: @[])
         if ([f hasSuffix:@".metal"]) [a addObject:[gs stringByAppendingPathComponent:f]];
     return a;
 }
