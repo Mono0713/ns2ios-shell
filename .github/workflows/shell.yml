@@ -19,9 +19,9 @@ on:
         options: [upstream, fork]
         default: upstream
       publish:
-        description: 'Publish a release'
+        description: 'Publish a release (leave off to only build the artifacts)'
         type: boolean
-        default: true
+        default: false
   push:
     branches: [main]
     paths:
@@ -485,10 +485,15 @@ jobs:
     # A failed smoke pack blocks publishing, because "the packer died" every time so far has meant the shell and the packer
     # disagree. A smoke job that could not run (no token, data unreachable) is not a failure: the release goes out and the
     # notes say it was not verified, so the shell is never silently trusted and never silently withheld.
+    #
+    # A push does NOT publish: most pushes are mid-debugging, and a release per push buried the real one (23 of them in a
+    # day, the newest somewhere in the middle) and put half-finished builds in front of users. A push still builds the shell
+    # and the tools and runs the smoke pack -- the artifacts are there to download and test with. Publishing is either the
+    # daily schedule (only when upstream actually moved) or a manual run with 'publish' ticked.
     if: |
       always() && needs.tools.result == 'success' && needs.shell.result == 'success'
       && (needs.smoke.result == 'success' || needs.smoke.result == 'skipped')
-      && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish)
+      && (github.event_name == 'schedule' || inputs.publish == true)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
