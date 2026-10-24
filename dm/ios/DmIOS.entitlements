@@ -11,7 +11,7 @@
   install tool has nothing to read the entitlement from and the request is simply lost. That is why the build signs the shell
   with this file instead of leaving it unsigned, and why the tools below keep it when they re-sign:
     AltStore Classic 2.2+, Impactor, Xcode with a personal team   keep it
-    SideStore with a free Apple ID                                needs a one-off fix to the App ID
+    SideStore with a free Apple ID                                needs a one-off fix to the App ID (steps in the README)
     Sideloadly                                                    does not keep it
   Whether it took effect is one line in Documents/log.txt ("boot: memory limit ...").
 

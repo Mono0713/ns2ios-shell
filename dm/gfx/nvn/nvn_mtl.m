@@ -2947,6 +2947,18 @@ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
     if (fd < 0 || fstat(fd, &st) || st.st_size <= 0) { if (fd >= 0) close(fd); if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@", path]}]; return nil; }
     size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
     t_lib_layer = m != MAP_FAILED && memmem(m, len, "render_target_array_index", 25) != NULL;   // the library's functions use the layer: for a vertex library, its output (shader_load)
+#ifdef DM_SHELL
+    // A package made on a machine without Apple's Metal compiler carries its shaders as source inside these .metallib files
+    // (gfx/tools/nometal_run.py). Metal builds a library from a binary only, so hand it the source through the call
+    // dm_shader_prep.m used to compile it once at launch: same call, same arguments, so the system's shader cache answers at
+    // once and the game does not compile anything again. Without this every library is rejected as "Invalid library file".
+    if (m != MAP_FAILED && len >= 4 && memcmp(m, "MTLB", 4) != 0) {
+        NSString *src = [[NSString alloc] initWithBytes:m length:len encoding:NSUTF8StringEncoding];
+        id<MTLLibrary> lib = src ? [g_dev newLibraryWithSource:src options:nil error:err] : nil;
+        if (!lib && err) *err = [NSError errorWithDomain:@"dm" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"not a compiled library and not readable source: %@", path]}];
+        return lib;
+    }
+#endif
     if (m == MAP_FAILED) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"mmap failed %@", path]}]; return nil; }
     dispatch_data_t d = dispatch_data_create(m, len, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(m, len); });
     return [g_dev newLibraryWithData:d error:err];

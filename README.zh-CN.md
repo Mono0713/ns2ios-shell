@@ -146,8 +146,22 @@ shell_build.sh ──► nxn_pack.py
   |---|---|
   | AltStore Classic 2.2+、Impactor、Xcode + 个人团队 | 保留 |
   | LiveContainer | 保留（2026-10-23 实测：iPhone 16 Pro Max 上 `6140 MB`） |
-  | SideStore + 免费 Apple ID | 保留，但需要对 App ID 做一次性修正 |
+  | SideStore + 免费 Apple ID | 保留，但需要对 App ID 做一次性修正（见下） |
   | Sideloadly | 不保留（等于没加，游戏仍在 3.4 GB 上限下跑） |
+
+  **SideStore + 免费 Apple ID 怎么修**（一次性，之后每周刷新都保留）：免费账号本来就能拿到这个能力，但 SideStore 的
+  旧构建不把它写进 App ID（[SideStore#1616](https://github.com/SideStore/SideStore/issues/1616)），装上过程是静默的——
+  不报错，只是内存还是 3.3 GB。修一次即可：
+
+  1. 先照常用 SideStore 装上这个 IPA（App ID 此时已注册到你的账号下，entitlement 尚未生效）；
+  2. 用同一个 SideStore、**同一个 Apple ID** 装上 [GetMoreRam](https://github.com/hugeBlack/GetMoreRam)，打开后
+     Settings 登录（要过二次验证），进 App IDs → Refresh，找到 `org.nxnative.<title ID>`，点
+     **Add Increased Memory Limit**。只加这一个：Extended Virtual Addressing 是付费账号专属，壳也不需要。
+     列表里找不到这个 App ID，先查 Apple ID 是否登的一致；
+  3. 回 SideStore 重装一次这个 IPA——**直接覆盖安装，不要先删**（删了会丢存档）。新描述文件里就带这个 entitlement 了。
+
+  另一个办法是换用带 [SideSign PR #4](https://github.com/SideStore/SideSign/pull/4)（2026-10-05）修复的 SideStore
+  新构建，装上即生效，不用手动修。嫌麻烦也可以直接用 AltStore Classic 2.2+ 或 LiveContainer，它们无条件保留。
 
   判断是否生效：看 `Documents/log.txt` 的启动行 `boot: memory limit N MB`——约 3,375 MB 表示没生效，6–8 GB 表示生效。
   **任何游戏都能看出来**，不需要拿大作试：这一行说的是进程能拿多少内存，跟游戏要用多少无关。游戏跑起来之后，

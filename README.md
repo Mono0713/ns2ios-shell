@@ -162,8 +162,26 @@ written by the packer into the app's `dm/env.txt` and read by the host at startu
   |---|---|
   | AltStore Classic 2.2+, Impactor, Xcode with a personal team | yes |
   | LiveContainer | yes (measured 2026-10-23: `6140 MB` on an iPhone 16 Pro Max) |
-  | SideStore with a free Apple ID | yes, after a one-off fix to the App ID |
+  | SideStore with a free Apple ID | yes, after a one-off fix to the App ID (below) |
   | Sideloadly | no (the game runs under the 3.4 GB cap as before) |
+
+  **How the SideStore + free Apple ID fix works** (one-off; every weekly refresh keeps it afterwards): a free account
+  can have this capability, but older SideStore builds never write it into the App ID
+  ([SideStore#1616](https://github.com/SideStore/SideStore/issues/1616)) — the install succeeds silently, no error,
+  the memory just stays at 3.3 GB. Fix it once:
+
+  1. Install the IPA with SideStore as usual (the App ID is now registered under your account, without the entitlement);
+  2. With the same SideStore and the **same Apple ID**, install
+     [GetMoreRam](https://github.com/hugeBlack/GetMoreRam), sign in under Settings (two-factor applies), open
+     App IDs → Refresh, find `org.nxnative.<title ID>` and tap **Add Increased Memory Limit**. That one only: Extended
+     Virtual Addressing is paid-account-only and the shell does not need it. If the App ID is not in the list, check
+     that the Apple ID is the same one;
+  3. Reinstall the IPA in SideStore — **over the top, do not delete it first** (deleting loses the saves). The fresh
+     profile now carries the entitlement.
+
+  Alternatively, use a SideStore build with the [SideSign PR #4](https://github.com/SideStore/SideSign/pull/4) fix
+  (2026-10-05) — it works out of the box. Or skip the whole thing with AltStore Classic 2.2+ or LiveContainer, which
+  keep it unconditionally.
 
   To tell: the boot line in `Documents/log.txt`, `boot: memory limit N MB` — about 3,375 MB means it did not take effect,
   6–8 GB means it did. **Any game shows it**; there is no need for a big one, because the line is about what the process may
