@@ -303,7 +303,7 @@ def tid_sidecar(xci):
     return xci.with_name(xci.name + '.tid')
 
 
-def probe_xci(nx, keys, xci, out):
+def probe_xci(nx, keys, xci, out, allow_damaged=False):
     """The title ID of a cartridge dump, read by nx_extract.
 
     An XCI cannot be identified the way an NSP is: a dump carries no ticket (the keys sit in each NCA's own key area), and an
@@ -312,7 +312,7 @@ def probe_xci(nx, keys, xci, out):
     twice. Returns the title ID, or None.
     """
     out.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run([str(nx), str(keys), str(xci), '-', str(out)],
+    r = subprocess.run([str(nx), str(keys), str(xci), '-', str(out)] + (['--allow-damaged'] if allow_damaged else []),
                        capture_output=True, text=True, encoding='utf-8', errors='replace')
     text = (r.stdout or '') + (r.stderr or '')
     (out / 'probe.log').write_text(text, encoding='utf-8', errors='replace')
@@ -467,7 +467,7 @@ def build_nx_extract(dotnet, work, tools_dir=None):
     return exe
 
 
-def step_extract(nx, keys, folder, picks, work, versions):
+def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
     ex = work / 'extract'
     ex.mkdir(parents=True, exist_ok=True)
     dirs = {}
@@ -477,7 +477,7 @@ def step_extract(nx, keys, folder, picks, work, versions):
         base, upd = picks[ver]
         tmp = ex / (ver + '.partial')
         shutil.rmtree(tmp, ignore_errors=True)
-        run([nx, keys, base, upd if upd else '-', tmp], log=work / 'logs' / ('extract_%s.log' % ver),
+        run([nx, keys, base, upd if upd else '-', tmp] + (['--allow-damaged'] if allow_damaged else []), log=work / 'logs' / ('extract_%s.log' % ver),
             what='extracting %s (%s)' % (ver, base.name))
         tmp.replace(dst)
         dirs[ver] = dst
@@ -1002,6 +1002,8 @@ def main():
     ap.add_argument('-p', '--package', default='', help='version to pack (default: the newest one in the folder)')
     ap.add_argument('--stop-after', default='', choices=['', 'extract', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
     ap.add_argument('--force', action='store_true', help='redo steps whose output already exists')
+    ap.add_argument('--allow-damaged', action='store_true', help='read files that fail their hash check as they are: a dump with a few bad files (a couple of music tracks) still packs')
+    ap.add_argument('--diagnose', action='store_true', help='extract, rewrite and build the Mac host, then stop: for running the game under lldb (macOS)')
     ap.add_argument('--capture-gl', default='', help='boot the game in the Mac host and capture the GLSL it assembles at run time, then stop (macOS, Apple silicon)')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
@@ -1055,7 +1057,7 @@ def main():
             # (work the pack needs anyway) and take the title ID from nx_extract's report.
             probed = folder / (xcis[0].stem + '.probe')
             nx = build_nx_extract(dotnet, probed, tools_dir)
-            tid = probe_xci(nx, keys, xcis[0], probed / 'extract')
+            tid = probe_xci(nx, keys, xcis[0], probed / 'extract', a.allow_damaged)
             if tid:
                 apps = {tid: {'base': xcis[0], 'updates': {}, 'dlc': [], 'all': [('base', 'v0', xcis[0])]}}
     if not apps:
@@ -1123,7 +1125,7 @@ def main():
     say('work folder: %s' % work)
 
     nx = nx or build_nx_extract(dotnet, work, tools_dir)
-    dirs = step_extract(nx, keys, folder, picks, work, versions)
+    dirs = step_extract(nx, keys, folder, picks, work, versions, a.allow_damaged)
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
     derived_dir = None
