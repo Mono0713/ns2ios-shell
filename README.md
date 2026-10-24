@@ -149,23 +149,22 @@ Two things make one shell work for every game, both moved from compile time to r
 The shell is also compiled against a neutral placeholder profile, so the game's memory layout (`mem_used`, `app_pool`, …) is
 written by the packer into the app's `dm/env.txt` and read by the host at startup.
 
-### Games that build their shaders at run time (OpenGL, Vulkan)
+### Games that build their shaders at run time
 
-A GL or Vulkan game keeps no shaders in its files: it assembles each one while it runs (Balatro's LÖVE does it in Lua), so
-`shader_split.py` has nothing to split. The shaders have to be collected from a running game once:
+The packer works from the game's own files, and two kinds of game keep their shaders somewhere else.
 
-1. build a package without a library -- `--no-shaders` -- and install it. It boots, plays its music and draws nothing, which
-   is the state the capture needs;
-2. put `DM_GL_CAPTURE=<a writable folder>` in the app's `Documents/env.txt` and start the game; it writes every shader it
-   compiles there as `<key>.vert` / `<key>.frag` (OpenGL; Vulkan uses `DM_VK_CAPTURE`). Play far enough that the scenes you
-   care about have drawn;
-3. pack again with `--gl-capture <that folder>` (nothing else changes). The packer translates GLSL → SPIR-V → MSL with
-   `glslangValidator` and `spirv-cross`, which run on Windows too, and writes one Metal source per shader into `msl/gl/src`;
-   the phone compiles them on first launch.
+**A LÖVE game needs no capture.** LÖVE carries its shader wrapper as plain Lua inside the binary, so
+`dm/gfx/tools/gl_prebuilt.py` runs that wrapper instead of the game: feed it the `resources/shaders/*.fs` files and it
+produces the exact GLSL the game would compile at run time. Balatro's 19 `.fs` files become 35 shaders, and all 35 hashes
+match the ones the game computes. `nxn_pack.py` does this by itself — nothing to install, nothing to run first.
 
-Apple's own Metal compiler (`xcrun metal`) only exists on a Mac, so the package carries sources and not a compiled library —
-the same thing this project already does for NVN shaders when the packing computer has no Xcode. Only the shaders of the
-scenes the capture run reached are in the package; the packer prints how many of the profile's list it got.
+**Two games need one capture: Super Mario Galaxy 1 and 2.** Their shaders are not programs in a file; they are what a
+GameCube/Wii GX pipeline configuration *becomes*, computed inside Hagi (a C++ shader compiler compiled to machine code) from
+`pipelineDB.pip`. There is nothing readable to run on a PC, and rewriting that compiler is a different project. Collecting
+them takes about a minute per game.
+
+Why, and the three steps: **[docs/CAPTURE.md](docs/CAPTURE.md)** ([中文](docs/CAPTURE.zh-CN.md)). Everything else on the
+supported list — all 47 NVN games, Hades and its 74 SPIR-V files, Balatro — packs into something playable in one run.
 
 ## Notes and caveats
 

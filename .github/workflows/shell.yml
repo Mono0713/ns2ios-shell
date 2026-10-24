@@ -517,60 +517,104 @@ jobs:
           done
           (cd flat && zip -q ../dist/nxnative-windows-tools.zip ./*.exe)
 
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the tags, so "what changed since the last release" can be answered
+          clean: false            # the shell and the tools were downloaded above; a clean checkout would delete them
+
       - name: Write the notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
         run: |
-          cat > notes.md <<'EOF'
+          set -euo pipefail
+          # What changed since the last release, from the commit subjects between that tag and this build. Written by hand
+          # it goes stale, and a scheduled build has nobody to write it at all -- which is when a reader most needs to know
+          # that the only thing that happened is "upstream moved".
+          PREV=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          CHANGES="- (this is the first release)"
+          if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/$PREV" >/dev/null 2>&1; then
+            CHANGES=$(git log --no-merges --pretty='- %s' "$PREV"..HEAD 2>/dev/null | head -30 || true)
+            if [ -z "$CHANGES" ]; then CHANGES="- (no commits since $PREV)"; fi
+          fi
+          AUTO_EN=""; AUTO_ZH=""
+          if [ "$EVENT" = "schedule" ]; then
+            AUTO_EN="Published automatically: the daily schedule found a new upstream commit and rebuilt from it."
+            AUTO_ZH="本版为自动发布：定时任务发现上游有新提交后自动重建。"
+          fi
+          # English first, then a separator, then Chinese -- interleaving them segment by segment makes both hard to read.
+          {
+            echo '## What changed since the last release'; echo
+            echo "$CHANGES"; echo
+            if [ -n "$AUTO_EN" ]; then echo "$AUTO_EN"; echo; fi
+          } > en.md
+          {
+            echo '## 本版变更（对比上一版）'; echo
+            echo "$CHANGES"; echo
+            if [ -n "$AUTO_ZH" ]; then echo "$AUTO_ZH"; echo; fi
+          } > zh.md
+
+          cat >> en.md <<'EOF'
           The game-free shell, plus the executables a packing machine needs. **Nothing here contains game content.**
 
-          不含任何游戏内容的「壳」，以及打包机器需要的可执行文件。**这里没有任何游戏内容。**
+          ## Files
 
-          ## Files / 文件
-
-          | File / 文件 | What it is / 说明 |
+          | File | What it is |
           |---|---|
-          | `<version>.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. <br> 壳：不含游戏内容的未签名 iOS 应用，把自己的游戏文件打进去。 |
-          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe`, `glslangValidator.exe` — self-contained; no .NET SDK or C++ toolchain needed. <br> 四个自包含可执行文件，无需 .NET SDK 或 C++ 工具链。 |
+          | `<version>.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe`, `glslangValidator.exe` — self-contained; no .NET SDK or C++ toolchain needed. |
 
-          ## Use it / 用法
+          ## Use it
 
-          1. Take the **whole repository** (`git clone` or the source zip) — the packer needs `dm/` beside `scripts/`; the
-             script alone cannot work. Unpack the tools too, e.g. to `D:/nxn-tools`.
-             <br> 下载**完整仓库**（`git clone` 或源码压缩包）——打包器需要 `scripts/` 旁边的 `dm/`，只拷那个脚本跑不了。
-             另外把工具解压到例如 `D:/nxn-tools`。
-          2. Put one game's files in a folder. **File names do not matter** — the game is identified from inside the package,
-             so any naming scheme works. NSP and XCI both work. Updates and DLC can go in the same folder; the newest
-             version present is the one packed. <br> 把一个游戏的文件放进目录。**文件名不重要**——游戏是从包内容里认出来的，
-             随便怎么命名都行。NSP 和 XCI 都支持；更新包和 DLC 可以放进同一个目录，会打包目录里最新的那个版本。
-          3. `cd` into the repository, then
-             `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D:/nxn-tools`
-             <br> 进仓库目录，然后执行上面这条命令。
-          4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer). The first launch compiles the shaders once.
-             <br> 用自签工具装上它产出的 IPA；首次启动会编译一遍着色器。
+          1. Take the **whole repository** (`git clone` or the source zip) — the packer needs `dm/` beside `scripts/`, so the script alone cannot work. Unpack the tools too, e.g. to `D:/nxn-tools`.
+          2. Put one game's files in a folder. **File names do not matter** — the game is identified from inside the package, so any naming scheme works. NSP and XCI both work, and an update or DLC can sit in the same folder; the newest version present is the one packed.
+          3. `cd` into the repository, then `python scripts/nxn_pack.py <version>.zip <game folder> -k <prod.keys> --tools D:/nxn-tools`
+          4. Sideload the IPA it writes (SideStore, Sideloadly, LiveContainer) and launch it once to compile the shaders.
 
-          The temporary files (the extraction, the rewritten modules, the split shaders, the assembled app tree) are deleted
-          once the IPA exists — together they are several times the size of the game. Only a few-KB log per step stays, in
-          `<title ID>_pack/logs/`. `--keep-work` keeps the whole tree for a faster repack of the same game; `--clean <game folder>`
-          clears out an earlier run.
-          <br> IPA 写好后临时文件会自动删除（解包、改写后的模块、拆出的着色器、拼装好的 app 树，加起来是游戏体积的好几倍），
-          只留每步几 KB 的日志在 `<title ID>_pack/logs/`。`--keep-work` 保留整棵树以便快速重打包；`--clean <游戏文件夹>`
-          单独清掉之前留下的。
+          Temporary files (the extraction, the rewritten modules, the split shaders, the assembled app tree) are removed once the IPA exists — together they are several times the size of the game. Only a few-KB log per step stays, in `<title ID>_pack/logs/`. `--keep-work` keeps the whole tree for a faster repack; `--clean <game folder>` clears out an earlier run.
 
           The packing machine needs Python 3.9+ with `lz4 capstone fonttools backports.zstd pillow`.
-          打包机器需要 Python 3.9+ 以及上述几个包。
 
-          Full instructions and the game list: [README.zh-CN.md](https://github.com/xinerqu/ns2ios-shell/blob/main/README.zh-CN.md)
-          · [README.md](https://github.com/xinerqu/ns2ios-shell/blob/main/README.md)
+          **Super Mario Galaxy 1 and 2 are the only games that need one capture before they play**; everything else packs into something playable in one run. See [docs/CAPTURE.md](https://github.com/xinerqu/ns2ios-shell/blob/main/docs/CAPTURE.md).
 
-          ## Credits / 致谢
+          Full instructions and the game list: [README.md](https://github.com/xinerqu/ns2ios-shell/blob/main/README.md)
 
-          Built on [nxnative](https://github.com/seedds/nxnative) by **seedds** (MIT) — the rewriter, the translation chain, the
-          host and the game profiles are its work. The native-execution approach and the shell route come from
-          [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) by **jhaizhou-ops** (MIT), which nxnative's generic parts
-          started from; both projects borrow from each other. Two separate projects by two different authors.
+          ## Credits
 
-          基于 **seedds** 的 nxnative（MIT）——改写器、翻译链、宿主与游戏 profile 都是它的成果。原生执行方案与「壳」路线来自
-          **jhaizhou-ops** 的 d2r-mobile（MIT），nxnative 的通用部分即从其起步；两个项目互相借鉴。它们是两个独立项目、两位不同作者。
+          Built on [nxnative](https://github.com/seedds/nxnative) by **seedds** (MIT) — the rewriter, the translation chain, the host and the game profiles are its work. The native-execution approach and the shell route come from [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) by **jhaizhou-ops** (MIT), which nxnative's generic parts started from; both projects borrow from each other. Two separate projects by two different authors.
           EOF
+
+          cat >> zh.md <<'EOF'
+          不含任何游戏内容的「壳」，以及打包机器需要的可执行文件。**这里没有任何游戏内容。**
+
+          ## 文件
+
+          | 文件 | 说明 |
+          |---|---|
+          | `<version>.zip` | 壳：不含游戏内容的未签名 iOS 应用，把自己的游戏文件打进去。 |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`、`dmsh_xlate.exe`、`spirv-cross.exe`、`glslangValidator.exe`——自包含，不需要 .NET SDK 或 C++ 工具链。 |
+
+          ## 用法
+
+          1. 下载**完整仓库**（`git clone` 或源码压缩包）——打包器需要 `scripts/` 旁边的 `dm/`，只拷那个脚本跑不了。工具也解压出来，比如放到 `D:/nxn-tools`。
+          2. 把一个游戏的文件放进一个目录。**文件名不重要**——游戏是从包内容里认出来的，随便怎么命名都行。NSP 和 XCI 都支持，更新包和 DLC 可以放进同一个目录；会打包目录里最新的那个版本。
+          3. 进仓库目录，执行 `python scripts/nxn_pack.py <version>.zip <游戏文件夹> -k <prod.keys> --tools D:/nxn-tools`
+          4. 用自签工具（SideStore、Sideloadly、LiveContainer）装上它产出的 IPA，首次启动会编译一遍着色器。
+
+          IPA 写好后临时文件会自动删除（解包、改写后的模块、拆出的着色器、拼装好的 app 树，加起来是游戏体积的好几倍），只留每步几 KB 的日志在 `<title ID>_pack/logs/`。`--keep-work` 保留整棵树以便快速重打包；`--clean <游戏文件夹>` 单独清掉之前留下的。
+
+          打包机器需要 Python 3.9+ 以及 `lz4 capstone fonttools backports.zstd pillow`。
+
+          **只有超级马里奥银河 1、2 需要在玩之前抓取一次**，其余游戏打一次就是成品。详见 [docs/CAPTURE.zh-CN.md](https://github.com/xinerqu/ns2ios-shell/blob/main/docs/CAPTURE.zh-CN.md)。
+
+          完整说明与支持列表：[README.zh-CN.md](https://github.com/xinerqu/ns2ios-shell/blob/main/README.zh-CN.md)
+
+          ## 致谢
+
+          基于 **seedds** 的 [nxnative](https://github.com/seedds/nxnative)（MIT）——改写器、翻译链、宿主与游戏 profile 都是它的成果。原生执行方案与「壳」路线来自 **jhaizhou-ops** 的 [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)（MIT），nxnative 的通用部分即从其起步；两个项目互相借鉴。它们是两个独立项目、两位不同作者。
+          EOF
+
+          { cat en.md; echo; echo '---'; echo; cat zh.md; } > notes.md
 
       - name: Publish
         env:
