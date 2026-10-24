@@ -35,6 +35,7 @@ def wanted(rel, keep):
     if os.path.basename(rel) in SKIP_NAMES or rel.endswith(('.pyc', '.old')): return False
     if '__pycache__' in rel or '/.git' in rel: return False
     if '/obj/' in rel or '/bin/' in rel: return False          # dotnet build output
+    if rel.endswith('.rej'): return False                     # a git apply leftover, never a source file
     return not (rel in keep or any(rel.startswith(k + '/') for k in keep))
 
 
