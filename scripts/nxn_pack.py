@@ -725,9 +725,34 @@ def step_rewrite(exe_dir, mods, out, work, force=False):
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
 
 
+def graphics_route(prof_dir):
+    """Which shader route this game takes, from what its profile carries.
+
+    NVN games hold their shaders in the game files, so shader_split.py can read them. A Vulkan game may generate its SPIR-V
+    at run time, and a GL game (Balatro: LÖVE puts each shader together in Lua) holds none at all -- upstream's profiles name
+    those with vk_capture.tsv / gl_capture.tsv, the keys its Mac run captured. Those two routes need that capture and
+    vk_shaders.py / gl_shaders.py; upstream runs them after booting the game on a Mac.
+    """
+    if (prof_dir / 'vk_capture.tsv').is_file(): return 'vulkan'
+    if (prof_dir / 'gl_capture.tsv').is_file(): return 'gl'
+    return 'nvn'
+
+
+def need_shaders(prof_dir, what):
+    route = graphics_route(prof_dir)
+    if route == 'nvn': return
+    die('%s is a %s game: its shaders are %s, so no game file holds them and shader_split.py cannot read them.\n'
+        '    Upstream captures them by booting the game on a Mac (dm/gfx/tools/%s_shaders.py translates the capture).\n'
+        '    This packer has no such step yet, so it cannot pack %s on Windows.'
+        % (what, 'Vulkan' if route == 'vulkan' else 'OpenGL',
+           'generated at run time' if route == 'vulkan' else 'put together at run time',
+           'vk' if route == 'vulkan' else 'gl', what))
+
+
 def step_shaders(game, prof_dir, tables, work, tid, force=False):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
+    need_shaders(prof_dir, 'this game')
     pkg, tb = work / 'shader' / 'pkg', work / 'shader' / 'tables'
     if not force and (pkg / 'index.tsv').is_file() and all((tb / n).is_file() for n in tables):
         say('shader split already done'); return pkg, tb
