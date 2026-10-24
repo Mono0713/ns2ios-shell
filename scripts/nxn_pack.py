@@ -986,6 +986,7 @@ def main():
     ap.add_argument('-p', '--package', default='', help='version to pack (default: the newest one in the folder)')
     ap.add_argument('--stop-after', default='', choices=['', 'extract', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
     ap.add_argument('--force', action='store_true', help='redo steps whose output already exists')
+    ap.add_argument('--no-shaders', action='store_true', help='a GL/Vulkan game: build it without a shader library, so it boots and captures its own shaders (no picture until they are packed in)')
     ap.add_argument('--allow-damaged', action='store_true', help='read files that fail their hash check as they are: a dump with a few bad files (a couple of music tracks) still packs')
     ap.add_argument('--diagnose', action='store_true', help='extract, rewrite and build the Mac host, then stop: for running the game under lldb (macOS)')
     ap.add_argument('--capture-gl', default='', help='boot the game in the Mac host and capture the GLSL it assembles at run time, then stop (macOS, Apple silicon)')
@@ -1113,6 +1114,7 @@ def main():
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
     derived_dir = None
+    reg = gdir
     bad, had_row = check_build_ids(game, rows, pkg, mods)
     if not bad:
         say('build IDs match the profile for %s' % pkg)
@@ -1126,7 +1128,7 @@ def main():
             disp = nacp.version(game / 'control.nacp') or '?'
         except Exception:
             disp = '?'
-        reg = gdir
+        reg = gdir          # the registered profile, for anything the derived one cannot answer (graphics_route)
         derived = work / 'profile' / tid
         derive_profile(reg, tid, pkg, game, mods, derived, disp)
         os.environ['DM_GAMES_DIR'] = os.pathsep.join(
@@ -1169,8 +1171,16 @@ def main():
     # Mac. Until this packer has that capture route, such a game is built without a shader library -- it boots, plays its music
     # and draws nothing -- which is exactly the state DM_GL_CAPTURE needs to collect the sources (Documents/env.txt).
     route = graphics_route(gdir, reg)
+    if route != 'nvn' and not a.no_shaders:
+        # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
+        # would only see a black screen with no explanation. The flag exists for the capture run that produces the shaders.
+        die('%s game: its shaders are %s, so no game file holds them; upstream captures them by booting the game on a Mac.\n'
+            '    Without that capture this packer cannot make a playable package.\n'
+            '    To build one anyway -- it boots and plays its music but draws nothing, which is what a capture run needs --\n'
+            '    add --no-shaders, then run it on the phone with Documents/env.txt holding DM_GL_CAPTURE=<writable dir>.'
+            % ('this', 'put together at run time' if route == 'gl' else 'generated at run time'))
     if route != 'nvn':
-        say('%s game: no NVN shaders to split or translate; building without a shader library'
+        say('%s game: no NVN shaders to split or translate; building without a shader library (--no-shaders)'
             % ('OpenGL' if route == 'gl' else 'Vulkan'))
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
