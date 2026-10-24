@@ -68,10 +68,21 @@ def build(out, names):
         hdr = dict(l[2:].split() for l in open(os.path.join(out, n + '.fixups.tsv')) if l.startswith('# '))
         te, po = int(hdr['TEXT_END'], 16), int(hdr['PATCH_OFF'], 16)
         img = open(os.path.join(out, n + '.patched.bin'), 'rb').read(); sz = len(img); a, end = r16(te), r16(sz)
-        assert po % PG == 0 and a <= po <= end, (n, hex(te), hex(po), hex(sz))
         cut = lambda lo, hi: img[lo:min(hi, sz)].ljust(hi - lo, b'\0')
-        text += [('__dm%sx0' % n, cut(0, a)), ('__dm%sx1' % n, cut(po, end))]
-        wsegs.append(('__DM%sW' % n, cut(a, po)))
+        if po < 0:
+            # Patch area in front of the base (patch_nso.py FAR, when an appended area would start beyond 112 MB): the file is
+            # the image up to FILE_IMAGE_LEN followed by the patch area, and the loader places that area -PATCH_OFF bytes before
+            # the base. So the three pieces are the image's first part, the rest of the image, and the patch area -- which is
+            # padded to a page here because the loader requires every piece's size to be 16 KB aligned.
+            fil = int(hdr['FILE_IMAGE_LEN'], 16)
+            assert a <= fil <= sz, (n, hex(a), hex(fil), hex(sz))
+            text += [('__dm%sx0' % n, cut(0, a))]
+            wsegs.append(('__DM%sW' % n, cut(a, fil)))
+            text += [('__dm%sx1' % n, cut(fil, end))]
+        else:
+            assert po % PG == 0 and a <= po <= end, (n, hex(te), hex(po), hex(sz))
+            text += [('__dm%sx0' % n, cut(0, a)), ('__dm%sx1' % n, cut(po, end))]
+            wsegs.append(('__DM%sW' % n, cut(a, po)))
     off = PG; tsects = []; body = b''          # 第一页：文件头与装载命令 | first page: file header and load commands
     for sn, b in text:
         tsects.append((sn, off, len(b), 0x80000400)); body += b; off += len(b)   # 纯指令节 | pure instructions section
