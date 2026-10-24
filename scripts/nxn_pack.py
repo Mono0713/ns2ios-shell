@@ -681,9 +681,10 @@ def fill_mem_used(patched, mods, gdir, rows):
     value written, or None when the profile already has enough.
     """
     if one(rows, 'sys_resource'): return None                # with a system resource the heap is sized by the alias split
-    total = sum((patched / m).stat().st_size for m in mods if (patched / m).is_file())
+    total = sum(q.stat().st_size for q in patched.glob('*.patched.bin'))   # the rewritten modules, as step_rewrite names them
     have = one(rows, 'mem_used')
     if have and int(have, 0) >= total: return None
+    if not total: return None                                # nothing rewritten yet
     if total <= 0x4000000 and not have: return None          # the default covers it
     value = '0x%X' % ((total + 0xFFFFFF) & ~0xFFFFFF)        # a 16 MB granule above the measured size
     lines = (gdir / 'game.tsv').read_text(encoding='utf-8').splitlines()
