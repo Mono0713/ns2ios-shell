@@ -413,6 +413,11 @@ def scan_nsps(folder):
             if not meta['version']:
                 nv = name_ver(p)          # ... and the display version is only in the file name
                 if nv: ver = nv
+            if kind == 'update' and ver in ('', 'v0'):
+                # An update is never version 0. Without a name or CNMT version it would collide with the base's "v0",
+                # the pair would look like one file and the base would be packed as if no update existed -- which is what
+                # happened to Balatro's update NSP. "v?" sorts above v0, so the update is still the newest to pack.
+                ver = 'v?'
         else:
             # an XCI, or an NSP without the metadata XML: fall back to the name, then to what an earlier run recorded, and
             # to the title ID's low bits for the kind
