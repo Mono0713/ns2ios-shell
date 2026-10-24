@@ -16,7 +16,8 @@
 #       Unity 2022 (Ace Attorney Investigations Collection, 2022.3) keeps the 0x60 header in the program code, but the blob also holds parameter entries, which unity_code_blobs leaves out
 #   · MSHD (MercurySteam, Metroid Dread system/shd/*.bshdat): each stage = a control section (+0x20 = control length; sometimes a small compiler option table follows) + the code area starting at the next code header;
 #       NV assembly text follows the first 0x880 bytes of the control section, and SASS disassembly text follows the code area. All 478 files hold "vertex, pixel" in pairs (1, 2 or 4 pairs), paired two by two in order
-#   · G2S (Koei Tecmo's KTGL, Hyrule Warriors: Age of Calamity): GLSLC compiler outputs inside the IDRK entries of the RDB data files (zlib in chunks), see idrk_shaders
+#   · G2S (Koei Tecmo's KTGL, Hyrule Warriors: Age of Calamity): GLSLC compiler outputs inside the IDRK entries of the RDB data files (zlib in chunks), see idrk_shaders;
+#       ROMANCE OF THE THREE KINGDOMS 8 REMAKE's newer RDB keeps them in .fdata files (a PDRK header, then IDRK entries of zlib or LZ4 chunks)
 #   · SPKG (the older KTGL of Fire Emblem: Three Houses): shader packages of G2S containers, loose and inside the LINKDATA archive DATA0.bin / DATA1.bin, see kt_shaders and linkdata_jobs
 #   · SDF (Capcom's RE Engine, Monster Hunter Rise): shader definitions inside the PAK archives (KPKA, entries zstd / deflate compressed), only the newest copy of each path, see kpka_jobs and sdf_shaders
 #   · Trinity packs (Game Freak, Pokémon Legends: Z-A): BNSH inside the files of arc/data.trpfs (Oodle Mermaid, decoded by the game's own decoder in the Mac host), see trpfs_jobs and trinity_shaders
@@ -24,6 +25,7 @@
 #   · BEA (NintendoWare Bezel Engine archives, Big Brain Academy: Brain vs. Brain): BNSH in the .bfsha entries of the archives (zstd entries), see bea_members
 #   · MGFX (MonoGame effects, Celeste): the effects in its XNB files and SpriteBatch's in main, each shader a control section and a code area, see mgfx_effect
 #   · dvdbnd (FromSoftware, Dark Souls Remastered): GLSLC outputs in the BND3 archives (DCX zlib entries) of the .bdt files, indexed by the .bhd5 beside each, see bhd5_entries and bdt_shaders
+#   · data.arc (Super Smash Bros. Ultimate, smash_arc.py): GLSLC outputs in its SSBH shader databases and BNSH in its effects and UI layouts, each of its current files (zstd) scanned, see smash_arc_jobs
 # Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
 #   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
 # Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
@@ -199,10 +201,12 @@ def glslc_shaders(d, label, need=True):
     if not out and need: red(f'{label}: no GLSLC output')
     return out
 
-IDRK, ZCHUNKED = b'IDRK0000', 0x100000
+IDRK, PDRK = b'IDRK0000', b'PDRK0000'
 def idrk_entries(d):
     """Koei Tecmo RDB data files (Hyrule Warriors: Age of Calamity: asset/*.rdb.bin*, asset/data/*.file) are a run of IDRK entries: 'IDRK0000', u64 entry length, u64 stored length, u64 length,
     u32 0, u32 file KTID, u32 type KTID, u32 flags, a few parameter words, and the stored data at the end of the entry. Entries follow each other directly, some after padding (to 64 KB).
+    ROMANCE OF THE THREE KINGDOMS 8 REMAKE's RDB (0002/root.rdb and system.rdb, indexed by .rdx) keeps the entries in .fdata files named by KTID, each starting with 'PDRK0000' and u64 0x10
+    (its length), and in data/*.file as before; its entries have u32 1 or 0 where Age of Calamity's have 0, and pad to 16 bytes.
     → (start of the stored data, its end, flags) for each entry"""
     o = 0
     while o + 0x30 <= len(d):
@@ -214,15 +218,25 @@ def idrk_entries(d):
         o += esz
 
 def idrk_data(d, a, b, flags, head=None):
-    """An entry's data: flag 0x100000 = zlib in chunks (u32 stored length + a zlib stream each, a zero length ends; Age of Calamity's chunks inflate to at most 16 KB). head: only the first bytes"""
+    """An entry's data. Flag 0x100000 alone = zlib in chunks (Age of Calamity): u32 stored length + a zlib stream each, a zero length ends; the chunks inflate to at most 16 KB.
+    Flag 0x400000 = chunks of another form (ROMANCE OF THE THREE KINGDOMS 8 REMAKE): u16 stored length, 8 bytes that the reader does not need, the stream; a zero length ends, and each chunk
+    inflates to at most 16 KB (0x4000, which LZ4 is given as the most). The streams are LZ4 blocks when 0x100000 is set too, zlib otherwise: of that game's 51,655 entries, 49,620 have flags
+    0x500000, 2,026 have 0x400000 and 9 are stored (0); all of them inflate to the length in their header. Anything else is stored. head: only the first bytes"""
     import zlib
-    if not flags & ZCHUNKED: return d[a:min(b, a + head) if head else b]
+    new, lz4b = flags & 0x400000, flags & 0x500000 == 0x500000
+    if not flags & 0x500000: return d[a:min(b, a + head) if head else b]
     out = []
     while a + 4 <= b:
-        cs = struct.unpack_from('<I', d, a)[0]; a += 4
+        if new: cs = struct.unpack_from('<H', d, a)[0]; a += 10
+        else: cs = struct.unpack_from('<I', d, a)[0]; a += 4
         if not cs: break
-        if head: return zlib.decompressobj().decompress(d[a:a + min(cs, 1024)], head)
-        out.append(zlib.decompress(d[a:a + cs])); a += cs
+        if lz4b:
+            import lz4.block
+            r = lz4.block.decompress(d[a:a + cs], uncompressed_size=0x4000)
+            if head: return r[:head]
+        elif head: return zlib.decompressobj().decompress(d[a:a + min(cs, 1024)], head)
+        else: r = zlib.decompress(d[a:a + cs])
+        out.append(r); a += cs
     return b''.join(out)
 
 def idrk_shaders(path, label, out):
@@ -683,6 +697,35 @@ def trpfs_jobs(files, parts=64):
         taken |= {p, p[:-1] + 'd'}
     return jobs, taken
 
+def smash_arc_jobs(files, parts=128):
+    """Super Smash Bros. Ultimate's data.arc (17.6 GB, smash_arc.py): the game's current files, in ranges of about equal stored size. → ([(path, rel, entries), …], the paths taken)"""
+    import smash_arc
+    jobs, taken = [], set()
+    for p, r in files:
+        if not p.endswith('.arc'): continue   # only .arc files are opened (MT Framework's ARC archives share the extension, not the magic)
+        with open(p, 'rb') as f:
+            if f.read(8) != smash_arc.MAGIC: continue
+        ents = smash_arc.files(p, regions=True); taken.add(p)   # every region's files: some effects exist only in other regions'
+        cur, size, step = [], 0, sum(e[2] for e in ents) / parts
+        for e in ents:
+            cur.append(e); size += e[2]
+            if size >= step: jobs.append((p, r, tuple(cur))); cur, size = [], 0
+        if cur: jobs.append((p, r, tuple(cur)))
+    return jobs, taken
+
+def smash_arc_shaders(path, rel, ents, out):
+    """Each file of a range scanned as a file of its own: GLSLC outputs in the SSBH shader databases ('HBSS' … 'RDHS', the .nushdb files: 41 in 13.0.5), BNSH in the effects ('EFFN') and the UI
+    layout archives (SARC). Labels name the file by its format (an SSBH resource by its type, 'SHDR') and its path's hash40: /data.arc/SHDR#<hash40>"""
+    import mmap, smash_arc
+    with open(path, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as d:
+        for e in ents:
+            if not e[3]: continue
+            b = smash_arc.read(d, e)
+            kind = b[0x13:0x0f:-1] if b[:4] == b'HBSS' else b[:4]
+            label = f'/{rel}/{kind.decode("latin1") if kind.isalnum() else "data"}#{e[0]:010x}'
+            n = len(out); scan_blob(b, label, out)
+            if len(out) == n and b'\x91\x68\x86\x19' in b: out.extend(glslc_shaders(b, label, need=False))
+
 _OODLE = None
 def oodle(comp, n):
     """The game's own decoder: OodleLZ_Decompress (Trinity's packs are Oodle Mermaid, and Oodle is linked into main), or LZ5_decompress_safe (DRAGON QUEST XI S's legacy Unreal paks):
@@ -746,7 +789,8 @@ def ue_legacy_shaders(path, rel, names, out):
     pk = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Pak(path))
     for name in names:
         d = pk.read(name, decode=oodle)
-        ue_inline_shaders(d, f'/{rel}#{re.sub(r"^(\.\./)+", "", os.path.normpath(pk.mount + name))}', out)
+        label = re.sub(r"^(\.\./)+", "", os.path.normpath(pk.mount + name))
+        ue_inline_shaders(d, f'/{rel}#{label}', out)
 
 ZLIB_HEAD = re.compile(b'\x78[\x01\x5e\x9c\xda]')
 def ue_inline_shaders(d, label, out):
@@ -945,6 +989,7 @@ def separable_pairs(keys):
         k = min(ins, key=lambda k: (-len(ins[k] & left), k)); cover.append(k); left -= ins[k]
     return {(v, p) for v in single for p in cover}, cover
 
+SMASH_ARC = struct.pack('<Q', 0xABCDEF9876543210)   # smash_arc.MAGIC (scan_file reads only the first bytes, without importing the reader)
 UE_TAG = {'SV': 'vs', 'SH': 'hs', 'SD': 'ds', 'SG': 'gs', 'SP': 'ps', 'SC': 'cs'}
 def main_imports(img):   # the names main imports (its dynamic symbols)
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../tools')); import nso_syms
@@ -990,7 +1035,7 @@ def scan_file(args):
     if head[:4] == NLG_DICT:
         nlg_shaders(path, '/' + rel, found)
         return rel, uniq_keys(found), var_pairs(found), trees
-    if head[:8] == IDRK:
+    if head[:8] in (IDRK, PDRK):
         idrk_shaders(path, '/' + rel, found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:8] == ONEPACK:   # a range of Trinity packs (trpfs_jobs)
@@ -1001,6 +1046,9 @@ def scan_file(args):
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:4] == KPKA:   # entries of an RE Engine PAK (kpka_jobs)
         kpka_shaders(path, rel, args[2], found)
+        return rel, uniq_keys(found), var_pairs(found), trees
+    if len(args) > 2 and head[:8] == SMASH_ARC:   # files of Super Smash Bros. Ultimate's data.arc (smash_arc_jobs)
+        smash_arc_shaders(path, rel, args[2], found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:4] == b'BDF3':   # entries of a FromSoftware dvdbnd archive (bdt_jobs)
         bdt_shaders(path, rel, args[2], found)
@@ -1092,8 +1140,9 @@ def main():
     tr_jobs, trp = trpfs_jobs(files)   # Pokémon Legends: Z-A's Trinity packs (data.trpfs and its index data.trpfd), decoded by the game's own Oodle in the Mac host
     ue_jobs, uep = ue_legacy_jobs(files)   # DRAGON QUEST XI S's legacy Unreal paks, decoded by the game's own LZ5 in the Mac host
     bd_jobs, bdts = bdt_jobs(files)   # Dark Souls Remastered's dvdbnd archives: the entries of each .bdt by its .bhd5 index, in ranges
-    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs
-    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts]
+    arc_jobs, arcs = smash_arc_jobs(files)   # Super Smash Bros. Ultimate's data.arc: its current files, in ranges
+    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs
+    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs]
     with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
         results += list(ex.map(scan_file, big)) + list(ex.map(scan_file, files, chunksize=16))
     trees, defer = {}, []

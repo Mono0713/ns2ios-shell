@@ -3,7 +3,7 @@
 Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not edit by hand.  
 本页由 `dm/tools/supported_list.py` 从 `dm/games/*/game.tsv` 生成，请勿手动修改。
 
-**48 款游戏。** 文件名不重要——打包器从包内容识别游戏，在下表里对上 title ID 就够了。
+**51 款游戏。** 文件名不重要——打包器从包内容识别游戏，在下表里对上 title ID 就够了。
 
 - **IPA 体积** ≈ 你的 NSP/XCI 体积 + 约 16 MB（壳本身）。游戏文件在包里是原样存放的，不再压缩。
 - **首次启动**要编译着色器：打包时只把 Switch 的着色器翻译成 Metal 源码，编译在手机上做（之后有缓存）。几秒到大作几分钟，启动时有进度页。
@@ -49,12 +49,15 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | Pokémon Legends: Z-A | `0100F43008C44000` | 2.0.2 |  |
 | Raging Loop | `010020400E1C2000` | 1.0.0 |  |
 | Rhythm Heaven Groove | `0100D9F01D474000` | 1.0.0 | handheld |
+| ROMANCE OF THE THREE KINGDOMS 8 REMAKE | `0100C2A01A730000` | 1.1.3 |  |
 | STEINS;GATE RE:BOOT | `01008BC024FDE000` | 1.0.3 |  |
 | Super Mario 3D World + Bowser's Fury | `010028600EBDA000` | 1.2.2 |  |
 | Super Mario Bros. Wonder | `010015100B514000` | 1.2.1（也可 1.0.0） |  |
 | Super Mario Galaxy | `010099C022B96000` | 1.3.1 | handheld |
 | Super Mario Galaxy 2 | `0100FD8022DAA000` | 1.4.0 | handheld |
 | Super Mario Odyssey | `0100000000010000` | 1.4.1 |  |
+| Super Smash Bros. Ultimate | `01006A800016E000` | 13.0.5 |  |
+| Taiko Risshiden V DX | `0100346017304000` | 1.1.1 | handheld |
 | The Great Ace Attorney Chronicles | `010036E00FB20000` | 1.0.0 |  |
 | The Legend of Zelda: Breath of the Wild | `01007EF00011E000` | 1.9.0 | 60 fps |
 | The Legend of Zelda: Link's Awakening | `01006BB00C6F0000` | 1.1.0 |  |

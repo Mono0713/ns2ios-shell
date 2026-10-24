@@ -1,10 +1,10 @@
 diff --git a/dm/host/loader.c b/dm/host/loader.c
 --- a/dm/host/loader.c
 +++ b/dm/host/loader.c
-@@ -363,7 +363,65 @@
+@@ -472,6 +472,64 @@
+     kern_return_t kr = vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)from, copy, &cur, &max, VM_INHERIT_NONE);
      if (kr != KERN_SUCCESS || a != to) die("%s vm_remap %p → %#lx (%#lx bytes) failed: %d", m->name, from, (unsigned long)to, size, kr);
      if ((cur & need) != need) die("%s permissions after vm_remap %#x, missing %#x", m->name, cur, need);
- }
 +#ifdef DM_SHELL
 +// Shell (dm/ios/tools/shell_build.sh): the app carries no game content at all, so the module images are not in this executable but in
 +// Frameworks/Guest.framework/Guest -- a dynamic library that holds only segments, written by dm/tools/guest_dylib.py from the user's own
@@ -62,8 +62,7 @@ diff --git a/dm/host/loader.c b/dm/host/loader.c
 +}
 +#define IMAGE_MH shell_image()
 +#else
- #define IMAGE_MH (&_mh_execute_header)
 +#endif
- static void map_image(module_t *m, const char *dir) {
-     (void)dir;
-     char sx0[17], sx1[17], dm[17]; snprintf(sx0, sizeof sx0, "__dm%sx0", m->name); snprintf(sx1, sizeof sx1, "__dm%sx1", m->name); snprintf(dm, sizeof dm, "__DM%sW", m->name);
+ }
+ #define IMAGE_MH (&_mh_execute_header)
+ // The NRO modules (loader.c "NRO modules") are packed instead of getting sections of their own: a Mach-O file has at most 255 sections, and Super Smash Bros. Ultimate's 98 NROs would
