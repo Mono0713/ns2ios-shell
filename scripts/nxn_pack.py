@@ -1282,7 +1282,8 @@ def main():
             run(args, log=work / 'logs' / 'gl_prebuilt.log', what='generating the GLSL from the game files')
         step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
     vk_out = None
-    if route == 'vulkan':
+    if route == 'vulkan' and not a.no_shaders:   # --no-shaders is the capture run: a game that builds its SPIR-V at run
+                                                 # time has none in the RomFS, and a missing folder is not an error there
         # SPIR-V, not GLSL: vk_shaders.py only needs spirv-cross here (Apple's Metal compiler is the missing half, and
         # --source-only skips it), so a Windows machine produces the same table a Mac does. Most Vulkan games keep their
         # SPIR-V in the RomFS (Hades: 74 files in Content/EffectsForgeSwitch), so nothing has to be captured; a game that
