@@ -595,6 +595,17 @@ def build_mac_host(work, gid):
     host = DM / 'host'
     out = work / 'tools' / 'dmhost'
     out.parent.mkdir(parents=True, exist_ok=True)
+    # dm/host's Makefile reads the profile through gen/<id>/profile (make cannot take a path with spaces) and wants the
+    # chain version header beside it: the version follows from the sources alone, so one --header serves every game.
+    prof = Path(os.environ.get('DM_GAMES_DIR', '').split(os.pathsep)[0] or str(DM / 'games')) / gid
+    hdr = DM / 'gfx' / 'nvn' / 'dmsh_chain.h'
+    run([sys.executable, str(DM / 'gfx' / 'tools' / 'dmsh_chain.py'), '--header'],
+        log=work / 'logs' / 'dmsh_chain.log', what='writing the chain version header')
+    if not (prof / 'dmsh_chain.h').is_file(): shutil.copyfile(hdr, prof / 'dmsh_chain.h')
+    link = host / 'gen' / gid / 'profile'
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() or link.exists(): link.unlink()
+    link.symlink_to(prof.resolve())
     run(['make', '-s', 'GAME=%s' % gid, 'gen/%s/game_profile.h' % gid, 'gen/vpx/libvpx.a'],
         log=work / 'logs' / 'mac_host_make.log', what='building the Mac host (headers, libvpx)', cwd=host)
     dry = subprocess.run(['make', '-n', '-B', 'GAME=%s' % gid, 'dmhost'], cwd=host, capture_output=True, text=True)
