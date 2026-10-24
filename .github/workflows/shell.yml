@@ -203,7 +203,12 @@ jobs:
             echo "origin=fork $SHA" >> "$GITHUB_OUTPUT"
             echo "SHA=$SHA" >> "$GITHUB_ENV"
           fi
-          V="shell-$(date -u +%Y%m%d)-$(echo "$SHA" | cut -c1-7)"
+          # The version names both halves: the upstream commit the tree was built from and this fork's commit, whose patches
+          # and overlay files are half the shell. Naming only upstream meant a fixed shell was published under the same tag as
+          # the broken one -- the assets were overwritten in place, and nobody could tell the two apart by version.
+          FORK=$(git -C fork rev-parse --short=7 HEAD)
+          if [ "$SHA" = "$FORK" ]; then V="shell-$(date -u +%Y%m%d)-$FORK"
+          else V="shell-$(date -u +%Y%m%d)-$(echo "$SHA" | cut -c1-7)-$FORK"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "TREE=$src" >> "$GITHUB_ENV"
           echo "V=$V" >> "$GITHUB_ENV"
