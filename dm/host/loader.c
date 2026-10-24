@@ -472,6 +472,8 @@ static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned lo
     kern_return_t kr = vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)from, copy, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS || a != to) die("%s vm_remap %p → %#lx (%#lx bytes) failed: %d", m->name, from, (unsigned long)to, size, kr);
     if ((cur & need) != need) die("%s permissions after vm_remap %#x, missing %#x", m->name, cur, need);
+}
+
 #ifdef DM_SHELL
 // Shell (dm/ios/tools/shell_build.sh): the app carries no game content at all, so the module images are not in this executable but in
 // Frameworks/Guest.framework/Guest -- a dynamic library that holds only segments, written by dm/tools/guest_dylib.py from the user's own
@@ -530,7 +532,6 @@ int dm_shell_modules(const char **out, int max) {
 #define IMAGE_MH shell_image()
 #else
 #endif
-}
 #define IMAGE_MH (&_mh_execute_header)
 // The NRO modules (loader.c "NRO modules") are packed instead of getting sections of their own: a Mach-O file has at most 255 sections, and Super Smash Bros. Ultimate's 98 NROs would
 // take 294. gen_embed.py puts their pieces one after another, each 16K aligned, in __TEXT,__dm_nro_x0 / __DM_NRO_W,__img / __TEXT,__dm_nro_x1, and __DATA,__dm_nro_tab lists them:
