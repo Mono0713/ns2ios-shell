@@ -489,20 +489,6 @@ DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.
                 'dmsh_chain.h', 'vk_capture.tsv'}
 
 
-def npdm_sys_resource(game):
-    """The system resource size the packed build's own NPDM declares (META +0x14), or None.
-
-    A profile was brought up on one build; another build of the same game can declare a system resource where that profile
-    declares none (Absolum 1.0.4 says 16 MB, the build upstream measured says none). The host answers the SDK's
-    GetInfo(TotalSystemResourceSize) from this number, and the game sizes its heap from it, so it has to follow the files.
-    """
-    f = game / 'ExeFS' / 'main.npdm'
-    try: d = f.read_bytes()
-    except OSError: return None
-    if d[:4] != b'META' or len(d) < 0x18: return None
-    return struct.unpack_from('<I', d, 0x14)[0]
-
-
 def module_build_id(nso):
     with open(nso, 'rb') as f:
         f.seek(0x40)
@@ -560,8 +546,6 @@ def derive_profile(gdir, tid, ver, game, mods, dest, disp):
                 put = True
             continue
         out.append(line)
-    sr = npdm_sys_resource(game)      # this build's own answer, which may differ from the profile's
-    if sr is not None: out.append('sys_resource\t0x%X' % sr)
     (dest / 'game.tsv').write_text('\n'.join(out) + '\n', encoding='utf-8')
     return dest
 
@@ -827,31 +811,28 @@ def step_guest(patched, mods, stage):
     say('Frameworks/Guest.framework: %d bytes' % n)
 
 
-def env_for(rows, npdm_sr=None):
+def env_for(rows):
     """The profile keys the shell cannot carry in its compiled-in header, as dm/env.txt lines.
 
     main.m exports these before the host starts; hle_svc.c reads the memory layout from them, hle_os.c the game's own getenv.
-    Only keys with a value are written, so anything left out keeps the host's compiled-in default.
+    Only keys the profile sets are written, so anything it leaves out keeps the host's compiled-in default -- the same default
+    upstream compiles in when a profile has no key (dm/games/game.py: 32 MB for sys_resource).
 
-    sys_resource is the one value that must not be passed as zero. The game's own main.npdm decides it (META +0x14; the
-    profile's sys_resource is a transcription of that field) and zero is its truth there, but the SDK reads it as a switch
-    -- IsVirtualAddressMemoryEnabled is "total != 0" -- and the no-system-resource path asks for pool - used memory in one
-    go, which this host refuses because it charges a module's whole bss as used up front (Brain Memory asked for 960 MB
-    against a 128 MB cap and the SDK aborted). So a declared zero is not written at all and the host keeps answering its
-    placeholder default, which is the state the verified games were tested in. Any non-zero value is passed as it is, which
-    is what makes a game that declares one behave as it does on hardware.
+    sys_resource is passed exactly as the profile declares it, **zero included**. It looks like a size and is read as a switch
+    (IsVirtualAddressMemoryEnabled is "total != 0"), and the two answers are not interchangeable: Big Brain Academy declares 0 and
+    runs only when told 0 -- 32 MB and even 1 crash in nninitStartup -- while Brain Memory declares nothing and runs at 32 MB,
+    16 MB or 1 (only 0 fails there). So the profile's value is the only one to trust: upstream verified every game against it.
     """
     pairs = [('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
              ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED')]
     lines = ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
     ge = one(rows, 'game_env')
     if ge: lines.append('DM_GAME_ENV=' + ge)
-    sr = npdm_sr if npdm_sr is not None else one(rows, 'sys_resource')   # an int from the NPDM, or the profile's text
-    if isinstance(sr, int): v = sr
-    else:
-        try: v = int(sr, 0) if sr else 0
-        except ValueError: v = 0
-    if v: lines.append('DM_SYS_RESOURCE=%#x' % v)
+    sr = one(rows, 'sys_resource')
+    if sr:
+        try: v = int(sr, 0)
+        except ValueError: v = None
+        if v is not None: lines.append('DM_SYS_RESOURCE=%#x' % v)
     return lines
 
 
@@ -907,7 +888,7 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
                # game aborts in nninitStartup with nothing in the log to say why. The shell's host was built from the
                # placeholder profile, so this has to come from here.
                ('game_env', 'DM_GAME_ENV'))
-    env_lines = env_for(rows, npdm_sys_resource(game))
+    env_lines = env_for(rows)
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))
