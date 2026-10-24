@@ -28,6 +28,7 @@
 + docs/SHELL.md
 + docs/SHELL.zh-CN.md
 + .github/workflows/shell.yml
++ .github/workflows/capture.yml             # the macOS job that captures run-time shaders
 + .shell-overlay.txt
 + .shell-base.txt
 + .shell-patches/                          # the diffs for the "~" entries below

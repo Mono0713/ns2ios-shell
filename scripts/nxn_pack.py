@@ -26,7 +26,7 @@ dmsh_xlate, spirv-cross) on PATH or in --tools. Every step says what is missing 
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, json, os, plistlib, re, shutil, struct, subprocess, sys, time, zipfile
+import argparse, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, time, zipfile
 from pathlib import Path
 
 PY = sys.executable
@@ -564,6 +564,88 @@ def check_free_space(folder, factor=3.5):
         % (folder, free / 2**30, need / 2**30, src / 2**30))
 
 
+HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex', 'dm/gfx/vk', 'dm/gfx/gl')
+CAPTURE_SECS = 120          # the longest run-time capture upstream measured is Super Mario Galaxy's 3,089 Vulkan modules
+
+
+def apple_silicon():
+    return subprocess.run(['sysctl', '-n', 'hw.optional.arm64'], capture_output=True, text=True).stdout.strip() == '1'
+
+
+def capture_wanted(gdir):
+    """The keys the profile's gl_capture.tsv lists (whole file names), or None when it has no table."""
+    f = gdir / 'gl_capture.tsv'
+    if not f.is_file(): return None
+    keys = {l.strip() for l in f.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')}
+    return keys or None
+
+
+def capture_have(d):
+    try: names = os.listdir(d)
+    except OSError: return set()
+    return {n for n in names if re.fullmatch(r'[0-9a-f]{16}\.(vert|frag)', n)}
+
+
+def build_mac_host(work, gid):
+    """dm/host's own compile line (make -n) with the output moved: make takes no target path with spaces, and
+    dm/host/dmhost may belong to another build."""
+    if sys.platform != 'darwin': die('a run-time shader capture boots the game in the Mac host: it needs macOS')
+    if not apple_silicon(): die('the Mac host runs the game\'s own arm64 code natively: this Mac has an Intel processor')
+    host = DM / 'host'
+    out = work / 'tools' / 'dmhost'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    run(['make', '-s', 'GAME=%s' % gid, 'gen/%s/game_profile.h' % gid, 'gen/vpx/libvpx.a'],
+        log=work / 'logs' / 'mac_host_make.log', what='building the Mac host (headers, libvpx)', cwd=host)
+    dry = subprocess.run(['make', '-n', '-B', 'GAME=%s' % gid, 'dmhost'], cwd=host, capture_output=True, text=True)
+    line = next((l for l in dry.stdout.splitlines() if ' -o dmhost ' in l), None)
+    if not line: die('make -n gave no compile line for the Mac host: %s' % dry.stderr.strip()[-400:])
+    cmd = shlex.split(line)
+    cmd[cmd.index('-o') + 1] = str(out)
+    run(cmd, log=work / 'logs' / 'mac_host_build.log', what='building the Mac host', cwd=host)
+    return out
+
+
+def capture_gl(game, gdir, patched, work):
+    """The GLSL LÖVE-style games put together at run time: boot the game in the Mac host with DM_GL_CAPTURE, which writes
+    each shader it is given to that folder, until every key the profile's table names is there."""
+    want = capture_wanted(gdir)
+    out = game / 'gl_capture'
+    if want and capture_have(out) >= want:
+        say('reusing the captured shaders in %s' % out); return out
+    host = build_mac_host(work, game.parent.name)
+    cap, rd = game / 'gl_capture.partial', work / 'tmp' / 'gl_run'
+    shutil.rmtree(cap, ignore_errors=True); shutil.rmtree(rd, ignore_errors=True)
+    cap.mkdir(parents=True)
+    for x in ('save', 'temp', 'msl'): (rd / x).mkdir(parents=True)
+    env = dict(os.environ, DM_ROMFS=str(game / 'RomFS'), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'),
+               DM_MSL_DIR=str(rd / 'msl'), DM_GL_CAPTURE=str(cap))
+    say('booting the game in the Mac host to capture the GLSL it assembles at run time (%s keys)'
+        % ('all %d' % len(want) if want else 'any'))
+    log = work / 'logs' / 'gl_capture.log'
+    t0, last, seen = time.time(), 0, time.time()
+    with open(log, 'w') as f:
+        proc = subprocess.Popen([str(host), str(patched)], env=env, cwd=rd, stdout=f, stderr=subprocess.STDOUT)
+        try:
+            while proc.poll() is None and time.time() - t0 < CAPTURE_SECS:
+                got = capture_have(cap)
+                if len(got) != last: last, seen = len(got), time.time(); say('  captured %d' % last)
+                if (want and got >= want) or (not want and got and time.time() - seen > 20): break
+                time.sleep(0.25)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try: proc.wait(5)
+                except subprocess.TimeoutExpired: proc.kill(); proc.wait()
+    got = capture_have(cap)
+    if want and not got >= want:
+        tail = ''.join(list(open(log, errors='replace'))[-12:]).rstrip()
+        die('captured %d of %d run-time shaders (host output: %s)%s' % (len(got), len(want), log, '\n' + tail if tail else ''))
+    cap.replace(out)
+    shutil.rmtree(rd, ignore_errors=True)
+    say('captured %d shaders in %.0f s → %s' % (len(got), time.time() - t0, out))
+    return out
+
+
 def fill_mem_used(patched, mods, gdir, rows):
     """The used memory GetInfo reports beside the heap: 64 MB unless the rewritten modules need more (dm/games/README.md).
 
@@ -820,6 +902,7 @@ def main():
     ap.add_argument('-p', '--package', default='', help='version to pack (default: the newest one in the folder)')
     ap.add_argument('--stop-after', default='', choices=['', 'extract', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
     ap.add_argument('--force', action='store_true', help='redo steps whose output already exists')
+    ap.add_argument('--capture-gl', default='', help='boot the game in the Mac host and capture the GLSL it assembles at run time, then stop (macOS, Apple silicon)')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
                          'modules and the shaders (it is several times the size of the game)')
@@ -843,9 +926,10 @@ def main():
             '    expected <repo>/scripts/nxn_pack.py with <repo>/dm/ next to scripts/, or nxn_pack.py next to dm/.\n'
             '    looked for %s -- the game profiles, the rewriter and the shader tools all live there.' % DM)
 
-    shell = Path(a.shell).resolve()
+    if not a.capture_gl and not a.shell: die('give the shell file (unzipped or .zip), or --capture-gl to only capture shaders')
+    shell = Path(a.shell).resolve() if a.shell else Path('.')
     folder = Path(a.nsp_dir).resolve()
-    if not shell.is_file(): die('no shell file: %s' % shell)
+    if not a.capture_gl and not shell.is_file(): die('no shell file: %s' % shell)
     if not folder.is_dir(): die('no such folder: %s' % folder)
     check_free_space(folder)
     if not a.keys: die('give prod.keys with -k')
@@ -981,6 +1065,15 @@ def main():
         say('mem_used %s: the rewritten modules are %.0f MB, more than the default 64 MB the heap is sized against'
             % (value, total / 2**20))
     if a.stop_after == 'rewrite': return say('stopped after rewrite')
+    if a.capture_gl:
+        # A capture run is the whole point of this invocation: the shell, the shader chain and the IPA are not involved.
+        out = capture_gl(game, gdir, patched, work)
+        want = a.capture_gl
+        if want:
+            dst = Path(want).resolve()
+            shutil.rmtree(dst, ignore_errors=True); shutil.copytree(out, dst)
+            say('%d files → %s' % (len(os.listdir(dst)), dst))
+        return say('stopped after the capture')
     check_gates(stamp, patched, mods)
 
     # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)

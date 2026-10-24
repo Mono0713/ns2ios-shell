@@ -1,0 +1,80 @@
+name: Capture run-time shaders
+
+# Some games assemble their shaders at run time, so no game file holds them: LÖVE adds its header and built-in code to
+# each of Balatro's shader files in Lua, and Super Mario Galaxy generates its Vulkan modules from a pipeline database.
+# Upstream captures those by booting the game in the Mac host with DM_GL_CAPTURE / DM_VK_CAPTURE, and so does this:
+# one run per game, the result is a folder of a few hundred KB that the Windows packer then reads.
+#
+# This runs here, on the public repository's macOS runner and with the game files pulled from the private smoke
+# repository, because macOS minutes are free here and the game content must never enter this repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      game:
+        description: 'Which capture to run'
+        type: choice
+        options: [balatro]
+        default: balatro
+
+jobs:
+  capture:
+    name: Capture (${{ inputs.game }})
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the runner
+        run: |
+          set -euo pipefail
+          sysctl -n hw.optional.arm64 | grep -qx 1 || { echo "::error::the Mac host runs the game's arm64 code: Apple silicon is required"; exit 1; }
+          dotnet --version
+          python3 --version
+
+      - name: Install the packer's packages
+        run: python3 -m pip install --quiet lz4 capstone fonttools pillow backports.zstd
+
+      - name: Fetch the game and the keys
+        env:
+          GH_TOKEN: ${{ secrets.SMOKE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then echo "::error::SMOKE_TOKEN is not set: this job needs read access to xinerqu/ns2ios-smoke"; exit 1; fi
+          mkdir -p data games/balatro
+          gh release download smoke-data -R xinerqu/ns2ios-smoke -p 'prod.keys' -O data/prod.keys --clobber
+          gh release download smoke-data -R xinerqu/ns2ios-smoke -p 'balatro-*.nsp' -D games/balatro --clobber
+          ls -l data games/balatro
+
+      - name: Boot the game and capture its shaders
+        run: |
+          set -euo pipefail
+          python3 scripts/nxn_pack.py games/balatro -k data/prod.keys --capture-gl dist/gl_capture 2>&1 | tee capture.out
+          echo "--- captured ---"
+          ls -l dist/gl_capture | head -20
+          echo "count: $(ls dist/gl_capture | wc -l)"
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### GL capture (${{ inputs.game }})"
+            echo
+            if [ -d dist/gl_capture ]; then echo "- files: $(ls dist/gl_capture | wc -l)"; fi
+            if [ -f capture.out ]; then echo '```'; tail -30 capture.out; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.game }}-gl-capture
+          path: dist/gl_capture
+          if-no-files-found: error
+
+      - name: Upload the logs when it fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.game }}-capture-logs
+          path: |
+            games/balatro/*_pack/logs
+            capture.out
