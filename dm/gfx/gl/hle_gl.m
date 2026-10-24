@@ -187,6 +187,7 @@ static void sh_load(void) {
     }
     fclose(f);
     qsort(g_sh, g_nsh, sizeof *g_sh, sh_cmp);
+    if (g_nsh) GLOG("shader table %d entries, %s/%c to %s/%c", g_nsh, g_sh[0].key, g_sh[0].frag ? 'f' : 'v', g_sh[g_nsh - 1].key, g_sh[g_nsh - 1].frag ? 'f' : 'v');
     snprintf(p, sizeof p, "%s/gl/gl_shaders.metallib", d);
     // One compiled library when the packing computer had Apple's Metal compiler; otherwise gl_shaders.py translated the
     // shaders on a machine without one and wrote them to gl/src/, one source per shader, to be compiled here -- which is
@@ -200,7 +201,7 @@ static void sh_load(void) {
         if (!g_lib) GLOG("[RED] shader library failed to load %s: %s", p, err.localizedDescription.UTF8String);
     } else {
         char sd[1024]; snprintf(sd, sizeof sd, "%s/gl/src", d);
-        if (access(sd, F_OK) == 0) { g_srcdir = @(sd); GLOG("shader library %s is source form: compiling from %s as the game asks for them", p, sd); }
+        if (access(sd, F_OK) == 0) { g_srcdir = [NSString stringWithUTF8String:sd]; GLOG("shader library %s is source form: compiling from %s as the game asks for them", p, sd); }
         else GLOG("[RED] no shader library: %s is neither a compiled library nor a source folder (dm/gfx/tools/gl_shaders.py writes both)", p);
     }
 }
@@ -208,23 +209,33 @@ static const shinfo *sh_find(const char *key, int frag) { shinfo k; memcpy(k.key
 // gl/src/<key>_<v|f>.metal: one shader per file, because each translation unit defines struct main0_out and the uniform
 // block struct, so a whole library cannot be one source. dm_shader_prep.m compiles them all at first launch, which leaves
 // them in the system's shader cache: by the time the game builds a shader these calls cost nothing.
+static char g_srcwhy[512];   // why sh_src_fn gave nothing, for the one line that reports a shader missing from the library
 static id<MTLFunction> sh_src_fn(const char *key, int frag) {
     static NSMutableDictionary<NSString *, id<MTLLibrary>> *cache;
-    if (!g_srcdir) return nil;
+    g_srcwhy[0] = 0;
+    if (!g_srcdir) { snprintf(g_srcwhy, sizeof g_srcwhy, "no gl/src directory was found"); return nil; }
     if (!cache) cache = [NSMutableDictionary new];
     NSString *k = [NSString stringWithFormat:@"%s%c", key, frag ? 'f' : 'v'];
     id<MTLLibrary> lib = cache[k];
     if (!lib) {
         NSString *p = [g_srcdir stringByAppendingPathComponent:[k stringByAppendingString:@".metal"]];
         NSString *txt = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil];
-        if (!txt) return nil;
+        if (!txt) { snprintf(g_srcwhy, sizeof g_srcwhy, "%s cannot be read", p.UTF8String); return nil; }
         NSError *err = nil;
         lib = [g_dev newLibraryWithSource:txt options:nil error:&err];
-        if (!lib) { GLOG("[RED] shader %s does not compile: %s", key, err.localizedDescription.UTF8String); return nil; }
+        if (!lib) { snprintf(g_srcwhy, sizeof g_srcwhy, "%s does not compile: %s", p.lastPathComponent.UTF8String, err.localizedDescription.UTF8String); return nil; }
         cache[k] = lib;
         OLOG("Compiled shader %s", key);
     }
-    return [lib newFunctionWithName:[NSString stringWithFormat:@"gl_%s_%c", key, frag ? 'f' : 'v']];
+    id<MTLFunction> f = [lib newFunctionWithName:[NSString stringWithFormat:@"gl_%s_%c", key, frag ? 'f' : 'v']];
+    // One shader per file, so the library holds exactly one entry point: taking it is more reliable than agreeing on the
+    // name gl_shaders.py writes (--rename-entry-point).
+    if (!f && lib.functionNames.count == 1) f = [lib newFunctionWithName:lib.functionNames.firstObject];
+    if (!f) {   // the file compiled but holds no such function: the translation named it something else
+        NSString *names = [lib.functionNames componentsJoinedByString:@" "];
+        snprintf(g_srcwhy, sizeof g_srcwhy, "%s compiled but has no gl_%s_%c (it holds: %.300s)", k.UTF8String, key, frag ? 'f' : 'v', names.UTF8String ?: "");
+    }
+    return f;
 }
 
 // The layer's own shaders: a quad that clears what a scissored or masked glClear covers (a render pass can only clear its attachments whole)
@@ -1664,7 +1675,15 @@ GLB(glCompileShader, void, GLuint sh) {
     int frag = s->type == GL_FRAGMENT_SHADER;
     s->si = sh_find(s->key, frag); s->compiled = 1;
     @autoreleasepool { s->fn = s->si ? (g_lib ? [g_lib newFunctionWithName:[NSString stringWithFormat:@"gl_%s_%c", s->key, frag ? 'f' : 'v']] : sh_src_fn(s->key, frag)) : nil; }
-    if (!s->fn) { static int n; if (n++ < 50) GLOG("[RED] %s shader %s (%zu bytes of GLSL) is not in the library (DM_GL_CAPTURE collects it)", s->type == GL_VERTEX_SHADER ? "vertex" : "fragment", s->key, s->len); }
+    if (!s->fn) {
+        static int n; if (n++ < 50) GLOG("[RED] %s shader %s (%zu bytes of GLSL) is not in the library (DM_GL_CAPTURE collects it)", s->type == GL_VERTEX_SHADER ? "vertex" : "fragment", s->key, s->len);
+        // Which half failed: the table row (it carries the attribute, uniform and sampler layout a pipeline needs) or the
+        // function in gl/src. Without this the two look the same, and a package whose shaders all compiled at first launch
+        // then reports every one of them as missing.
+        static int d; if (d++ < 10) GLOG("[RED]   %s/%c: %s; %s", s->key, frag ? 'f' : 'v', s->si ? "the table has it" : "no table row",
+                                        g_lib ? "a compiled library is loaded" : (g_srcdir ? (g_srcwhy[0] ? g_srcwhy : "gl/src gave no function") : "no gl/src"));
+    }
+
     else OLOG("CompileShader %s", s->key);
 }
 GL(glGetShaderiv, void, GLuint sh, GLenum p, GLint *v) {
