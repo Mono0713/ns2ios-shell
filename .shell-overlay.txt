@@ -19,6 +19,7 @@
 + dm/ios/DmIOS.entitlements               # increased-memory-limit: the shell is signed ad hoc with it so install tools see it
 + dm/tools/supported_list.py              # the supported-games page and release asset, from dm/games/*/game.tsv
 + dm/tools/packer_sync.py                 # keeps this fork's copies of dm/tools, dm/gfx/tools and dm/games level with upstream
++ dm/tools/nx_extract/AlignedReadStorage.cs    # 16-byte aligned reads when an update is layered over its base
 + dm/ios/tools/make_shell_patch.py        # regenerates .shell-patches/*.patch after editing a "~" file
 + dm/games/0000000000000000/game.tsv      # neutral placeholder profile the shell is compiled against
 + dm/games/0000000000000000/dmsh_chain.h
@@ -40,6 +41,7 @@
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name
 ~ dm/gfx/tools/shader_split.py  # posix separators in the recorded RomFS paths (Windows)
 ~ dm/games/game.py              # DM_GAMES_DIR split with os.pathsep: ':' cannot hold a Windows path
+~ dm/tools/nx_extract/Program.cs      # wraps the stacked storage in AlignedReadStorage
 
 ~ dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
