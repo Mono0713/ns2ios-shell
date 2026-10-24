@@ -215,7 +215,8 @@ static id<MTLFunction> sh_src_fn(const char *key, int frag) {
     g_srcwhy[0] = 0;
     if (!g_srcdir) { snprintf(g_srcwhy, sizeof g_srcwhy, "no gl/src directory was found"); return nil; }
     if (!cache) cache = [NSMutableDictionary new];
-    NSString *k = [NSString stringWithFormat:@"%s%c", key, frag ? 'f' : 'v'];
+    // <key>_<v|f>: the underscore is part of the file name gl_shaders.py writes (src/<key>_<v|f>.metal)
+    NSString *k = [NSString stringWithFormat:@"%s_%c", key, frag ? 'f' : 'v'];
     id<MTLLibrary> lib = cache[k];
     if (!lib) {
         NSString *p = [g_srcdir stringByAppendingPathComponent:[k stringByAppendingString:@".metal"]];

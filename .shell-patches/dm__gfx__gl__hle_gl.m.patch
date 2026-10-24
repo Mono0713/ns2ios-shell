@@ -9,7 +9,7 @@ diff --git a/dm/gfx/gl/hle_gl.m b/dm/gfx/gl/hle_gl.m
  static uint64_t g_serial = 1;                    // serial of the command buffer being recorded (g_cb); committed ones have lower serials
  static _Atomic uint64_t g_done;                  // highest serial whose command buffer has completed
  static id<MTLCommandBuffer> g_cb;
-@@ -186,12 +187,56 @@
+@@ -186,12 +187,57 @@
      }
      fclose(f);
      qsort(g_sh, g_nsh, sizeof *g_sh, sh_cmp);
@@ -44,7 +44,8 @@ diff --git a/dm/gfx/gl/hle_gl.m b/dm/gfx/gl/hle_gl.m
 +    g_srcwhy[0] = 0;
 +    if (!g_srcdir) { snprintf(g_srcwhy, sizeof g_srcwhy, "no gl/src directory was found"); return nil; }
 +    if (!cache) cache = [NSMutableDictionary new];
-+    NSString *k = [NSString stringWithFormat:@"%s%c", key, frag ? 'f' : 'v'];
++    // <key>_<v|f>: the underscore is part of the file name gl_shaders.py writes (src/<key>_<v|f>.metal)
++    NSString *k = [NSString stringWithFormat:@"%s_%c", key, frag ? 'f' : 'v'];
 +    id<MTLLibrary> lib = cache[k];
 +    if (!lib) {
 +        NSString *p = [g_srcdir stringByAppendingPathComponent:[k stringByAppendingString:@".metal"]];
@@ -69,7 +70,7 @@ diff --git a/dm/gfx/gl/hle_gl.m b/dm/gfx/gl/hle_gl.m
  
  // The layer's own shaders: a quad that clears what a scissored or masked glClear covers (a render pass can only clear its attachments whole)
  static const char *const g_util_src =
-@@ -1629,8 +1674,16 @@
+@@ -1629,8 +1675,16 @@
      sh_capture(s);
      int frag = s->type == GL_FRAGMENT_SHADER;
      s->si = sh_find(s->key, frag); s->compiled = 1;
