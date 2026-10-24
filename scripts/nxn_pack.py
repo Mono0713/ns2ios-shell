@@ -489,6 +489,20 @@ DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.
                 'dmsh_chain.h', 'vk_capture.tsv'}
 
 
+def npdm_sys_resource(game):
+    """The system resource size the packed build's own NPDM declares (META +0x14), or None.
+
+    A profile was brought up on one build; another build of the same game can declare a system resource where that profile
+    declares none (Absolum 1.0.4 says 16 MB, the build upstream measured says none). The host answers the SDK's
+    GetInfo(TotalSystemResourceSize) from this number, and the game sizes its heap from it, so it has to follow the files.
+    """
+    f = game / 'ExeFS' / 'main.npdm'
+    try: d = f.read_bytes()
+    except OSError: return None
+    if d[:4] != b'META' or len(d) < 0x18: return None
+    return struct.unpack_from('<I', d, 0x14)[0]
+
+
 def module_build_id(nso):
     with open(nso, 'rb') as f:
         f.seek(0x40)
@@ -546,6 +560,8 @@ def derive_profile(gdir, tid, ver, game, mods, dest, disp):
                 put = True
             continue
         out.append(line)
+    sr = npdm_sys_resource(game)      # this build's own answer, which may differ from the profile's
+    if sr is not None: out.append('sys_resource\t0x%X' % sr)
     (dest / 'game.tsv').write_text('\n'.join(out) + '\n', encoding='utf-8')
     return dest
 
@@ -680,7 +696,6 @@ def fill_mem_used(patched, mods, gdir, rows):
     aborts during nninitStartup -- which is what Absolum 1.0.4 did: 138 MB of modules against a 64 MB default. Returns the
     value written, or None when the profile already has enough.
     """
-    if one(rows, 'sys_resource'): return None                # with a system resource the heap is sized by the alias split
     total = sum(q.stat().st_size for q in patched.glob('*.patched.bin'))   # the rewritten modules, as step_rewrite names them
     have = one(rows, 'mem_used')
     if have and int(have, 0) >= total: return None
@@ -794,7 +809,8 @@ def env_for(rows):
     getenv. Only keys the profile actually sets are written, so a game without one keeps the host's default.
     """
     pairs = (('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
-             ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'), ('game_env', 'DM_GAME_ENV'))
+             ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'), ('game_env', 'DM_GAME_ENV'),
+             ('sys_resource', 'DM_SYS_RESOURCE'))
     return ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
 
 

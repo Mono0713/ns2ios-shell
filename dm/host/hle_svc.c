@@ -25,6 +25,9 @@ static uint64_t env_u64(const char *k, uint64_t dflt) {
 }
 static uint64_t app_pool(void) { if (!g_app_pool) g_app_pool = env_u64("DM_APP_POOL", DM_GAME_APP_POOL); return g_app_pool; }
 static uint64_t mem_used(void) { if (!g_mem_used) g_mem_used = env_u64("DM_MEM_USED", DM_GAME_MEM_USED); return g_mem_used; }
+// The NPDM's system resource size: the shell is compiled from the placeholder profile, and a build that declares one
+// where the profile says none gets a wrong answer to GetInfo and mis-sizes its heap (Absolum 1.0.4 declares 16 MB)
+static uint64_t sys_resource(void) { static uint64_t v; if (!v) v = env_u64("DM_SYS_RESOURCE", DM_GAME_SYS_RESOURCE); return v; }
 #define RESERVE g_reserve
 #define APP_POOL app_pool()
 #define MEM_USED mem_used()
@@ -309,7 +312,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
                                              if (DM_GAME_MEM_MAP_LIMIT) v += (uint64_t)atomic_load(&g_alias_mapped); break;
         // the system resource the NPDM declares (profile sys_resource; 32 MB without the key). The SDK's IsVirtualAddressMemoryEnabled is "total != 0": Big Brain Academy's nninitStartup
         // asks StandardAllocator for 60 GB of virtual address memory when it is, and sets a heap only when it is not (its NPDM declares none)
-        case I_SysResTotal: v = DM_GAME_SYS_RESOURCE; break; case I_SysResUsed: v = DM_GAME_SYS_RESOURCE ? 0x400000 : 0; break;
+        case I_SysResTotal: v = sys_resource(); break; case I_SysResUsed: v = sys_resource() ? 0x400000 : 0; break;
         case I_DebuggerAttached: v = 0; break;
         case I_RandomEntropy: { uint64_t dm_entropy64(void); v = dm_entropy64(); break; }   // a deterministic stream when DM_DETCLOCK is on (hle_os.c)
         case I_ProgramId: { static uint64_t pid; if (!pid) { const char *e = getenv("DM_PROGRAM_ID"); pid = e ? strtoull(e, NULL, 16) : DM_GAME_PROGRAM_ID; } v = pid; break; }   // default from the game profile's program_id; DM_PROGRAM_ID=hex overrides
