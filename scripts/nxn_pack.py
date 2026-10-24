@@ -802,15 +802,21 @@ def step_guest(patched, mods, stage):
     say('Frameworks/Guest.framework: %d bytes' % n)
 
 
-def env_for(rows):
+def env_for(rows, derived=False):
     """The profile keys the shell cannot carry in its compiled-in header, as dm/env.txt lines.
 
     main.m exports these before the host starts; hle_svc.c reads the memory layout from them, hle_os.c the game's own
     getenv. Only keys the profile actually sets are written, so a game without one keeps the host's default.
+
+    game_env and sys_resource are written for a derived profile only. They change the path a game takes at startup -- 21
+    registered profiles declare a system resource, many of them 0, and the shell has always answered the placeholder
+    default (32 MB) for them; a title that works today would suddenly be told 0 and could take a different branch. Those
+    builds are the ones this project has verified, so they keep the behaviour they were tested with, and a build without a
+    profile of its own gets its real values.
     """
-    pairs = (('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
-             ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'), ('game_env', 'DM_GAME_ENV'),
-             ('sys_resource', 'DM_SYS_RESOURCE'))
+    pairs = [('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
+             ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED')]
+    if derived: pairs += [('game_env', 'DM_GAME_ENV'), ('sys_resource', 'DM_SYS_RESOURCE')]
     return ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
 
 
@@ -866,7 +872,8 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
                # game aborts in nninitStartup with nothing in the log to say why. The shell's host was built from the
                # placeholder profile, so this has to come from here.
                ('game_env', 'DM_GAME_ENV'))
-    env_lines = env_for(rows)
+    # A derived profile lives under the work folder (work/profile/<id>); a registered one in dm/games
+    env_lines = env_for(rows, derived=(work in gdir.parents))
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))
