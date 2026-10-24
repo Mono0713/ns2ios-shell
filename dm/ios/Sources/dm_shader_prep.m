@@ -26,8 +26,27 @@ static NSString *libdir(void) {   // <包>/msl/b-<链版本>：壳里只有一�
     return nil;
 }
 static NSString *marker(NSString *dir) {
+    // The key has to name this package's shaders, not just the source tree: the chain version (b-<V>) follows the source tree
+    // and is the same for every game, so a marker keyed by it alone says "done" for a different game's package, or for a
+    // repack whose shaders changed -- and the app then loads source-form .metallib files as if they were compiled, which
+    // Metal rejects as "Invalid library file" and the game runs on with no picture at all. The package's own stamp
+    // (inputs.tsv: the game and the digest of the profile inputs) is what distinguishes one package from another; a package
+    // without it falls back to a digest of the directory's contents.
+    NSString *tag = dir.lastPathComponent;
+    NSString *stamp = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"inputs.tsv"] encoding:NSUTF8StringEncoding error:nil];
+    for (NSString *ln in [stamp componentsSeparatedByString:@"\n"]) {
+        NSArray *c = [ln componentsSeparatedByString:@"\t"];
+        if (c.count == 2 && ([c[0] isEqual:@"inputs"] || [c[0] isEqual:@"game"])) tag = [tag stringByAppendingFormat:@"-%@", c[1]];
+    }
+    unsigned long long n = 0, bytes = 0;
+    for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil] ?: @[]) {
+        if (![f hasSuffix:@".metallib"]) continue;
+        NSDictionary *a = [NSFileManager.defaultManager attributesOfItemAtPath:[dir stringByAppendingPathComponent:f] error:nil];
+        n++; bytes += a.fileSize;
+    }
+    if (n) tag = [tag stringByAppendingFormat:@"-%llux%llu", n, bytes];
     NSString *c = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
-    return [c stringByAppendingPathComponent:[NSString stringWithFormat:@"dm_shader_prep_%@_%@.done", dir.lastPathComponent, NSProcessInfo.processInfo.operatingSystemVersionString.length ? @(NSProcessInfo.processInfo.operatingSystemVersion.majorVersion * 100 + NSProcessInfo.processInfo.operatingSystemVersion.minorVersion).stringValue : @"0"]];
+    return [c stringByAppendingPathComponent:[NSString stringWithFormat:@"dm_shader_prep_%@_%@.done", tag, NSProcessInfo.processInfo.operatingSystemVersionString.length ? @(NSProcessInfo.processInfo.operatingSystemVersion.majorVersion * 100 + NSProcessInfo.processInfo.operatingSystemVersion.minorVersion).stringValue : @"0"]];
 }
 static BOOL is_source(NSString *path) {   // 编好的库以 MTLB 开头；不是的就是源码 | a compiled library starts with MTLB; anything else is source
     FILE *f = fopen(path.fileSystemRepresentation, "rb"); if (!f) return NO; char h[4] = {0}; size_t n = fread(h, 1, 4, f); fclose(f);
