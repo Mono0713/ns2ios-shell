@@ -141,6 +141,8 @@ jobs:
     name: Shell
     needs: [check]
     if: needs.check.outputs.needed == 'true'
+    permissions:
+      contents: write        # the nightly sync commits the packer's copies
     runs-on: macos-26
     timeout-minutes: 60
     outputs:
@@ -207,44 +209,39 @@ jobs:
           echo "V=$V" >> "$GITHUB_ENV"
           echo "building $V from $src"
 
-      - name: Compare the packer's copies with the tree it ships with
-        # The shell is built from upstream's tree plus this fork's patches, but the packer a user runs reads the copies in
-        # this repository: dm/tools, dm/gfx/tools and dm/games. Nothing compared the two, so the shell could be current
-        # while the packer's tools were a snapshot -- which is how a game ended up rewriting with months-old logic and
-        # nobody noticed. Warning only: drift is not a release blocker, but it should never be silent again.
+      - name: Keep the packer's copies level with upstream
+        # The packer a user runs reads this repository's copies of dm/tools, dm/gfx/tools and dm/games. They are not
+        # patched, so the overlay never mentions them and nothing kept them level with the tree the shell is built from --
+        # which is how the shell stayed current while the rewriter stayed months old. The nightly copies them over and
+        # commits. Files this fork patches or adds are left to a human, because those need reading.
+        if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
-          python3 - "$GITHUB_WORKSPACE/fork" "$TREE" <<'PY'
-          import os, sys
-          fork, tree = sys.argv[1], sys.argv[2]
-          ours = set()                         # "~" files this fork changes and "+" files it adds: both by design
-          for line in open(os.path.join(fork, '.shell-overlay.txt'), encoding='utf-8'):
-              if line[:1] in ('~', '+'):
-                  ours.add(line[1:].split('#')[0].strip().rstrip('/'))
-          ours |= {'dm/gfx/tools/dmsh_xlate_bin', 'dm/gfx/tools/dmsh_chain.lock'}   # prebuilt translator, machine state
-          drift = []
-          for top in ('dm/tools', 'dm/gfx/tools', 'dm/games'):
-              for root, _, files in os.walk(os.path.join(fork, top)):
-                  if '__pycache__' in root or '.git' in root: continue
-                  for f in files:
-                      if f.endswith(('.pyc', '.old')): continue
-                      if f in ('c1_full.tsv', 'cb_extent.tsv', 'dmsh_chain.h'): continue   # per-profile build outputs, not sources
-                      rel = os.path.relpath(os.path.join(root, f), fork).replace(os.sep, '/')
-                      if rel in ours or any(rel.startswith(o + '/') for o in ours): continue
-                      theirs = os.path.join(tree, rel)
-                      if not os.path.isfile(theirs): drift.append(f'{rel} (gone upstream)'); continue
-                      with open(os.path.join(fork, rel), 'rb') as a, open(theirs, 'rb') as b:
-                          if a.read().replace(b'\r\n', b'\n') != b.read().replace(b'\r\n', b'\n'):
-                              drift.append(rel)
-          print(f'{len(drift)} file(s) differ from upstream')
-          for d in drift[:40]: print('  ' + d)
-          if len(drift) > 40: print(f'  ... and {len(drift) - 40} more')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-              f.write(f'\n### Packer drift vs upstream\n\n{len(drift)} file(s) differ.\n')
-              if drift: f.write('\n```\n' + '\n'.join(drift[:60]) + '\n```\n')
-          if drift:
-              print(f'::warning::{len(drift)} file(s) in dm/tools, dm/gfx/tools or dm/games differ from the tree the shell is built from: sync them or the packer runs different logic than the shell it ships with.')
-          PY
+          cd "$GITHUB_WORKSPACE/fork"
+          python3 dm/tools/packer_sync.py . "$TREE" --sync
+          if [ -z "$(git status --porcelain)" ]; then echo "already level with upstream"; exit 0; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Sync the packer's copies with upstream
+
+          dm/tools, dm/gfx/tools and dm/games are what the packer in this repository runs. They are not patched, so the
+          overlay never mentions them and nothing kept them level with the tree the shell is built from. Copied from the
+          tree this run assembled; the files this fork patches or adds are left alone."
+          git push
+
+      - name: Report drift a human has to look at
+        # Whatever still differs after the sync is a file this fork patches that upstream moved: that needs a rebase, not
+        # a copy. Warning only, but never silent.
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/fork/dm/tools/packer_sync.py" "$GITHUB_WORKSPACE/fork" "$TREE" \
+            > "$RUNNER_TEMP/drift.txt" || true
+          cat "$RUNNER_TEMP/drift.txt"
+          { echo "### Packer vs upstream"; echo; echo '```'; cat "$RUNNER_TEMP/drift.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q . "$RUNNER_TEMP/drift.txt"; then
+            echo "::warning::$(head -1 "$RUNNER_TEMP/drift.txt") -- see the job summary."
+          fi
 
       - name: Install dependencies
         run: |

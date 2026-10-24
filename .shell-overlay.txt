@@ -18,6 +18,7 @@
 + dm/ios/tools/shell_build.sh             # builds the game-free shell
 + dm/ios/DmIOS.entitlements               # increased-memory-limit: the shell is signed ad hoc with it so install tools see it
 + dm/tools/supported_list.py              # the supported-games page and release asset, from dm/games/*/game.tsv
++ dm/tools/packer_sync.py                 # keeps this fork's copies of dm/tools, dm/gfx/tools and dm/games level with upstream
 + dm/ios/tools/make_shell_patch.py        # regenerates .shell-patches/*.patch after editing a "~" file
 + dm/games/0000000000000000/game.tsv      # neutral placeholder profile the shell is compiled against
 + dm/games/0000000000000000/dmsh_chain.h
