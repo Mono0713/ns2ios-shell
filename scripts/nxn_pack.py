@@ -787,6 +787,17 @@ def step_guest(patched, mods, stage):
     say('Frameworks/Guest.framework: %d bytes' % n)
 
 
+def env_for(rows):
+    """The profile keys the shell cannot carry in its compiled-in header, as dm/env.txt lines.
+
+    main.m exports these before the host starts; hle_svc.c reads the memory layout from them, hle_os.c the game's own
+    getenv. Only keys the profile actually sets are written, so a game without one keeps the host's default.
+    """
+    pairs = (('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
+             ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'), ('game_env', 'DM_GAME_ENV'))
+    return ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
+
+
 def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work):
     """Unpack the shell and put the game into it: guest library, MSL source, RomFS, tables, icon, identity."""
     # Move a previous stage aside instead of deleting it: this environment counts file deletions and refuses to go past a
@@ -833,8 +844,13 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # reads them. Getting this wrong does not crash immediately -- the game asks for the wrong heap size and aborts in
     # SetHeapSize (Hades II asked for pool - 64 MB instead of pool - 108 MB and overflowed the pool by 44 MB).
     mem_map = (('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
-               ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'))
-    env_lines = ['%s=%s' % (ev, one(rows, k)) for k, ev in mem_map if one(rows, k)]
+               ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'),
+               # The game's own environment (hle_os.c getenv answers these names): a .NET game reserves its GC region from
+               # one, and without it the runtime takes the default 5 x heap -- 3.75 GB for Absolum, past the pool, and the
+               # game aborts in nninitStartup with nothing in the log to say why. The shell's host was built from the
+               # placeholder profile, so this has to come from here.
+               ('game_env', 'DM_GAME_ENV'))
+    env_lines = env_for(rows)
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))
