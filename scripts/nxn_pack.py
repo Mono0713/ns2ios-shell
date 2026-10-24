@@ -827,22 +827,32 @@ def step_guest(patched, mods, stage):
     say('Frameworks/Guest.framework: %d bytes' % n)
 
 
-def env_for(rows, derived=False):
+def env_for(rows, npdm_sr=None):
     """The profile keys the shell cannot carry in its compiled-in header, as dm/env.txt lines.
 
-    main.m exports these before the host starts; hle_svc.c reads the memory layout from them, hle_os.c the game's own
-    getenv. Only keys the profile actually sets are written, so a game without one keeps the host's default.
+    main.m exports these before the host starts; hle_svc.c reads the memory layout from them, hle_os.c the game's own getenv.
+    Only keys with a value are written, so anything left out keeps the host's compiled-in default.
 
-    game_env and sys_resource are written for a derived profile only. They change the path a game takes at startup -- 21
-    registered profiles declare a system resource, many of them 0, and the shell has always answered the placeholder
-    default (32 MB) for them; a title that works today would suddenly be told 0 and could take a different branch. Those
-    builds are the ones this project has verified, so they keep the behaviour they were tested with, and a build without a
-    profile of its own gets its real values.
+    sys_resource is the one value that must not be passed as zero. The game's own main.npdm decides it (META +0x14; the
+    profile's sys_resource is a transcription of that field) and zero is its truth there, but the SDK reads it as a switch
+    -- IsVirtualAddressMemoryEnabled is "total != 0" -- and the no-system-resource path asks for pool - used memory in one
+    go, which this host refuses because it charges a module's whole bss as used up front (Brain Memory asked for 960 MB
+    against a 128 MB cap and the SDK aborted). So a declared zero is not written at all and the host keeps answering its
+    placeholder default, which is the state the verified games were tested in. Any non-zero value is passed as it is, which
+    is what makes a game that declares one behave as it does on hardware.
     """
     pairs = [('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
              ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED')]
-    if derived: pairs += [('game_env', 'DM_GAME_ENV'), ('sys_resource', 'DM_SYS_RESOURCE')]
-    return ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
+    lines = ['%s=%s' % (ev, one(rows, k)) for k, ev in pairs if one(rows, k)]
+    ge = one(rows, 'game_env')
+    if ge: lines.append('DM_GAME_ENV=' + ge)
+    sr = npdm_sr if npdm_sr is not None else one(rows, 'sys_resource')   # an int from the NPDM, or the profile's text
+    if isinstance(sr, int): v = sr
+    else:
+        try: v = int(sr, 0) if sr else 0
+        except ValueError: v = 0
+    if v: lines.append('DM_SYS_RESOURCE=%#x' % v)
+    return lines
 
 
 def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work):
@@ -897,8 +907,7 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
                # game aborts in nninitStartup with nothing in the log to say why. The shell's host was built from the
                # placeholder profile, so this has to come from here.
                ('game_env', 'DM_GAME_ENV'))
-    # A derived profile lives under the work folder (work/profile/<id>); a registered one in dm/games
-    env_lines = env_for(rows, derived=(work in gdir.parents))
+    env_lines = env_for(rows, npdm_sys_resource(game))
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))
