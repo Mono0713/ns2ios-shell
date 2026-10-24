@@ -20,9 +20,14 @@ Usage:
                 rerun reuses the extraction, the rewritten modules and the compiled shaders. Worth it when repacking the
                 same game repeatedly; the folder is several times the size of the game.
   --clean       delete that working folder without packing anything
+  --no-shaders  an OpenGL/Vulkan game: build it with no shader library, so it boots (music, no picture) and can capture
+                its own shaders -- the first step of the route below
+  --gl-capture  an OpenGL game's captured shaders (<key>.vert / <key>.frag, written by DM_GL_CAPTURE): translated to Metal
+                sources here and compiled on the phone, so the package draws. This is the second step of that route.
 
-Requirements: Python 3.9+ with lz4, capstone, fonttools and pillow and the three executables from the release (nx_extract,
-dmsh_xlate, spirv-cross) on PATH or in --tools. Every step says what is missing before it starts.
+Requirements: Python 3.9+ with lz4, capstone, fonttools and pillow and the executables from the release (nx_extract,
+dmsh_xlate, spirv-cross, and glslangValidator for an OpenGL game's --gl-capture) on PATH or in --tools. Every step says
+what is missing before it starts.
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
@@ -1065,8 +1070,8 @@ def main():
     ap.add_argument('--clean', default='', metavar='NSP_FOLDER',
                     help='remove the working folder an earlier run left in NSP_FOLDER, and exit')
     ap.add_argument('--tools', default=os.environ.get('NXN_TOOLS', ''),
-                    help='folder holding nx_extract, dmsh_xlate and spirv-cross executables (the windows-tools CI '
-                         'artifact). They are put on PATH and used instead of building anything.')
+                    help='folder holding the nx_extract, dmsh_xlate, spirv-cross and glslangValidator executables (the '
+                         'windows-tools CI artifact). They are put on PATH and used instead of building anything.')
     a = ap.parse_args()
     if a.capture_gl and a.shell and not a.nsp_dir:      # capture mode's only positional is the game folder
         a.shell, a.nsp_dir = '', a.shell

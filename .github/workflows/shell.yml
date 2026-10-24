@@ -112,23 +112,37 @@ jobs:
           cmake -S SPIRV-Cross -B SPIRV-Cross/build -DSPIRV_CROSS_ENABLE_TESTS=OFF
           cmake --build SPIRV-Cross/build --config Release --target spirv-cross
 
+      - name: Build glslang at the pinned tag
+        run: |
+          git clone --branch 16.0.0 --depth 1 https://github.com/KhronosGroup/glslang
+          # GLSL → SPIR-V for the packer's --gl-capture route (an OpenGL game's captured shaders). Apple's Metal compiler
+          # only exists on a Mac, but this half of the chain runs anywhere.
+          cmake -S glslang -B glslang/build -DGLSLANG_TESTS=OFF -DENABLE_OPT=OFF -DENABLE_HLSL=OFF -DGLSLANG_ENABLE_INSTALL=OFF
+          cmake --build glslang/build --config Release --target glslang-standalone
+
       - name: Collect
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out/spirv-cross
+          mkdir -p out/spirv-cross out/glslang
           exe=$(find SPIRV-Cross -name 'spirv-cross.exe' -type f | head -1)
           test -n "$exe" || { echo "::error::spirv-cross.exe was not produced"; exit 1; }
           cp "$exe" out/spirv-cross/
+          # glslang's CLI target is glslang-standalone and it comes out as glslang.exe; gl_shaders.py calls it
+          # glslangValidator, the name the source builds and every release archive use.
+          gl=$(find glslang/build \( -name 'glslang.exe' -o -name 'glslangValidator.exe' \) -type f | head -1)
+          test -n "$gl" || { echo "::error::glslang.exe was not produced"; exit 1; }
+          cp "$gl" out/glslang/glslangValidator.exe
           test -f out/nx_extract/nx_extract.exe
           test -f out/dmsh_xlate/dmsh_xlate.exe
           ./out/spirv-cross/spirv-cross.exe --help > /dev/null
+          ./out/glslang/glslangValidator.exe --version
 
-          # Stage the three executables in one flat folder. Uploading three separate paths makes the artifact keep
+          # Stage the executables in one flat folder. Uploading separate paths makes the artifact keep
           # nx_extract/nx_extract.exe, and every consumer of the artifact then has to know that layout; one folder
-          # uploads flat, so tools/ ends up with exactly the three .exe files nxn_pack.py --tools expects.
+          # uploads flat, so tools/ ends up with exactly the .exe files nxn_pack.py --tools expects.
           mkdir -p stage
-          cp out/nx_extract/nx_extract.exe out/dmsh_xlate/dmsh_xlate.exe out/spirv-cross/spirv-cross.exe stage/
+          cp out/nx_extract/nx_extract.exe out/dmsh_xlate/dmsh_xlate.exe out/spirv-cross/spirv-cross.exe out/glslang/glslangValidator.exe stage/
           ls -l stage
 
       - uses: actions/upload-artifact@v4
@@ -489,11 +503,11 @@ jobs:
       - name: Pack the tools
         run: |
           set -euo pipefail
-          # flatten: the archive must unpack into the three .exe files, which is what --tools expects
+          # flatten: the archive must unpack into the .exe files, which is what --tools expects
           mkdir -p flat
           find tools -name '*.exe' -type f -exec cp {} flat/ \;
           ls -l flat
-          for t in nx_extract dmsh_xlate spirv-cross; do
+          for t in nx_extract dmsh_xlate spirv-cross glslangValidator; do
             test -f "flat/$t.exe" || { echo "::error::the windows-tools artifact has no $t.exe"; exit 1; }
           done
           (cd flat && zip -q ../dist/nxnative-windows-tools.zip ./*.exe)
@@ -501,16 +515,16 @@ jobs:
       - name: Write the notes
         run: |
           cat > notes.md <<'EOF'
-          The game-free shell, plus the three executables a packing machine needs. **Nothing here contains game content.**
+          The game-free shell, plus the executables a packing machine needs. **Nothing here contains game content.**
 
-          不含任何游戏内容的「壳」，以及打包机器需要的三个可执行文件。**这里没有任何游戏内容。**
+          不含任何游戏内容的「壳」，以及打包机器需要的可执行文件。**这里没有任何游戏内容。**
 
           ## Files / 文件
 
           | File / 文件 | What it is / 说明 |
           |---|---|
           | `<version>.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. <br> 壳：不含游戏内容的未签名 iOS 应用，把自己的游戏文件打进去。 |
-          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe` — self-contained; no .NET SDK or C++ toolchain needed. <br> 三个自包含可执行文件，无需 .NET SDK 或 C++ 工具链。 |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe`, `glslangValidator.exe` — self-contained; no .NET SDK or C++ toolchain needed. <br> 四个自包含可执行文件，无需 .NET SDK 或 C++ 工具链。 |
 
           ## Use it / 用法
 
