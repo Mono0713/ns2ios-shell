@@ -65,6 +65,30 @@ jobs:
           ls -l dist/gl_capture | head -20
           echo "count: $(ls dist/gl_capture | wc -l)"
 
+      - name: Re-run the host under a debugger
+        # The packer boots the game and stops at the first abort, which is all the phone's log can show. Running the same
+        # host under lldb with a breakpoint on abort gives the frames below the guest's diag call: the HLE the game was in
+        # when it gave up. Works for any game whose shader capture boots.
+        if: failure()
+        run: |
+          set -uo pipefail
+          host=$(find games -name dmhost -type f | head -1)
+          patched=$(find games -type d -name patched | head -1)
+          if [ -z "${host:-}" ] || [ -z "${patched:-}" ]; then echo "no host built, nothing to debug"; exit 0; fi
+          echo "host: $host"
+          echo "patched: $patched"
+          mkdir -p lldb/save lldb/temp lldb/msl lldb/cap
+          DM_ROMFS="$PWD/$(dirname "$patched")/../extract/$(ls games/*/*_pack/extract | head -1)" \
+          DM_SAVE="$PWD/lldb/save" DM_TEMP="$PWD/lldb/temp" DM_MSL_DIR="$PWD/lldb/msl" DM_GL_CAPTURE="$PWD/lldb/cap" \
+          lldb --batch -o "breakpoint set -n abort" -o run -o "bt all" -o "register read x0 x1 x2 x3" -o quit -- "$host" "$patched" 2>&1 | tail -120 | tee lldb.txt
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ${{ inputs.game }}-lldb
+          path: lldb.txt
+          if-no-files-found: warn
+
       - name: Summarise
         if: always()
         run: |
