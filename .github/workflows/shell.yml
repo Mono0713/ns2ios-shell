@@ -29,6 +29,10 @@ on:
       - 'dm/**'
       - 'scripts/**'
       - '.shell-overlay.txt'
+      # A commit that only moves the patch base or rewrites a patch is exactly the one that needs
+      # `Assemble the source tree` to run; without these two lines it got no build at all.
+      - '.shell-base.txt'
+      - '.shell-patches/**'
       - '.github/workflows/shell.yml'
   schedule:
     - cron: '0 0 * * *'   # daily at 08:00 Beijing time, and only when upstream actually moved (see the check job)
