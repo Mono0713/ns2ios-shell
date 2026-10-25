@@ -7,12 +7,4 @@ CUTS = {
   '916f5b8d61baa16d0939404ea047e129': [
     (0x28bff4, '4001c0d2', '0000b4d2', 'malloc region size: mov x0,#0xa00000000 → mov x0,#0xa0000000 (40 GB → 2.5 GB of address space)'),
   ],
-  # Absolum 1.0.4, the build this fork was handed: the same 40 GB request, at a different place. In 1.0.4 the compiler
-  # hoisted the constant into a function of its own (mov x0,#0xa00000000; ret at main+0x29a514) that both the call to
-  # StandardAllocator::Initialize and the abort after it read, so it is the only copy of the value in the module. Without
-  # this cut the game aborts in nninitStartup exactly as upstream's note describes ("called from main+0x756310" there),
-  # because a 5 GB guest block cannot hold a 40 GB region.
-  '1d60d39fc40ec2ead6bad3bb794c1581': [
-    (0x29a514, '4001c0d2', '0000b4d2', 'malloc region size: mov x0,#0xa00000000 → mov x0,#0xa0000000 (40 GB → 2.5 GB of address space)'),
-  ],
 }
