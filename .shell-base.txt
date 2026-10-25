@@ -1,3 +1,3 @@
-ec4ea16da0605170752ae7df0c020dd868662052
+9a56ecf0c1c421c8c3639ceeffc493d0bdb900ab
 The upstream commit (seedds/nxnative) the patches in .shell-patches/ were generated against.
 Regenerate them when you change one of the "~" files in .shell-overlay.txt: see docs/SHELL.md.

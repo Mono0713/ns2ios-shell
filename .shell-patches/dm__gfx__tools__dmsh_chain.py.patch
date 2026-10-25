@@ -1,7 +1,7 @@
 diff --git a/dm/gfx/tools/dmsh_chain.py b/dm/gfx/tools/dmsh_chain.py
 --- a/dm/gfx/tools/dmsh_chain.py
 +++ b/dm/gfx/tools/dmsh_chain.py
-@@ -60,13 +60,19 @@
+@@ -67,13 +67,19 @@
  def table_head(lib):   # the header c1_full.tsv / cb_extent.tsv start with: the library's chain version and its inputs ("none" when it has no stamp, which nothing takes)
      return f'# chain {os.path.basename(os.path.normpath(lib))} inputs {read_stamp(lib).get("inputs", "none")}'
  
@@ -23,7 +23,7 @@ diff --git a/dm/gfx/tools/dmsh_chain.py b/dm/gfx/tools/dmsh_chain.py
      sc = subprocess.run(['which', 'spirv-cross'], capture_output=True, text=True).stdout.strip()
      t['spirv-cross'] = sha16(sc) if sc else 'missing'
      for sdk in ('macosx', 'iphoneos'):
-@@ -80,7 +86,9 @@
+@@ -87,7 +93,9 @@
  def check_tools():
      want = dict(l.rstrip('\n').split('\t', 1) for l in open(LOCK) if '\t' in l and not l.startswith('#'))
      now = tools_now(); bad = [f'{k}: lock {want.get(k)} / actual {v}' for k, v in now.items() if want.get(k) != v]
@@ -34,7 +34,7 @@ diff --git a/dm/gfx/tools/dmsh_chain.py b/dm/gfx/tools/dmsh_chain.py
      return bad
  
  def header_text(v):
-@@ -92,7 +100,11 @@
+@@ -99,7 +107,11 @@
      a = sys.argv[1:]
      if a == ['--update-lock']:
          t = tools_now()
