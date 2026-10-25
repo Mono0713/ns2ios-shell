@@ -655,16 +655,3 @@ jobs:
           fi
           echo "published $TAG" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Keep the release list short
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Only the newest few stay. Before this the list grew by one per build -- first because every push published,
-          # then because the nightly rebuild never recognised that it had already published this upstream commit.
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
-            | tail -n +4 | while read -r t; do
-                if [ -n "$t" ]; then
-                  gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "removed $t"
-                fi
-              done
