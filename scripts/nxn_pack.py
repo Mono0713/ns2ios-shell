@@ -26,8 +26,9 @@ Usage:
                 sources here and compiled on the phone, so the package draws. This is the second step of that route.
 
 Requirements: Python 3.9+ with lz4, capstone, fonttools and pillow and the executables from the release (nx_extract,
-dmsh_xlate, spirv-cross, and glslangValidator for an OpenGL game's --gl-capture) on PATH or in --tools. Every step says
-what is missing before it starts.
+dmsh_xlate, spirv-cross, glslangValidator for an OpenGL game's --gl-capture, and zstd for a game whose files are
+zstd-compressed) on PATH or in --tools. Every step says what is missing before it starts. The release's
+nxnative-windows-tools.zip holds all five, so nothing has to be installed by hand.
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
@@ -211,7 +212,12 @@ def check_env(keys_path, prebuilt=None):
         import compression.zstd                                    # built in from Python 3.14
     except Exception:
         try: __import__('backports.zstd')
-        except Exception: bad.append('Python package backports.zstd:  %s -m pip install backports.zstd' % PY)
+        except Exception:
+            # the release's zstd.exe does the same job and --tools is already on PATH by now, so a user never has to
+            # install a Python package for this
+            if not which('zstd'):
+                bad.append('a zstd decoder: the release\'s nxnative-windows-tools.zip has zstd.exe (pass it with --tools), '
+                           'or put zstd on PATH, or %s -m pip install backports.zstd' % PY)
     dotnet = which('dotnet') or (str(Path.home() / '.dotnet' / 'dotnet') if (Path.home() / '.dotnet' / 'dotnet').is_file() else None)
     if prebuilt:
         # nx_extract and the shader translator come prebuilt, so no .NET SDK is needed on this machine
@@ -1093,8 +1099,9 @@ def main():
     ap.add_argument('--clean', default='', metavar='NSP_FOLDER',
                     help='remove the working folder an earlier run left in NSP_FOLDER, and exit')
     ap.add_argument('--tools', default=os.environ.get('NXN_TOOLS', ''),
-                    help='folder holding the nx_extract, dmsh_xlate, spirv-cross and glslangValidator executables (the '
-                         'windows-tools CI artifact). They are put on PATH and used instead of building anything.')
+                    help='folder holding the nx_extract, dmsh_xlate, spirv-cross, glslangValidator and zstd executables '
+                         '(the windows-tools CI artifact, packed as nxnative-windows-tools.zip). They are put on PATH and '
+                         'used instead of building anything.')
     a = ap.parse_args()
     if a.capture_gl and a.shell and not a.nsp_dir:      # capture mode's only positional is the game folder
         a.shell, a.nsp_dir = '', a.shell

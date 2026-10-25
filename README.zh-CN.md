@@ -23,7 +23,7 @@ macOS 皆可，不需要 Xcode。
 |---|---|---|
 | **打包器** | Releases 页面的 `Source code (zip)`——发布包带的是**整个仓库**，不只是壳 | 任意位置，例 `D:\nxn` |
 | **壳** | Releases 页面的 `shell-<日期>-<提交>.zip` | 例 `D:\nxn\shell.zip` |
-| **三个可执行文件** | Releases 页面的 `nxnative-windows-tools.zip`（自包含，不需要 .NET SDK） | 解压到例 `D:\nxn-tools` |
+| **五个可执行文件** | Releases 页面的 `nxnative-windows-tools.zip`（自包含，不需要 .NET SDK，也不用另装任何东西） | 解压到例 `D:\nxn-tools` |
 | **你的游戏文件 + `prod.keys`** | 你自己的机器 | 例 `D:\games\hades2\` |
 
 > **为什么必须整份源码，不能只拷 `nxn_pack.py`？**
@@ -79,7 +79,7 @@ IPA 默认写在游戏文件旁边（`-o` 可指定）。过程会解开游戏�
 |---|---|
 | 打包器 | release 里的 `Source code (zip)`——**必须有 `dm/`**，见上面的说明 |
 | Python 3.9+ | `python -m pip install lz4 capstone fonttools backports.zstd pillow`。装给**运行打包器的那一个**解释器 |
-| 三个可执行文件 | 来自 `nxnative-windows-tools.zip`，用 `--tools` 指过去 |
+| 五个可执行文件 | 来自 `nxnative-windows-tools.zip`，用 `--tools` 指过去。打包器要调的外部程序全在里面，**包括 `zstd`**，不用自己再去找 |
 | `prod.keys` | 从你自己的主机导出。**永远不离开你的机器**：它只作为参数传给 `nx_extract`，不会写进任何日志 |
 
 不需要 .NET SDK、不需要 C++ 工具链、不需要 Mac。（想自己编工具也行：`dotnet publish dm/tools/nx_extract -r win-x64 --self-contained`，`dm/gfx/tools/dmsh_xlate` 同理；SPIRV-Cross 必须用 `vulkan-sdk-1.4.357.0` 这个 tag。）
@@ -258,7 +258,8 @@ NVN-on-Metal 层和 iOS app 外壳——两个项目之间的修复是**双向**
 自己实现的，代码没有拷贝。
 
 `nx_extract` 使用 **[LibHac](https://github.com/Thealexbarney/LibHac)**；着色器翻译器内嵌了 Ryujinx 的着色器库；着色器由  
-**[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** 翻译。
+**[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** 翻译；工具包里的 `zstd.exe` 是 Meta 的
+**[zstd](https://github.com/facebook/zstd)** CLI v1.5.7，按它的 BSD 许可原样再分发。
 
 **许可：MIT**，与上游一致。[LICENSE](LICENSE) 是上游自己的文件，其中保留的是原始版权声明（© 2026 jhaizhou——nxnative 从  
 d2r-mobile 的通用部分起步，因此沿用了它的署名）。转载本分支或其构建产物时，请保留该声明与本许可。MIT 只覆盖代码：游戏文件、  

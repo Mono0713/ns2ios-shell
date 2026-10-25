@@ -7,8 +7,9 @@ name: Build shell
 #   upstream  the latest seedds/nxnative commit with this fork's changes copied over it, per .shell-overlay.txt
 #             (the daily schedule uses this, so an upstream update becomes a new release without anyone acting)
 #
-# The output contains no game content: a few MB of app plus three Windows executables. Users pack their own game files
-# into the shell with scripts/nxn_pack.py and sideload the result.
+# The output contains no game content: a few MB of app plus five Windows executables (the packer's tools, zstd among
+# them, so a user never has to hunt for one). Users pack their own game files into the shell with scripts/nxn_pack.py
+# and sideload the result.
 
 on:
   workflow_dispatch:
@@ -137,6 +138,18 @@ jobs:
           cmake -S glslang -B glslang/build -DGLSLANG_TESTS=OFF -DENABLE_OPT=OFF -DENABLE_HLSL=OFF -DGLSLANG_ENABLE_INSTALL=OFF
           cmake --build glslang/build --config Release --target glslang-standalone
 
+      - name: Fetch zstd
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shader_split.py needs a zstd decoder for every game whose files are zstd-compressed (Rhythm Heaven Groove's .zs,
+          # Paper Mario's .zst, Tears of the Kingdom's dictionary frames). macOS and Linux have the `zstd` command; Windows
+          # does not, and telling a user to go and find one is not what a tools bundle is for. It ships here, fifth.
+          curl -sSfL -o zstd.zip https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip
+          mkdir -p out/zstd
+          unzip -q -j zstd.zip 'zstd-v1.5.7-win64/zstd.exe' -d out/zstd
+          ./out/zstd/zstd.exe --version
+
       - name: Collect
         shell: bash
         run: |
@@ -152,6 +165,7 @@ jobs:
           cp "$gl" out/glslang/glslangValidator.exe
           test -f out/nx_extract/nx_extract.exe
           test -f out/dmsh_xlate/dmsh_xlate.exe
+          test -f out/zstd/zstd.exe
           ./out/spirv-cross/spirv-cross.exe --help > /dev/null
           ./out/glslang/glslangValidator.exe --version
 
@@ -159,7 +173,8 @@ jobs:
           # nx_extract/nx_extract.exe, and every consumer of the artifact then has to know that layout; one folder
           # uploads flat, so tools/ ends up with exactly the .exe files nxn_pack.py --tools expects.
           mkdir -p stage
-          cp out/nx_extract/nx_extract.exe out/dmsh_xlate/dmsh_xlate.exe out/spirv-cross/spirv-cross.exe out/glslang/glslangValidator.exe stage/
+          cp out/nx_extract/nx_extract.exe out/dmsh_xlate/dmsh_xlate.exe out/spirv-cross/spirv-cross.exe \
+             out/glslang/glslangValidator.exe out/zstd/zstd.exe stage/
           ls -l stage
 
       - uses: actions/upload-artifact@v4
@@ -536,7 +551,7 @@ jobs:
           mkdir -p flat
           find tools -name '*.exe' -type f -exec cp {} flat/ \;
           ls -l flat
-          for t in nx_extract dmsh_xlate spirv-cross glslangValidator; do
+          for t in nx_extract dmsh_xlate spirv-cross glslangValidator zstd; do
             test -f "flat/$t.exe" || { echo "::error::the windows-tools artifact has no $t.exe"; exit 1; }
           done
           (cd flat && zip -q ../dist/nxnative-windows-tools.zip ./*.exe)
@@ -581,7 +596,7 @@ jobs:
           | File | What it is |
           |---|---|
           | `<version>.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. |
-          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe`, `glslangValidator.exe` — self-contained; no .NET SDK or C++ toolchain needed. |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe`, `glslangValidator.exe`, `zstd.exe` — self-contained; no .NET SDK or C++ toolchain needed, and nothing else to install. |
 
           ## Use it
 
@@ -611,7 +626,7 @@ jobs:
           | 文件 | 说明 |
           |---|---|
           | `<version>.zip` | 壳：不含游戏内容的未签名 iOS 应用，把自己的游戏文件打进去。 |
-          | `nxnative-windows-tools.zip` | `nx_extract.exe`、`dmsh_xlate.exe`、`spirv-cross.exe`、`glslangValidator.exe`——自包含，不需要 .NET SDK 或 C++ 工具链。 |
+          | `nxnative-windows-tools.zip` | `nx_extract.exe`、`dmsh_xlate.exe`、`spirv-cross.exe`、`glslangValidator.exe`、`zstd.exe`——自包含，不需要 .NET SDK 或 C++ 工具链，也不用另装任何东西。 |
 
           ## 用法
 

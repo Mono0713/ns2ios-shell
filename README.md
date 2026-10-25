@@ -25,7 +25,7 @@ repository or CI.
 |---|---|---|
 | **The packer** | `Source code (zip)` on the [Releases page](https://github.com/xinerqu/ns2ios-shell/releases) — a release carries the whole repository, not just the shell | anywhere, e.g. `D:\nxn` |
 | **The shell** | `shell-<date>-<commit>.zip` on the Releases page | e.g. `D:\nxn\shell.zip` |
-| **The three executables** | `nxnative-windows-tools.zip` on the Releases page (self-contained, no .NET SDK) | unpack to e.g. `D:\nxn-tools` |
+| **The five executables** | `nxnative-windows-tools.zip` on the Releases page (self-contained, no .NET SDK, nothing else to install) | unpack to e.g. `D:\nxn-tools` |
 | **Your game files + `prod.keys`** | your own machine | e.g. `D:\games\hades2\` |
 
 > **Why the whole source, and not just `nxn_pack.py`?**
@@ -88,7 +88,7 @@ On the **packing machine**:
 |---|---|
 | The packer | `Source code (zip)` from the release — **`dm/` must be there**, see above |
 | Python 3.9+ | `python -m pip install lz4 capstone fonttools backports.zstd pillow`, into **the interpreter that runs the packer** |
-| Three executables | From `nxnative-windows-tools.zip`, passed with `--tools` |
+| Five executables | From `nxnative-windows-tools.zip`, passed with `--tools`. They cover everything the packer shells out to, `zstd` included, so no separate utility hunt |
 | `prod.keys` | Dumped from your own console. It never leaves your machine: it is passed to `nx_extract` as an argument and is not written to any log |
 
 No .NET SDK, no C++ toolchain, no Mac. (Building the tools yourself is possible: `dotnet publish dm/tools/nx_extract -r win-x64
@@ -262,7 +262,8 @@ tools keep the entitlement are theirs as well. The build-time signing here (`dm/
 step in `shell_build.sh`) is written for this fork; no code was copied.
 
 `nx_extract` uses **[LibHac](https://github.com/Thealexbarney/LibHac)**; the shader translator embeds Ryujinx's shader library;
-shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**.
+shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**; `zstd.exe` in the tools zip is
+Meta's **[zstd](https://github.com/facebook/zstd)** CLI v1.5.7, redistributed unmodified under its BSD licence.
 
 **License: MIT**, the same as upstream. [LICENSE](LICENSE) is upstream's own file and carries the original copyright notice
 (© 2026 jhaizhou — nxnative kept it from d2r-mobile, whose generic parts it started from). If you redistribute this fork or a
