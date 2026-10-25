@@ -366,7 +366,8 @@ namespace Ryujinx.Graphics.Shader.Translation
                 GpuAccessor.QueryHostSupportsShaderFloat64(),
                 GpuAccessor.QueryHostSupportsShaderNonUniformIndexing(),
                 GpuAccessor.QueryHostSupportsTextureShadowLod(),
-                GpuAccessor.QueryHostSupportsViewportMask());
+                GpuAccessor.QueryHostSupportsViewportMask(),
+                Options.Flags.HasFlag(TranslationFlags.Msl23ImageAtomics));
 
             CodeGenParameters parameters = new CodeGenParameters(attributeUsage, definitions, resourceManager.Properties, hostCapabilities, GpuAccessor, Options.TargetApi);
 
@@ -460,7 +461,7 @@ namespace Ryujinx.Graphics.Shader.Translation
         {
             if (vertexAsCompute)
             {
-                return new ShaderDefinitions(ShaderStage.Compute, 32, 32, 1);
+                return new ShaderDefinitions(ShaderStage.Compute, 32, GpuAccessor.QueryGeometryInputFixed() ? 1 : 32, 1);
             }
             else
             {

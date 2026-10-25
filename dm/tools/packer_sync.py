@@ -15,10 +15,11 @@ import os
 import shutil
 import sys
 
-# Every folder the packer or the host build reads and this fork does not patch: dm/gfx covers the graphics layer the
-# Mac host compiles (dm/gfx, dm/gfx/nvn, dm/gfx/tex, dm/gfx/vk, dm/gfx/gl), which drifted unnoticed until a build
-# failed on a header upstream had added.
-TOPS = ('dm/tools', 'dm/gfx', 'dm/games', 'dm/host')
+# Every folder this repository compiles or ships and does not patch: dm/gfx covers the graphics layer the Mac host
+# compiles (dm/gfx, dm/gfx/nvn, dm/gfx/tex, dm/gfx/vk, dm/gfx/gl), dm/third_party the shader translator's own copy of
+# Ryujinx's library. Both drifted unnoticed until a build failed on something upstream had added -- a header, and then
+# TranslationFlags.Msl23ImageAtomics, which the CI tools job compiles from this tree and not from upstream's.
+TOPS = ('dm/tools', 'dm/gfx', 'dm/games', 'dm/host', 'dm/third_party')
 ALWAYS_SKIP = {'dm/gfx/tools/dmsh_xlate_bin', 'dm/gfx/tools/dmsh_chain.lock'}
 SKIP_NAMES = {'c1_full.tsv', 'cb_extent.tsv', 'dmsh_chain.h'}   # made per profile at build time, not sources
 
