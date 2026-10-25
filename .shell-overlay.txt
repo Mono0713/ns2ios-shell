@@ -3,9 +3,9 @@
 #   + path   a file this fork adds: copied onto the upstream tree as it is
 #   ~ path   a file this fork modifies: the matching .shell-patches/*.patch is applied to the upstream file
 #
-# The patches are unified diffs generated against upstream 1c584dc3 (see .shell-base.txt), so an upstream change elsewhere in
-# one of these files merges automatically instead of being lost by a whole-file copy. Only a change to the same lines makes
-# `git apply` fail, and that is the one case that needs a human.
+# The patches are unified diffs against the base commit recorded in .shell-base.txt, so an upstream change elsewhere in one of
+# these files merges automatically instead of being lost by a whole-file copy. Only a change to the same lines makes `git apply`
+# fail, and that is the one case that needs a human. A patch left over from an older base keeps applying for the same reason.
 #
 # When you add or modify a file for the shell route, add it here -- and for a "~" entry, regenerate its patch with
 # `python dm/ios/tools/make_shell_patch.py <path>` (or --all), which diffs this tree against the base commit and handles CRLF.

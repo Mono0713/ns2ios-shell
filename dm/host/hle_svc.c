@@ -31,7 +31,6 @@ static uint64_t sys_resource(void) { static uint64_t v; if (!v) v = env_u64("DM_
 #define RESERVE g_reserve
 #define APP_POOL app_pool()
 #define MEM_USED mem_used()
-#define RESERVE_DEFAULT DM_GAME_MEM_RESERVE   // SMBW: the heap needs only 1.47 GB, so the block stays at 5 GB (the total proven on a real device; a single 6 GB block can be reserved, but Metal etc. still need address space)
 static uint8_t *g_as;              // ASLR region base = the whole block
 static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_cap;
 // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
