@@ -87,6 +87,33 @@ bash dm/ios/tools/shell_build.sh
 
 判断「要不要改 C」的一条线：只要上游没碰这六处替换点和相关结构体，补丁合上就能编过。
 
+### 主动把基准往前推（不是等 CI 报错）
+
+CI 只在冲突发生之后才知道。要让这棵树主动跟上上游——发布时本来也该这么做，因为 release 的《Source code》
+快照应该就是壳构建时用的那棵树——按这两步走：
+
+```
+python3 dm/tools/packer_sync.py . <上游克隆>            # 结束必须是 0 file(s) differ, 0 upstream-only
+```
+
+- **跑两遍**：先 `--sync`，再不带 `--sync`，读第二份报告。还剩下的就是真漂移。
+- **`(gone upstream)` 那些必须手动删。** `--sync` 只负责复制和新增，**从不删除**。上游删文件通常意味着
+  它在宿主里把根因修掉了、不再需要那个绕道补丁（例如某个资源堆或电影门的按 build ID 补丁）。
+  本地留着就等于「上游已经不打的补丁我们还在打」。
+- `packer_sync.py` 覆盖 `dm/tools`、`dm/gfx`、`dm/games`、`dm/host` 和 `dm/third_party`。最后一个是补上的：
+  CI 的 tools 任务是从**这棵树**编译 `dmsh_xlate.exe` 的，上游加 `TranslationFlags.Msl23ImageAtomics` 时，
+  编译就断在那份从没被比对过的 vendored 代码上。
+
+**验补丁要对着它将要打上去的那棵树，不要对着自己的工作副本。** `.shell-patches/*.patch` 在本地是按
+CRLF 检出的（`core.autocrlf`），而上游是 LF，于是 `git apply --check` 会报一个**并不存在**的失败。
+用提交里的字节：
+
+```
+git cat-file -p HEAD:.shell-patches/xxx.patch > /tmp/xxx.patch   # 或者：tr -d '\r' < xxx.patch
+git -C up apply --check /tmp/xxx.patch
+```
+
+
 这一步完全在 CI 里完成，Windows 端看到的只是一个新的壳 zip：命令、参数、Python 依赖都不变。
 
 ## 壳与打包器的契约

@@ -99,6 +99,33 @@ publishes nothing — you never get a shell that has drifted from upstream witho
 The rule of thumb for "does C need work": if upstream touched none of those six substitution points or the structs around them,
 the patch applying means it builds.
 
+### Moving the base deliberately (not just when CI complains)
+
+CI only tells you about a conflict after it happens. Bringing the tree to upstream by hand — which is what a release wants
+anyway, since the `Source code` archive of a release should be the tree the shell was built from — means:
+
+```
+python3 dm/tools/packer_sync.py . <upstream clone>            # must end 0 file(s) differ, 0 upstream-only
+```
+
+- Run it **twice**: once with `--sync`, once without, and read the second report. Anything left there is drift.
+- **`(gone upstream)` lines have to be deleted by hand.** `--sync` copies and adds, it never removes. Upstream deleting a
+  file usually means it fixed the cause in the host and no longer needs the workaround — a per-build `patches.py` for a
+  resource heap or a movie gate. Keeping a local copy means this fork keeps patching builds upstream has stopped patching.
+- `packer_sync.py` covers `dm/tools`, `dm/gfx`, `dm/games`, `dm/host` and `dm/third_party`. The last one is there because
+  the CI tools job compiles `dmsh_xlate.exe` from this tree: when upstream added `TranslationFlags.Msl23ImageAtomics` the
+  build failed on a vendored copy that had never been compared.
+
+**Check a patch against the tree it will be applied to, not against your working copy.** `.shell-patches/*.patch` is
+checked out as CRLF (`core.autocrlf`) while upstream is LF, so `git apply --check` on the working copy reports a failure
+that is not there. Use the committed bytes:
+
+```
+git cat-file -p HEAD:.shell-patches/xxx.patch > /tmp/xxx.patch   # or: tr -d '\r' < xxx.patch
+git -C up apply --check /tmp/xxx.patch
+```
+
+
 All of this happens in CI. On Windows it shows up as nothing but a new shell zip: same command, same flags, same Python
 dependencies.
 
