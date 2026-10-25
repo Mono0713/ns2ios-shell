@@ -496,6 +496,13 @@ jobs:
       && (github.event_name == 'schedule' || inputs.publish == true)
     runs-on: ubuntu-latest
     steps:
+      # First, before anything downloads or writes files: when the workspace is not a git repository yet, checkout empties
+      # the whole directory before cloning. It used to sit further down -- between "Pack the tools" and "Write the notes" --
+      # which deleted the artifacts that had already been downloaded into it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the tags, so "what changed since the last release" can be answered
+
       - uses: actions/download-artifact@v4
         with:
           name: shell
@@ -516,11 +523,6 @@ jobs:
             test -f "flat/$t.exe" || { echo "::error::the windows-tools artifact has no $t.exe"; exit 1; }
           done
           (cd flat && zip -q ../dist/nxnative-windows-tools.zip ./*.exe)
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0          # the tags, so "what changed since the last release" can be answered
-          clean: false            # the shell and the tools were downloaded above; a clean checkout would delete them
 
       - name: Write the notes
         env:
