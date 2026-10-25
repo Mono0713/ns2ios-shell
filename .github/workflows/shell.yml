@@ -50,6 +50,11 @@ jobs:
       needed: ${{ steps.decide.outputs.needed }}
       upstream: ${{ steps.decide.outputs.upstream }}
     steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'schedule'
+        with:
+          fetch-depth: 0          # git diff against the previous release's commit
+
       - name: Compare upstream with the latest release
         id: decide
         env:
@@ -78,9 +83,20 @@ jobs:
               fi
               if [ -z "$WHY" ] && [ -n "$PREV_UP" ] && [ "$PREV_UP" = "$UP" ]; then
                 NEEDED=false; WHY="upstream $UP is already published as $LATEST"
-              else
-                [ -n "$WHY" ] || WHY="upstream $UP is not what ${LATEST:-nothing} was built from"
+              elif [ -z "$WHY" ]; then
+                # Upstream has not moved, but the packer may have. The packer is what a user runs, and it lives in this
+                # repository rather than in the release: new game support, a rewriter fix, a shader-table update all
+                # reach users through `git pull`. Somebody watching the releases page for "is there anything new" would
+                # see nothing and conclude the project had stopped. So a change under dm/ or scripts/ publishes too.
+                # A change only to .github/ or the docs does not: nothing a user runs is different.
+                PREV_SHA=$(echo "$LATEST" | awk -F- '{print $NF}')   # the tag's last segment is this repository's commit
+                if [ -n "$PREV_SHA" ] && git rev-parse -q --verify "$PREV_SHA^{commit}" >/dev/null 2>&1; then
+                  if [ "$(git diff --name-only "$PREV_SHA"..HEAD -- dm scripts | wc -l)" -gt 0 ]; then
+                    NEEDED=true; WHY="the packer changed since $LATEST (upstream has not)"
+                  fi
+                fi
               fi
+              [ -n "$WHY" ] || WHY="upstream $UP is not what ${LATEST:-nothing} was built from"
             fi
           fi
           echo "needed=$NEEDED" >> "$GITHUB_OUTPUT"

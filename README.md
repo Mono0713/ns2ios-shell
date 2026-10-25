@@ -115,6 +115,19 @@ instead of unpacking again.
 Formats: **NSP** (base game, updates, DLC) and **XCI** (base game only). **NSZ is not supported** — unpack it first with
 `nsz -D "file.nsz"`.
 
+## Two things update on different schedules
+
+Keep these apart, because they answer different questions:
+
+- **The packer lives in this repository.** `scripts/nxn_pack.py`, everything under `dm/` (the rewriter, the shader tools,
+  the translation chain) and every game profile. `git pull` gets you the newest of all of it, and it works with the shell you
+  already have. New game support, rewriter fixes and shader-table updates arrive here.
+- **The shell is the zip on the releases page.** It is a compiled iOS app. It changes only when the host or the graphics
+  layer does — not for every packer change.
+
+**So "no new release" does not mean "nothing changed".** If the supported-games list has grown, or a game that used to pack
+no longer does, `git pull` first: the fix is very likely in the packer, which needs no new release to reach you.
+
 ## Which games work, and which version
 
 Any game with a profile in [`dm/games/`](dm/games/). **Any version works**, with or without an update: the packer takes the
