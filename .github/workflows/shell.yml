@@ -67,9 +67,16 @@ jobs:
               echo "upstream=$UP" >> "$GITHUB_OUTPUT"
               LATEST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""') \
                 || WHY='the release list could not be read'
-              # Tags are shell-<date>-<upstream sha, 7 characters>. The newest release is the newest build, because older
-              # ones are deleted once a run succeeds.
-              if [ -z "$WHY" ] && [ -n "$LATEST" ] && [ "${LATEST##*-}" = "${UP:0:7}" ]; then
+              # What the newest release was built from is in its first line ("Source: upstream <sha>"), not in its tag:
+              # a tag is shell-<date>-<upstream7>-<fork7>, so its last segment is THIS repository's sha and comparing
+              # that against upstream's can never match -- which quietly turned every nightly run into a rebuild and a
+              # republish, and buried the current release among a day's worth of them.
+              PREV_UP=''
+              if [ -n "$LATEST" ]; then
+                PREV_UP=$(gh release view "$LATEST" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null \
+                          | sed -n 's/^Source: upstream \([0-9a-f]\{7,\}\).*/\1/p' | head -1) || true
+              fi
+              if [ -z "$WHY" ] && [ -n "$PREV_UP" ] && [ "$PREV_UP" = "$UP" ]; then
                 NEEDED=false; WHY="upstream $UP is already published as $LATEST"
               else
                 [ -n "$WHY" ] || WHY="upstream $UP is not what ${LATEST:-nothing} was built from"
@@ -647,3 +654,17 @@ jobs:
             gh release create "$TAG" dist/*.zip dist/*.tsv --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file body.md
           fi
           echo "published $TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the release list short
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Only the newest few stay. Before this the list grew by one per build -- first because every push published,
+          # then because the nightly rebuild never recognised that it had already published this upstream commit.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
+            | tail -n +4 | while read -r t; do
+                if [ -n "$t" ]; then
+                  gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "removed $t"
+                fi
+              done
