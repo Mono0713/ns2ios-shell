@@ -21,15 +21,17 @@ macOS 皆可，不需要 Xcode。
 
 | 要什么 | 从哪来 | 放哪 |
 |---|---|---|
-| **仓库（必须完整）** | `git clone https://github.com/xinerqu/ns2ios-shell`，或 Releases 页面的源码压缩包 | 任意位置，例 `D:\nxn` |
+| **打包器** | Releases 页面的 `Source code (zip)`——发布包带的是**整个仓库**，不只是壳 | 任意位置，例 `D:\nxn` |
 | **壳** | Releases 页面的 `shell-<日期>-<提交>.zip` | 例 `D:\nxn\shell.zip` |
 | **三个可执行文件** | Releases 页面的 `nxnative-windows-tools.zip`（自包含，不需要 .NET SDK） | 解压到例 `D:\nxn-tools` |
 | **你的游戏文件 + `prod.keys`** | 你自己的机器 | 例 `D:\games\hades2\` |
 
-> **为什么仓库必须完整，不能只拷 `nxn_pack.py`？**
-> 脚本只是入口，真正的活靠仓库里的 `dm/`：每个游戏的支持参数（模块列表、内存布局、改写表、着色器表）在
+> **为什么必须整份源码，不能只拷 `nxn_pack.py`？**
+> 脚本只是入口，真正的活靠旁边的 `dm/`：每个游戏的支持参数（模块列表、内存布局、改写表、着色器表）在
 > `dm/games/<title ID>/`，改写器和着色器工具在 `dm/tools/`、`dm/gfx/tools/`。缺了 `dm/` 它会当场说清楚，不会跑一半才崩。
-> 想把它和 `dm/` 平铺在一个目录里也行，脚本两种布局都认。
+>
+> **一切都从同一个地方拿。** 同一个 release 里既有壳、又有工具、还有这份源码快照——不用另找地方下、也不用自己
+> 保持两边同步。如果你是要改打包器本身，那就 clone 仓库：release 就是那个仓库的快照，两边跑的是同一份代码。
 
 **支持哪些游戏**：见 [docs/SUPPORTED.md](docs/SUPPORTED.md)——每一款都列出 title ID 和已验证版本，拿你文件名里的那一串十六进制对上即可。
 
@@ -47,7 +49,7 @@ D:\games\hades2\
   (可选) 更新包.nsp      ← 同目录，会打包里面最新的版本
 ```
 
-**3. 在仓库目录里运行：**
+**3. 在解压出来的源码目录里运行：**
 
 ```bash
 cd D:\nxn
@@ -75,7 +77,7 @@ IPA 默认写在游戏文件旁边（`-o` 可指定）。过程会解开游戏�
 
 | 需要什么 | 怎么弄 |
 |---|---|
-| 完整仓库 | `git clone` 或源码压缩包——**必须有 `dm/`**，见上面的说明 |
+| 打包器 | release 里的 `Source code (zip)`——**必须有 `dm/`**，见上面的说明 |
 | Python 3.9+ | `python -m pip install lz4 capstone fonttools backports.zstd pillow`。装给**运行打包器的那一个**解释器 |
 | 三个可执行文件 | 来自 `nxnative-windows-tools.zip`，用 `--tools` 指过去 |
 | `prod.keys` | 从你自己的主机导出。**永远不离开你的机器**：它只作为参数传给 `nx_extract`，不会写进任何日志 |

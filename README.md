@@ -23,16 +23,19 @@ repository or CI.
 
 | What | Where from | Where it goes |
 |---|---|---|
-| **The whole repository** | `git clone https://github.com/xinerqu/ns2ios-shell`, or the source zip on the Releases page | anywhere, e.g. `D:\nxn` |
+| **The packer** | `Source code (zip)` on the [Releases page](https://github.com/xinerqu/ns2ios-shell/releases) — a release carries the whole repository, not just the shell | anywhere, e.g. `D:\nxn` |
 | **The shell** | `shell-<date>-<commit>.zip` on the Releases page | e.g. `D:\nxn\shell.zip` |
 | **The three executables** | `nxnative-windows-tools.zip` on the Releases page (self-contained, no .NET SDK) | unpack to e.g. `D:\nxn-tools` |
 | **Your game files + `prod.keys`** | your own machine | e.g. `D:\games\hades2\` |
 
-> **Why the whole repository, and not just `nxn_pack.py`?**
-> The script is only the entry point; the work is done by `dm/` in the repository. Each supported game's parameters (module
-> list, memory layout, rewriter tables, shader tables) live in `dm/games/<title ID>/`, and the rewriter and shader tools in
-> `dm/tools/` and `dm/gfx/tools/`. Without `dm/` it says so immediately rather than failing halfway. Laying it out flat —
-> `nxn_pack.py` next to `dm/` — works too; the script accepts both.
+> **Why the whole source, and not just `nxn_pack.py`?**
+> The script is only the entry point; the work is done by `dm/` beside it. Each supported game's parameters (module list,
+> memory layout, rewriter tables, shader tables) live in `dm/games/<title ID>/`, and the rewriter and shader tools in
+> `dm/tools/` and `dm/gfx/tools/`. Without `dm/` it says so immediately rather than failing halfway.
+>
+> **Everything comes from one place.** The same release carries the shell, the tools and this source snapshot, so there is
+> nothing else to download and nothing to keep in step by hand. If you mean to work on the packer itself, clone the
+> repository — a release is that repository's snapshot, and both run the same code.
 
 **Which games work**: see [docs/SUPPORTED.md](docs/SUPPORTED.md) — every one with its title ID and the version it was verified on, so you can match the hex in your file name against it.
 
@@ -51,7 +54,7 @@ D:\games\hades2\
   (optional) update.nsp ← same folder; the newest version present is the one packed
 ```
 
-**3. Run it from the repository folder:**
+**3. Run it from the unpacked source folder:**
 
 ```bash
 cd D:\nxn
@@ -83,7 +86,7 @@ On the **packing machine**:
 
 | Need | How |
 |---|---|
-| The whole repository | `git clone` or the source zip — **`dm/` must be there**, see above |
+| The packer | `Source code (zip)` from the release — **`dm/` must be there**, see above |
 | Python 3.9+ | `python -m pip install lz4 capstone fonttools backports.zstd pillow`, into **the interpreter that runs the packer** |
 | Three executables | From `nxnative-windows-tools.zip`, passed with `--tools` |
 | `prod.keys` | Dumped from your own console. It never leaves your machine: it is passed to `nx_extract` as an argument and is not written to any log |
