@@ -23,7 +23,7 @@ out/
 built/
 work/
 
-# Upstream's own CI. It builds host and gfx tests from this tree as it stands, and this fork has never carried all of
-# dm/ios or docs (see HANDOFF, "upstream files this fork never synced"), so it would fail here for reasons that say
-# nothing about the shell. The shell has its own workflow: shell.yml.
+# Upstream's own CI. Two of its four jobs compile the Mac packing and checking chain this fork leaves out on purpose
+# (dm/ios/tools/compile_check.py, build_smoke.py, dm/ios/tests), so it would fail here for reasons that say nothing about
+# the shell. The shell has its own workflow: shell.yml. dm/ios and docs now match upstream 4639c51 otherwise.
 .github/workflows/tests.yml
