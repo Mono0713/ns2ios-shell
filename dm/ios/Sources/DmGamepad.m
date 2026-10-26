@@ -22,6 +22,7 @@
 #include "front.h"
 #include "game_profile.h"
 #include "haptics_apple.h"
+#include "pad_slots.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME };   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
@@ -167,8 +168,8 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _full = l == 1; _tap = l == 2;
         [self applyLayout];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-        [nc addObserver:self selector:@selector(padsChanged) name:GCControllerDidConnectNotification object:nil];
-        [nc addObserver:self selector:@selector(padsChanged) name:GCControllerDidDisconnectNotification object:nil];
+        [nc addObserver:self selector:@selector(padsChangedNote:) name:GCControllerDidConnectNotification object:nil];
+        [nc addObserver:self selector:@selector(padsChangedNote:) name:GCControllerDidDisconnectNotification object:nil];
         [self padsChanged];
         motion_start();
     }
@@ -421,9 +422,14 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 }
 
 // ---- Physical controllers ----
+// Each controller is a player of its own (local co-op), as on the Mac (front_mac.m): pad_slots.h gives the first one player 1, the next player 2, and so on up to 8 (a reconnected
+// controller gets its player back). They go to dm_pad_set_player; player 1's is ORed with the touch gamepad in hle_hid.c, and a one-player game still sees every controller as player 1.
+static pad_slots g_slots;
+static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
 static void read_pad(GCExtendedGamepad *g) {
-    dm_haptics_apple_controller(0, g.controller);
+    int p = pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
+    dm_haptics_apple_controller(p, g.controller);
     uint64_t m = 0;
     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
     K(g.buttonB, B_A); K(g.buttonA, B_B); K(g.buttonY, B_X); K(g.buttonX, B_Y);   // by position: right A, bottom B, top X, left Y
@@ -432,19 +438,31 @@ static void read_pad(GCExtendedGamepad *g) {
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
-    pthread_mutex_lock(&g_mu);
-    g_pad_btn = m; g_pad_lx = axis(g.leftThumbstick.xAxis.value); g_pad_ly = axis(g.leftThumbstick.yAxis.value);
-    g_pad_rx = axis(g.rightThumbstick.xAxis.value); g_pad_ry = axis(g.rightThumbstick.yAxis.value);
-    pthread_mutex_unlock(&g_mu);
-    publish();
+    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
 }
-- (void)padsChanged {
-    BOOL any = NO;
-    for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
-        any = YES; c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
+- (void)padsChangedNote:(NSNotification *)n {   // a disconnect may still list the controller that went away: it is the notification's object
+    [self padsChangedGone:[n.name isEqualToString:GCControllerDidDisconnectNotification] ? n.object : nil];
+}
+- (void)padsChanged { [self padsChangedGone:nil]; }
+- (void)padsChangedGone:(GCController *)gone {
+    NSArray<GCController *> *now = GCController.controllers;
+    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p] && (g_held[p] == gone || ![now containsObject:g_held[p]])) {
+        LOG("controller '%s' disconnected: player %d is free", g_held[p].vendorName.UTF8String ?: "?", p + 1);
+        g_held[p].extendedGamepad.valueChangedHandler = nil;
+        dm_haptics_apple_controller(p, nil);
+        pad_slot_free(&g_slots, (__bridge const void *)g_held[p]); g_held[p] = nil;
+        dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
+    }
+    for (GCController *c in now) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
+        int p = pad_slot_take(&g_slots, (__bridge const void *)c, c.vendorName.UTF8String ?: "?");
+        if (p < 0) { LOG("controller connected: all %d players are taken, not used", DM_PLAYERS); continue; }
+        g_held[p] = c;
+        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
+        LOG("controller '%s' connected: player %d", c.vendorName.UTF8String ?: "?", p + 1);
         read_pad(c.extendedGamepad);
     }
-    if (!any) { dm_haptics_apple_controller(0, nil); pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish(); }
+    dm_pad_players(pad_slot_mask(&g_slots));
+    BOOL any = pad_slot_mask(&g_slots) != 0;
     dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });
 }
 @end
@@ -453,4 +471,5 @@ UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWi
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
     pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_shake_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish();
+    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);   // each controller's player too
 }
