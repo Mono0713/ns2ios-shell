@@ -1,0 +1,95 @@
+diff --git a/dm/host/haptics_apple.m b/dm/host/haptics_apple.m
+--- a/dm/host/haptics_apple.m
++++ b/dm/host/haptics_apple.m
+@@ -15,7 +15,9 @@
+ 
+ @interface DmRumbleChannel : NSObject
+ @property(nonatomic) CHHapticEngine *engine;
+-@property(nonatomic) id<CHHapticAdvancedPatternPlayer> pattern;
++@property(nonatomic) id<CHHapticPatternPlayer> pattern;
++@property(nonatomic) BOOL advanced;    // pattern is an advanced player (loop, mute)
++@property(nonatomic) BOOL plainOnly;   // this engine refused an advanced player once: make plain ones
+ @property(nonatomic, copy) CHHapticEngine *(^createEngine)(NSError **);
+ @property(nonatomic, copy) NSString *target;
+ @property(nonatomic, copy) void (^fallback)(NSTimeInterval);
+@@ -68,8 +70,8 @@
+ }
+ - (void)engineFailed:(NSError *)error stage:(const char *)stage {
+     [self failed:error stage:stage];
+-    // Only an engine that cannot be made or started moves a split route to the default locality;
+-    // a player or parameter failure (a service reset, say) is retried on the same handle.
++    // An engine that cannot be made or started, or that plays no player at all, moves a split route to the default locality;
++    // a parameter failure (a service reset, say) is retried on the same handle.
+     if (self.fallback) self.fallback(self.retryAfter);
+ }
+ - (void)apply:(dm_haptic_level)level {
+@@ -104,11 +106,22 @@
+             [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5]
+         ] relativeTime:0 duration:30];
+         CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
+-        self.pattern = pattern ? [self.engine createAdvancedPlayerWithPattern:pattern error:&error] : nil;
+-        if (!self.pattern) { [self failed:error stage:"create player"]; return; }
+-        self.pattern.loopEnabled = YES;
+-        self.pattern.isMuted = YES;
+-        if (![self.pattern startAtTime:CHHapticTimeImmediate error:&error]) { [self failed:error stage:"start player"]; return; }
++        if (!pattern) { [self failed:error stage:"create pattern"]; return; }
++        self.advanced = NO;
++        if (!self.plainOnly) {
++            id<CHHapticAdvancedPatternPlayer> a = [self.engine createAdvancedPlayerWithPattern:pattern error:&error];
++            if (a) { a.loopEnabled = YES; a.isMuted = YES; self.pattern = a; self.advanced = YES; }
++            else {
++                // An Xbox Wireless Controller's handle engines on iPadOS 26 start but refuse advanced players
++                // (NSCocoaErrorDomain 4097): plain players have no loop or mute, so one effect lasts at most the event's 30 s.
++                report(error, self.target, "create advanced player (using a plain player)");
++                self.plainOnly = YES; error = nil;
++            }
++        }
++        if (!self.pattern) self.pattern = [self.engine createPlayerWithPattern:pattern error:&error];
++        // A route that cannot play at all moves to the default locality, like an engine that cannot start.
++        if (!self.pattern) { [self engineFailed:error stage:"create player"]; return; }
++        if (![self.pattern startAtTime:CHHapticTimeImmediate error:&error]) { [self engineFailed:error stage:"start player"]; return; }
+     }
+     // Controls live outside the loop: the loop boundary never replays an initial intensity.
+     NSArray *parameters = @[
+@@ -119,7 +132,7 @@
+         [self failed:error stage:"send parameters"]; return;
+     }
+     self.failures = 0;
+-    self.pattern.isMuted = NO;
++    if (self.advanced) ((id<CHHapticAdvancedPatternPlayer>)self.pattern).isMuted = NO;
+     if (level.intensity == 0) {
+         // Reuse a warm player for nearby pulses, then release idle hardware. This never times out an active effect.
+         __weak DmRumbleChannel *weak = self;
+@@ -198,6 +211,18 @@
+         for (int p = 0; p < DM_PLAYERS; p++) for (DmRumbleChannel *c in channels[p]) [c stop];
+     };
+     if (on) { if (dispatch_get_specific(&queue)) stop(); else dispatch_sync(queue, stop); }
++    else {
++        // Back in the foreground the controllers' engines and their GCDeviceHaptics may be dead (iPadOS 26, Xbox Wireless Controller:
++        // rumble stopped for good after a background round trip). Rebuild each controller's route from its current haptics object.
++        pthread_mutex_lock(&routeLock);
++        for (int p = 0; p < DM_PLAYERS; p++) {
++            GCController *c = controllers[p];
++            if (!c) continue;
++            dm_haptics_route(p, 0);   // invalidate queued work before changing hardware
++            dispatch_sync(queue, ^{ configure(p, c); });
++        }
++        pthread_mutex_unlock(&routeLock);
++    }
+ }
+ void dm_haptics_apple_shutdown(void) {
+     if (queue) suspend(DM_HAPTICS_INACTIVE, YES);
+@@ -218,7 +243,12 @@
+         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+ #if TARGET_OS_IPHONE
+         [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
+-        [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
++        [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
++            // A background round trip begins an audio interruption whose end is often never posted (the audio session only becomes active again,
++            // front_ios.m "active again with no interruption-ended notice"): an app in the foreground is not interrupted, so lift that suspension too,
++            // or every later vibration is dropped (dm_haptics_send) while the rebuilt engines stay idle
++            (void)n; dm_haptics_suspend(DM_HAPTICS_INTERRUPTED, 0); suspend(DM_HAPTICS_INACTIVE, NO);
++        }];
+         [nc addObserverForName:UIApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
+         [nc addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+             suspend(DM_HAPTICS_INTERRUPTED, [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan);

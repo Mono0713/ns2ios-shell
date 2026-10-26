@@ -243,7 +243,12 @@ void dm_haptics_apple_init(void) {
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
 #if TARGET_OS_IPHONE
         [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
-        [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, NO); }];
+        [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+            // A background round trip begins an audio interruption whose end is often never posted (the audio session only becomes active again,
+            // front_ios.m "active again with no interruption-ended notice"): an app in the foreground is not interrupted, so lift that suspension too,
+            // or every later vibration is dropped (dm_haptics_send) while the rebuilt engines stay idle
+            (void)n; dm_haptics_suspend(DM_HAPTICS_INTERRUPTED, 0); suspend(DM_HAPTICS_INACTIVE, NO);
+        }];
         [nc addObserverForName:UIApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_haptics_apple_shutdown(); }];
         [nc addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
             suspend(DM_HAPTICS_INTERRUPTED, [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan);
