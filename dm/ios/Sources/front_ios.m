@@ -90,9 +90,8 @@ static void launcher_done(void) { [g_root startGame]; }
     CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
-    if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
-        CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
-        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+    if (self.fps) {   // the game picture's top-left corner, inside the picture, so it reads as part of the game view rather than floating in the black bar
+        CGRect g = self.game.frame; self.fps.frame = CGRectMake(CGRectGetMinX(g) + 8, CGRectGetMinY(g) + 8, 60, 20);
     }
 }
 - (void)viewDidAppear:(BOOL)a {
@@ -131,14 +130,17 @@ static UILabel *front_ios_fps_label(void) {
     const char *e = getenv("DM_SHOW_FPS");
     if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
     UILabel *l = [UILabel new];
-    l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
+    l.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
     l.text = @"-- fps";
-    __block uint64_t n0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
+    // The game's own frames (hle_nvn.c dm_nvn_frame_count), not the presents: with present_interval display a 30 fps game is presented every 60 Hz tick, and
+    // counting presents showed 60. A Vulkan or GL game has no NVN frame count, so presents are counted for it
+    uint64_t dm_nvn_frame_count(void);
+    __block uint64_t n0 = dm_nvn_frame_count(), p0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
-        (void)t; uint64_t n = mtl_present_count(); double now = CACurrentMediaTime();
-        if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // a longer span is the time in the background: no reading
-        n0 = n; t0 = now;
+        (void)t; uint64_t n = dm_nvn_frame_count(), p = mtl_present_count(); double now = CACurrentMediaTime();
+        if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f FPS", ((n > n0 ? n - n0 : p - p0)) / (now - t0)];   // a longer span is the time in the background: no reading
+        n0 = n; p0 = p; t0 = now;
     }];
     LOG("front end: frame-rate counter on");
     return l;
