@@ -22,3 +22,8 @@ data/
 out/
 built/
 work/
+
+# Upstream's own CI. It builds host and gfx tests from this tree as it stands, and this fork has never carried all of
+# dm/ios or docs (see HANDOFF, "upstream files this fork never synced"), so it would fail here for reasons that say
+# nothing about the shell. The shell has its own workflow: shell.yml.
+.github/workflows/tests.yml
