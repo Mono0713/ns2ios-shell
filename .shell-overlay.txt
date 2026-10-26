@@ -18,6 +18,8 @@
 + dm/ios/Sources/dm_shader_prep.m         # first-launch shader compilation page
 + dm/ios/tools/shell_build.sh             # builds the game-free shell
 + dm/ios/DmIOS.entitlements               # increased-memory-limit: the shell is signed ad hoc with it so install tools see it
++ dm/ios/Sources/shell_slots.c          # the one player-slot table: physical controllers and phones take their players from it
++ dm/ios/Sources/shell_slots.h
 + dm/tools/supported_list.py              # the supported-games page and release asset, from dm/games/*/game.tsv
 + dm/tools/packer_sync.py                 # keeps this fork's copies of dm/tools, dm/gfx/tools and dm/games level with upstream
 + dm/tools/nx_extract/AlignedReadStorage.cs    # 16-byte aligned reads when an update is layered over its base
@@ -55,7 +57,7 @@
 ~ dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
 ~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host
-~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only
+~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only; each controller a player of its own, from shell_slots.h
 ~ dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
 ~ dm/host/haptics_apple.m       # controller rumble: plain players and the default locality when advanced players fail; routes rebuilt and the audio-interruption suspension lifted on becoming active
 ~ dm/host/front.h               # front_first_frame: the first present, for the loading screen
