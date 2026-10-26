@@ -21,6 +21,10 @@ struct Setting: Decodable, Identifiable {
         case "range":
             guard let n = Double(v), n.isFinite, let lo = min, let hi = max else { return false }
             return n >= lo && n <= hi
+        case "memory":   // "-" (the package's value) or bytes in hex within the slider's range
+            if v == "-" { return true }
+            guard v.lowercased().hasPrefix("0x"), let n = UInt64(v.dropFirst(2), radix: 16), let lo = min, let hi = max else { return false }
+            let g = Double(n) / 1073741824; return g >= lo - 0.01 && g <= hi + 0.01
         case "toggle": return v == onValue || v == offValue
         default: return true
         }

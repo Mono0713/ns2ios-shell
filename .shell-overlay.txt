@@ -64,3 +64,4 @@
 ~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL)
 ~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout
+~ dm/games/settings.py          # the memory kind: a GB slider (DM_APP_POOL)

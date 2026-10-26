@@ -187,7 +187,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
-| Game memory pool | `DM_APP_POOL` | `-` the package's value, `0x20000000` 0.5 GB to `0xC0000000` 3 GB in 0.5 GB steps, `0xCD500000` 3.2 GB (the Switch's) |
+| Game memory pool | `DM_APP_POOL` | a slider from 0.5 to 3.2 GB (the variable takes bytes in hex, such as `0x40000000` for 1 GB); `-` leaves the package's value |
 | Xbox button layout | `DM_PAD_BY_LABEL` | `1` A, B, X, Y as printed on the controller, `0` by position as on a Switch pad |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
