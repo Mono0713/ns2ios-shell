@@ -1,8 +1,8 @@
 diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
 --- a/dm/gfx/nvn/hle_nvn.c
 +++ b/dm/gfx/nvn/hle_nvn.c
-@@ -313,6 +313,14 @@
- }
+@@ -320,6 +320,14 @@
+ NVN(nvnTextureBuilderGetSparseTileLayout, void, const NVNtextureBuilder *b, NVNtextureSparseTileLayout *o) { sparse_layout(&((const tex_builder_t *)b)->d, o); }
  #define TX(t) ((tex_t *)(t))
  #define CTX(t) ((const tex_t *)(t))
 +// The game-free shell is compiled against the placeholder profile, so these two profile keys are the constant 0 in it (dm/games/game.py:
@@ -16,7 +16,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
  // Textures the CPU fills in place (profile tex_flush_upload): Tears of the Kingdom streams its textures (TexToGo, already in the GPU's block-linear layout) straight into
  // CPU-cached memory pools and publishes each with nvnMemoryPoolFlushMappedRange (9,436 calls at boot), without a packaged layout or WriteTexels. They stayed GPU-only
  // textures with content 0, and the G-buffer's base colour came out black. Textures that can hold such data (not render targets, not linear, no packaged layout, in a pool
-@@ -322,16 +330,16 @@
+@@ -329,16 +337,16 @@
  static flush_tex *g_ft; static size_t g_nft, g_cft; static pthread_mutex_t g_ft_mu = PTHREAD_MUTEX_INITIALIZER;
  static void ft_add(const tex_t *t) {
      // Buffer textures are views onto the pool buffer the GPU reads directly (tex_mtl in nvn_mtl.m); an upload would push Age of Calamity's 1,048,576-texel R32F one through tex_desc, past Metal's 2D limit
@@ -36,7 +36,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
      pthread_mutex_lock(&g_ft_mu);
      for (size_t i = 0; i < g_nft; i++) if (g_ft[i].t.serial == serial) { g_ft[i] = g_ft[--g_nft]; break; }
      pthread_mutex_unlock(&g_ft_mu);
-@@ -340,7 +348,7 @@
+@@ -347,7 +355,7 @@
  // natively; its 121-layer ASTC terrain material arrays, 42 MB each). They stayed GPU-only textures with content 0, which ASTC decodes as the error colour, and the cave came out magenta.
  // ft_add write-protects a registered texture's pages, and on its first resolution (tex_mtl, submit thread) a write since then makes it CPU-written like a flushed one
  int nvn_ft_written(const tex_t *t) {
@@ -45,7 +45,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
      int r = 0; pthread_mutex_lock(&g_ft_mu);
      for (size_t i = 0; i < g_nft; i++) if (g_ft[i].t.serial == t->serial) {
          if (nvn_dirty_since_span(g_ft[i].span, g_ft[i].mem, g_ft[i].size, g_ft[i].stamp)) { r = 1; g_ft[i] = g_ft[--g_nft]; }
-@@ -358,7 +366,7 @@
+@@ -365,7 +373,7 @@
  // Checking every texture at every submission cost TOTK 0.4 ms of submit CPU per frame on the Mac; this way a texture is picked up a few submissions later at most
  enum { FT_POLL_BYTES = 128 << 20 };
  void nvn_ft_poll(void) {
@@ -54,7 +54,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
      static uint64_t gen; static size_t cur, left;
      static tex_t *hit; static size_t chit; size_t nhit = 0;
      uint64_t now = nvn_dirty_now(), scanned = 0;
-@@ -376,7 +384,7 @@
+@@ -383,7 +391,7 @@
      for (size_t i = 0; i < nhit; i++) if (!mtl_tex_gpu_owned(hit[i].serial)) mtl_tex_cpu_written(&hit[i]);   // outside g_ft_mu: the ownership check takes the replay's serial table lock
  }
  static void ft_flush(const uint8_t *a, uint64_t n) {
@@ -63,7 +63,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
      pthread_mutex_lock(&g_ft_mu);
      for (size_t i = 0; i < g_nft;)
          if (g_ft[i].mem < a + n && a < g_ft[i].mem + g_ft[i].size) { mtl_tex_cpu_written(&g_ft[i].t); g_ft[i] = g_ft[--g_nft]; } else i++;
-@@ -2304,11 +2312,11 @@
+@@ -2329,11 +2337,11 @@
  // State the replay layer does not have yet: logged once (conditional rendering is treated as "always draw")
  // Render enable (profile render_cond, see OP_RENDER_COND in nvn_mtl.m): recorded and evaluated at replay; without the key everything draws, as before
  NVN(nvnCommandBufferSetRenderEnable, void, NVNcommandBuffer *c, uint32_t en) {
