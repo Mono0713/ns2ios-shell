@@ -19,7 +19,13 @@
 
 static void pl(NSString *s) { fprintf(stderr, "[dm] %s\n", s.UTF8String); }
 static int lg(void) { NSString *l = NSLocale.preferredLanguages.firstObject; return [l hasPrefix:@"zh"] ? 1 : [l hasPrefix:@"es"] ? 2 : 0; }   // 系统首选语言：1 中文 / 2 西语 / 0 其余英文 | System preferred language: 1 Chinese / 2 Spanish / 0 English otherwise
-#define L3(zh, en, es) (lg() == 1 ? (zh) : lg() == 2 ? (es) : (en))
+// A device that prefers Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) gets the Chinese lines converted by ICU's Hans-Hant transform
+static NSString *zh_for_device(NSString *s) {
+    NSString *l = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
+    BOOL hant = [l hasPrefix:@"zh-hant"] || [l hasPrefix:@"zh-tw"] || [l hasPrefix:@"zh-hk"] || [l hasPrefix:@"zh-mo"];
+    return hant ? ([s stringByApplyingTransform:@"Hans-Hant" reverse:NO] ?: s) : s;
+}
+#define L3(zh, en, es) (lg() == 1 ? zh_for_device(zh) : lg() == 2 ? (es) : (en))
 static NSString *msldir(void) { return [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"]; }
 static NSString *libdir(void) {   // <包>/msl/b-<链版本>：壳里只有一个版本目录 | <package>/msl/b-<chain version>: the shell has only one version directory
     NSString *msl = msldir();
