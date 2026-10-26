@@ -153,7 +153,7 @@ static void loading_show(UIView *root) {
     BOOL zh = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
     g_loading = [[UIView alloc] initWithFrame:root.bounds]; g_loading.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     g_loading.backgroundColor = UIColor.blackColor; g_loading.userInteractionEnabled = NO;
-    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorViewStyle:UIActivityIndicatorViewStyleLarge];
+    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
     spin.color = UIColor.whiteColor; spin.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds) - 14);
     spin.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     [spin startAnimating];
