@@ -3,7 +3,7 @@
 Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not edit by hand.  
 本页由 `dm/tools/supported_list.py` 从 `dm/games/*/game.tsv` 生成，请勿手动修改。
 
-**66 款游戏。** 文件名不重要——打包器从包内容识别游戏，在下表里对上 title ID 就够了。
+**69 款游戏。** 文件名不重要——打包器从包内容识别游戏，在下表里对上 title ID 就够了。
 
 - **IPA 体积** ≈ 你的 NSP/XCI 体积 + 约 16 MB（壳本身）。游戏文件在包里是原样存放的，不再压缩。
 - **首次启动**要编译着色器：打包时只把 Switch 的着色器翻译成 Metal 源码，编译在手机上做（之后有缓存）。几秒到大作几分钟，启动时有进度页。
@@ -52,6 +52,7 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | Metroid Dread | `010093801237C000` | 2.1.0 |  |
 | Monster Hunter Rise | `0100B04011742000` | 16.0.2 | 60 fps |
 | Monster Train 2 | `010051701FB46000` | 1.1.1 |  |
+| NieR:Automata The End of YoRHa Edition | `010056B015FE8000` | 1.0.3 |  |
 | OCTOPATH TRAVELER 0 | `01005270232F2000` | 1.0.5 | 60 fps |
 | OCTOPATH TRAVELER II | `0100A3501946E000` | 1.1.1 | 60 fps |
 | Paper Mario: The Thousand-Year Door | `0100ECD018EBE000` | 1.0.1 | 60 fps |
@@ -59,6 +60,7 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | Persona 5 Royal | `01005CA01580E000` | 1.0.2 |  |
 | Pikmin 4 | `0100B7C00933A000` | 1.1.1 |  |
 | Pokémon Legends: Z-A | `0100F43008C44000` | 2.0.2 |  |
+| Pokémon Shield | `01008DB008C2C000` | 1.3.2 |  |
 | Pokémon Sword | `0100ABF008968000` | 1.3.2 |  |
 | Portal | `01007BB017812000` | 1.0.3 |  |
 | Raging Loop | `010020400E1C2000` | 1.0.0 |  |
@@ -75,6 +77,7 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | Taiko Risshiden V DX | `0100346017304000` | 1.1.1 | handheld |
 | The Great Ace Attorney Chronicles | `010036E00FB20000` | 1.0.0 |  |
 | The Legend of Zelda: Breath of the Wild | `01007EF00011E000` | 1.9.0 | 60 fps |
+| The Legend of Zelda: Echoes of Wisdom | `01008CF01BAAC000` | 1.1.0 |  |
 | The Legend of Zelda: Link's Awakening | `01006BB00C6F0000` | 1.1.0 |  |
 | The Legend of Zelda: Tears of the Kingdom | `0100F2C0115B6000` | 1.4.3 | 60 fps |
 | Unicorn Overlord | `010069401ADB8000` | 1.05 |  |

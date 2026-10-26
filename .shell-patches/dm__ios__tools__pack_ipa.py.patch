@@ -1,7 +1,7 @@
 diff --git a/dm/ios/tools/pack_ipa.py b/dm/ios/tools/pack_ipa.py
 --- a/dm/ios/tools/pack_ipa.py
 +++ b/dm/ios/tools/pack_ipa.py
-@@ -16,6 +16,27 @@
+@@ -17,6 +17,27 @@
  L32, L16 = 0xFFFFFFFF, 0xFFFF
  DIR_MODE = stat.S_IFDIR | 0o755   # a parent folder no source folder stands for (Payload/, msl/)
  Entry = collections.namedtuple('Entry', 'name path st')   # st None: such a parent folder
@@ -28,8 +28,8 @@ diff --git a/dm/ios/tools/pack_ipa.py b/dm/ios/tools/pack_ipa.py
 +    return ios_mode(e.name) if os.name == 'nt' else e.st.st_mode  # Windows: no x bit, no symlinks; derive it from the path
  
  
- def entries(maps, skip):
-@@ -78,7 +99,7 @@
+ def entries(maps, skip, skip_suffix=()):
+@@ -79,7 +100,7 @@
          off, nb, fl, t, d = h
          z = [v for v in (usize, csize, off) if v >= L32]   # zip64 extra: the fields that do not fit, in this order
          ext = struct.pack(f'<HH{len(z)}Q', 1, 8 * len(z), *z) if z else b''

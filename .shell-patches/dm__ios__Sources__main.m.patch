@@ -7,9 +7,9 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
  #include <unistd.h>
 +#include <os/proc.h>          // os_proc_available_memory: the line at boot saying whether the memory entitlement took effect
  #include "game_profile.h"   // game profile constants (the RomFS marker path)
+ #include "front.h"
  
  int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
- void dm_host_preload_start(int argc, char **argv);
 +#ifdef DM_SHELL
 +int dm_shell_modules(const char **out, int max);   // loader.c: the module names found in the Guest library's sections
 +int dm_shader_prep_begin(void (^done)(void));      // dm_shader_prep.m: compile source-form shaders once, before the host starts
@@ -50,8 +50,8 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      NSString *romfs = romfs_locate();
      if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
      fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
-@@ -69,6 +88,12 @@
-     if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
+@@ -71,6 +90,12 @@
+     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
      chdir(doc.fileSystemRepresentation);
      g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
 +#ifdef DM_SHELL
@@ -63,7 +63,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup (and the launcher: the settings it sets are read when the game starts)
      return 1;
  }
-@@ -81,11 +106,19 @@
+@@ -83,11 +108,19 @@
      fprintf(stderr, "boot: dm_main returned %d\n", rc);
      return NULL;
  }
