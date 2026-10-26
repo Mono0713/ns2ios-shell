@@ -1,0 +1,116 @@
+diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
+--- a/dm/ios/Sources/Launcher.swift
++++ b/dm/ios/Sources/Launcher.swift
+@@ -7,6 +7,31 @@
+ import os
+ 
+ private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
++
++// Traditional Chinese when the device's first language is (zh-Hant, zh-TW, zh-HK, zh-MO); anything else stays English. launcher.json carries settings.tsv's
++// English labels and notes and nacp.py's language names, so they are looked up by their English text; an unknown one is shown as it is
++private let zhHant: Bool = {
++    let l = (Locale.preferredLanguages.first ?? "").lowercased()
++    return l.hasPrefix("zh-hant") || l.hasPrefix("zh-tw") || l.hasPrefix("zh-hk") || l.hasPrefix("zh-mo")
++}()
++private let zhText: [String: String] = [
++    "Game": "遊戲", "Controls": "操作", "Performance": "效能",
++    "Frame rate": "幀率", "Render scale": "渲染解析度", "Console mode": "主機模式", "Docked": "電視模式", "Handheld": "掌機模式",
++    "Upscaling": "畫面放大", "Standard": "標準", "Uses more GPU time and can increase heat.": "會多用 GPU 時間，可能讓機身變熱。",
++    "Game language": "遊戲語言", "Frame-rate counter": "顯示幀率",
++    "Xbox button layout": "Xbox 按鍵配置", "A, B, X and Y as printed on an Xbox controller (Switch games expect A on the right).": "A、B、X、Y 照 Xbox 手把上印的位置（Switch 遊戲預設 A 在右邊）。",
++    "Touch feedback": "觸控回饋", "Game rumble": "遊戲震動", "Rumble strength": "震動強度",
++    "Frame buffering": "畫面緩衝", "Up to one frame more display latency.": "顯示延遲最多增加一幀。",
++    "Metal 4 pipelines": "Metal 4 管線", "Keeps a pipeline archive; uses more memory.": "保留管線封存檔，會多用記憶體。",
++    "Pipeline prebuild": "預先建置管線", "The first start waits a few minutes for it, once.": "第一次啟動會等幾分鐘，只有一次。",
++    "Encode thread": "獨立編碼執行緒", "Hold frames when late": "延遲時保留畫格", "Performance HUD": "效能監看 HUD",
++    "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
++    "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
++    "Portuguese": "葡萄牙文", "Russian": "俄文", "Korean": "韓文", "Traditional Chinese": "繁體中文", "Simplified Chinese": "簡體中文", "Brazilian Portuguese": "葡萄牙文（巴西）",
++    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
++    "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
++]
++private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : s }
+ 
+ private extension LauncherModel {
+     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
+@@ -18,7 +43,7 @@
+ 
+     private var locked: Bool { m.fromFile.contains(s.env) }
+     private var note: String {
+-        locked ? (s.note.isEmpty ? "" : s.note + " · ") + "Set by an env file" : s.note
++        locked ? (s.note.isEmpty ? "" : tr(s.note) + " · ") + tr("Set by an env file") : tr(s.note)
+     }
+     private var rangeValue: Binding<Double> {
+         Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
+@@ -28,7 +53,7 @@
+ 
+     private var settingLabel: some View {
+         VStack(alignment: .leading, spacing: 4) {
+-            Text(s.label)
++            Text(tr(s.label))
+             if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
+         }
+     }
+@@ -38,7 +63,7 @@
+             switch s.kind {
+             case "choice":
+                 Picker(selection: m.binding(s)) {
+-                    ForEach(s.options ?? [], id: \.[0]) { Text($0[1]).tag($0[0]) }
++                    ForEach(s.options ?? [], id: \.[0]) { Text(tr($0[1])).tag($0[0]) }
+                 } label: {
+                     settingLabel
+                 }
+@@ -51,7 +76,7 @@
+                         Text(percentage).monospacedDigit().foregroundStyle(.secondary)
+                     }
+                     Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
+-                        .accessibilityLabel(s.label)
++                        .accessibilityLabel(tr(s.label))
+                         .accessibilityValue(percentage)
+                 }
+             default:
+@@ -78,9 +103,9 @@
+                             .clipShape(RoundedRectangle(cornerRadius: 22))
+                             .accessibilityHidden(true)
+                     }
+-                    Text((info("CFBundleDisplayName") as? String) ?? "Game")
++                    Text((info("CFBundleDisplayName") as? String) ?? tr("Game"))
+                         .font(.title.weight(.bold)).multilineTextAlignment(.center)
+-                    Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
++                    Text(tr("Version") + " " + ((info("CFBundleShortVersionString") as? String) ?? ""))
+                         .font(.callout).foregroundStyle(.secondary)
+                     playButton
+                 }
+@@ -88,19 +113,19 @@
+                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                 List {
+                     ForEach(m.sections, id: \.self) { section in
+-                        Section(section) {
++                        Section(tr(section)) {
+                             ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
+                         }
+                     }
+                     Section {
+-                        Button("Reset to tested defaults") { m.reset() }
++                        Button(tr("Reset to tested defaults")) { m.reset() }
+                             .disabled(!m.changed)
+                     } footer: {
+-                        Text("Brings back all settings this game was tested with.")
++                        Text(tr("Brings back all settings this game was tested with."))
+                     }
+                     Section {
+                         HStack {
+-                            Text("Memory available")
++                            Text(tr("Memory available"))
+                             Spacer()
+                             Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
+                         }
+@@ -121,7 +146,7 @@
+     }
+ 
+     @ViewBuilder var playButton: some View {
+-        let button = Button(action: play) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
++        let button = Button(action: play) { Text(tr("Play")).font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
+         if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
+     }
+ 

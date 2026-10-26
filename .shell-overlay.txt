@@ -57,3 +57,8 @@
 ~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host
 ~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only
 ~ dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
+~ dm/host/haptics_apple.m       # controller rumble: plain players and the default locality when advanced players fail; routes rebuilt and the audio-interruption suspension lifted on becoming active
+~ dm/host/front.h               # front_first_frame: the first present, for the loading screen
+~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame
+~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it
+~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout

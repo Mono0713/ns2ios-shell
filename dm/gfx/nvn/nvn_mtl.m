@@ -5691,6 +5691,8 @@ int mtl_warm_wait(int timeout_ms) {
 // pressure on iOS), which is when it is needed. DM_PSO_PREPARE=0: the prewarm runs in the background as before (as it does without a window); DM_PSO_PREPARE_THREADS=<n> sets the workers
 void front_progress(const char *title, long done, long total);
 __attribute__((weak)) void front_progress(const char *title, long done, long total) { (void)title; (void)done; (void)total; }   // the front ends' (front.h); none in the unit tests
+void front_first_frame(void);
+__attribute__((weak)) void front_first_frame(void) {}   // the iOS front end hides its loading screen (front.h); a no-op elsewhere
 static int prepare_on(void) {
     static int v = -1;
     if (v < 0) { const char *e = getenv("DM_PSO_PREPARE");
@@ -10036,7 +10038,7 @@ static void present_gpu_note(double s, int fx) {
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
-    g_present_n++;
+    if (++g_present_n == 1) front_first_frame();   // every route (NVN, Vulkan, GL) presents here
     if (bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
         if (g_present_n == 1) g_bp_first_present = bp_now() - g_bp_t0;
         MLOG("[bootprof] t=%.3f s present #%llu: metallibs loaded %llu / %.1f ms; pipelines created %llu / %.1f ms (all synchronous on the submit thread); prewarmed and used: shaders %llu / render pipelines %llu / compute pipelines %llu; "

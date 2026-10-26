@@ -1,0 +1,11 @@
+diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
+--- a/dm/games/settings.tsv
++++ b/dm/games/settings.tsv
+@@ -17,6 +17,7 @@
+ DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language
+ DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	always	Game	Frame-rate counter
+ DM_TOUCH_HAPTICS	toggle	-	1	always	Controls	Touch feedback
++DM_PAD_BY_LABEL	toggle	-	0	always	Controls	Xbox button layout	A, B, X and Y as printed on an Xbox controller (Switch games expect A on the right).
+ DM_RUMBLE	toggle	-	1	always	Controls	Game rumble
+ DM_RUMBLE_GAIN	range	0:3:0.1	1.0	always	Controls	Rumble strength
+ DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.

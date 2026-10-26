@@ -14,6 +14,7 @@ UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
+static void loading_show(UIView *root);
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 
 static CAMetalLayer *g_layer;
@@ -78,6 +79,7 @@ static void launcher_done(void) { [g_root startGame]; }
     [self.view addSubview:self.pad];
     self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
     if (self.fps) [self.view addSubview:self.fps];
+    loading_show(self.view);   // under the shader-preparation screen, which front_progress adds on top when it runs
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     front_ios_boot();
@@ -142,6 +144,28 @@ static UILabel *front_ios_fps_label(void) {
     return l;
 }
 
+// Loading screen from Play to the game's first frame (front.h front_first_frame): a spinner and a line over the black game view, which otherwise looked like a hang
+// for the seconds the game takes to boot. Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
+static UIView *g_loading;
+static void loading_show(UIView *root) {
+    if (g_loading || !root) return;
+    NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
+    BOOL zh = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
+    g_loading = [[UIView alloc] initWithFrame:root.bounds]; g_loading.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    g_loading.backgroundColor = UIColor.blackColor; g_loading.userInteractionEnabled = NO;
+    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorViewStyle:UIActivityIndicatorViewStyleLarge];
+    spin.color = UIColor.whiteColor; spin.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds) - 14);
+    spin.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    [spin startAnimating];
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, CGRectGetMidY(root.bounds) + 24, root.bounds.size.width, 24)];
+    l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    l.textAlignment = NSTextAlignmentCenter; l.textColor = [UIColor colorWithWhite:0.72 alpha:1]; l.font = [UIFont systemFontOfSize:15];
+    l.text = zh ? @"遊戲載入中…" : @"Loading the game…";
+    [g_loading addSubview:spin]; [g_loading addSubview:l]; [root addSubview:g_loading];
+}
+void front_first_frame(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; LOG("front end: first frame, loading screen hidden"); });
+}
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
 static UIView *g_prog; static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
 void front_progress(const char *title, long done, long total) {
