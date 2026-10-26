@@ -23,6 +23,11 @@ on:
         description: 'Publish a release (leave off to only build the artifacts)'
         type: boolean
         default: false
+      runner:
+        description: 'macOS runner for the shell (macos-15 picks its newest Xcode 26 when macos-26 has no capacity)'
+        type: choice
+        options: [macos-26, macos-15]
+        default: macos-26
   # push and schedule triggers removed in this fork: builds only run by hand (workflow_dispatch)
 
 permissions:
@@ -181,12 +186,23 @@ jobs:
     if: needs.check.outputs.needed == 'true'
     permissions:
       contents: write        # the nightly sync commits the packer's copies
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner || 'macos-26' }}
     timeout-minutes: 60
     outputs:
       version: ${{ steps.tree.outputs.version }}
       origin: ${{ steps.tree.outputs.origin }}
     steps:
+      - name: Select Xcode 26 (macos-15 only)
+        if: inputs.runner == 'macos-15'
+        run: |
+          set -eux
+          ls -d /Applications/Xcode*.app
+          x=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          [ -n "$x" ] || { echo "::error::no Xcode 26 on this runner"; exit 1; }
+          sudo xcode-select -s "$x/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
       - name: Check out this fork
         uses: actions/checkout@v4
         with:
