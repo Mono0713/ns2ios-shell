@@ -1,0 +1,13 @@
+Move the patch base to 933b675, which added a game and rewrote the file two of our patches ride on	把补丁基准移到上游 933b675：它新增一款游戏（OCTOPATH TRAVELER 1.0.5），并改写了我们两个补丁所在的那个文件
+Move the patch base to 1402ded, which changed nvn_mtl.m under our patch for the third time today	把补丁基准移到上游 1402ded（BotW 1.9.0 的按键连发修复）：`nvn_mtl.m` 当天第三次被改写，我们的补丁按新代码重放
+Stop tracking the shader tables and chain headers a packing run writes	不再跟踪打包时必然写出的着色器表与链接版本头（76 个文件）；根因是本仓库的 .gitignore 少了上游那两条规则，已补回
+Name the five games whose shaders only a Mac can unpack, in a key instead of prose	把「着色器只能由 Mac 解开」的 5 款游戏写成 profile 键（needs_mac_shaders），不再靠注释里的散文；支持列表相应标出「需 Mac 一次」
+Say in the packer's words what a game that needs Oodle on a Mac actually needs	打包器不再让用户去 make Mac 宿主：这类游戏直接说明「Windows 上打不了，需要 Mac 跑一次」，并指向能直接打的游戏列表
+Read the nine profile keys whose host only knew a compiled-in constant from the environment	九个在壳里完全失效的 profile 键（tex_flush_upload 等）改为先读环境变量，打包器按宿主的解析方式写进 dm/env.txt
+Rebase onto upstream ce9b30b: six commits of shader split, NVN and two game ports	对齐上游 ce9b30b：着色器拆分、NVN 与两款新游戏的六个提交
+Rebase onto upstream 4639c51: twelve commits of GPU, host and movie work	对齐上游 4639c51：GPU、宿主与影片相关的十二个提交
+Align dm/ios and docs with upstream 4639c51	`dm/ios` 与文档对齐上游 4639c51
+Do not write DM_PROGRAM_ID: the shell's save-data answer depends on the compiled constant	撤回写 `DM_PROGRAM_ID`：壳判断「有没有存档」靠的是编译期常量，写进去反而让每个游戏都被告知没存档
+LICENSE: the copyright line names seedds, whose MIT code this is	LICENSE 版权行改回 `seedds`（这份 MIT 代码的作者）
+Carry every profile switch the shell reads from the environment	壳从环境变量读取的每一个 profile 开关都接进打包器（含 op_mode 的 atoi 语义修正）
+Write the Chinese half of the release notes in Chinese: it listed the English commit subjects	发布说明的中文部分改成中文：原来「本版变更」那一段列的仍是英文提交标题

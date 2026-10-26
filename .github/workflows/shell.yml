@@ -570,10 +570,26 @@ jobs:
           # it goes stale, and a scheduled build has nobody to write it at all -- which is when a reader most needs to know
           # that the only thing that happened is "upstream moved".
           PREV=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-          CHANGES="- (this is the first release)"
+          SUBJ=""
           if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/$PREV" >/dev/null 2>&1; then
-            CHANGES=$(git log --no-merges --pretty='- %s' "$PREV"..HEAD 2>/dev/null | head -30 || true)
-            if [ -z "$CHANGES" ]; then CHANGES="- (no commits since $PREV)"; fi
+            SUBJ=$(git log --no-merges --pretty='%s' "$PREV"..HEAD 2>/dev/null | head -30 || true)
+          fi
+          if [ -z "$SUBJ" ]; then
+            CHANGES="- (no commits since ${PREV:-the previous release})"
+            CHANGES_ZH="- （上一版之后没有新提交）"
+          else
+            CHANGES=$(printf '%s\n' "$SUBJ" | sed 's/^/- /')
+            # The commit subjects are English, because the history is. Printing them under a Chinese heading is what this
+            # used to do, and it read as untranslated boilerplate: the section said 本版变更 and then listed English. Each
+            # subject is looked up in .github/release-notes.zh.tsv instead, one line per commit, and a subject that has no
+            # row says so in the page rather than passing the English off as the translation.
+            CHANGES_ZH=$(printf '%s\n' "$SUBJ" | while IFS= read -r s; do
+              # sub() drops a UTF-8 BOM from the first key: a table saved by a Windows editor starts with one, and the first
+              # row would then never match -- which reads as "that commit has no translation" rather than as a table bug.
+              t=$(awk -F'\t' -v k="$s" 'BEGIN { sub(/^\xef\xbb\xbf/, "", k) } $1==k { print $2; exit }' .github/release-notes.zh.tsv 2>/dev/null || true)
+              if [ -n "$t" ]; then printf -- '- %s\n' "$t"
+              else printf -- '- %s\n  **未翻译**：这一条还没有中文，补一行到 `.github/release-notes.zh.tsv`\n' "$s"; fi
+            done)
           fi
           AUTO_EN=""; AUTO_ZH=""
           if [ "$EVENT" = "schedule" ]; then
@@ -588,7 +604,7 @@ jobs:
           } > en.md
           {
             echo '## 本版变更（对比上一版）'; echo
-            echo "$CHANGES"; echo
+            echo "$CHANGES_ZH"; echo
             if [ -n "$AUTO_ZH" ]; then echo "$AUTO_ZH"; echo; fi
           } > zh.md
 

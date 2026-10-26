@@ -31,6 +31,7 @@
 + docs/SHELL.zh-CN.md
 + .github/workflows/shell.yml
 + .github/workflows/capture.yml             # the macOS job that captures run-time shaders
++ .github/release-notes.zh.tsv              # the Chinese line for each commit the release notes list
 + .shell-overlay.txt
 + .shell-base.txt
 + .shell-patches/                          # the diffs for the "~" entries below
