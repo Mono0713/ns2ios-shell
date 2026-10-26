@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
 --- a/dm/ios/Sources/main.m
 +++ b/dm/ios/Sources/main.m
-@@ -5,20 +5,33 @@
+@@ -5,20 +5,34 @@
  #include <signal.h>
  #include <stdio.h>
  #include <unistd.h>
@@ -17,6 +17,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
 +#endif
  UIViewController *front_ios_root(void);
  void front_ios_focus_event(int ev);
++void phone_pads_start(void);   // phone_pads.c: phones on the same Wi-Fi play as controllers from their browser
  
 -static char *g_argv[4]; static int g_argc;
 +static char *g_argv[16]; static int g_argc;   // 2 fixed + the Guest library's module names (a shell has no module list compiled in)
@@ -37,7 +38,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      return nil;
  }
  
-@@ -45,16 +58,23 @@
+@@ -45,16 +59,23 @@
              NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
              if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
              NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
@@ -63,7 +64,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      NSString *romfs = romfs_locate();
      if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
      fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
-@@ -71,6 +91,12 @@
+@@ -71,6 +92,12 @@
      if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
      chdir(doc.fileSystemRepresentation);
      g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
@@ -76,7 +77,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup (and the launcher: the settings it sets are read when the game starts)
      return 1;
  }
-@@ -83,11 +109,21 @@
+@@ -83,11 +110,21 @@
      fprintf(stderr, "boot: dm_main returned %d\n", rc);
      return NULL;
  }
@@ -100,3 +101,10 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
  }
  int front_ios_boot_ok(void) { return g_boot_ok; }
  
+@@ -117,5 +154,6 @@
+ 
+ int main(int argc, char **argv) {
+     @autoreleasepool { g_boot_ok = boot_env(); }
++    if (g_boot_ok) phone_pads_start();   // before the launcher, so phones can join while the settings are shown
+     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(App.class)); }
+ }

@@ -4,6 +4,7 @@
 // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
 import SwiftUI
 import UIKit
+import CoreImage.CIFilterBuiltins
 import os
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
@@ -33,8 +34,74 @@ private let zhText: [String: String] = [
     "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 和 log.txt 都在這裡（檔案 App）。",
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
+    "Phone controllers": "手機手把", "Scan with a phone camera, or open in its browser:": "用手機相機掃描，或在手機瀏覽器打開：",
+    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請先連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
+    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
+        "同一個 Wi-Fi 的每支手機都是一個獨立玩家，排在已連線的手把後面，最多到 8P。手機重新整理頁面會保留原本的玩家。",
 ]
 private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : s }
+
+// Phone controllers (phone_pads.c): the address phones open, and a QR code of it. DM_PHONE_PADS_LIVE is the port the server listens on (unset when it is off or could not start);
+// the address is this device's IPv4 address on Wi-Fi (en0), or on another interface that is up (a personal hotspot's bridge) when there is no Wi-Fi
+private func phonePadsURL() -> String? {
+    guard let port = ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] else { return nil }
+    var list: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&list) == 0, let first = list else { return nil }
+    defer { freeifaddrs(list) }
+    var found: [String: String] = [:]
+    for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        let i = p.pointee
+        guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), (i.ifa_flags & UInt32(IFF_UP)) != 0, (i.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+        let name = String(cString: i.ifa_name), addr = String(cString: host)
+        if !addr.hasPrefix("169.254.") { found[name] = found[name] ?? addr }
+    }
+    guard let addr = found["en0"] ?? found.first(where: { $0.key.hasPrefix("bridge") || $0.key.hasPrefix("en") })?.value else { return nil }
+    return "http://\(addr):\(port)/"
+}
+
+private func qrImage(_ text: String) -> UIImage? {
+    let f = CIFilter.qrCodeGenerator()
+    f.message = Data(text.utf8)
+    f.correctionLevel = "M"
+    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+    return UIImage(cgImage: cg)
+}
+
+private struct PhonePadsSection: View {
+    @State private var url = phonePadsURL()
+
+    var body: some View {
+        Section {
+            if let url {
+                HStack(spacing: 16) {
+                    if let qr = qrImage(url) {
+                        Image(uiImage: qr).interpolation(.none).resizable().frame(width: 132, height: 132)
+                            .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 8))
+                            .accessibilityLabel("QR code of \(url)")
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(tr("Scan with a phone camera, or open in its browser:")).font(.callout).foregroundStyle(.secondary)
+                        Text(url).font(.body.monospaced()).textSelection(.enabled)
+                    }
+                }
+            } else {
+                Text(tr("Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.")).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text(tr("Phone controllers"))
+        } footer: {
+            Text(tr("Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player."))
+        }
+        .task {
+            while !Task.isCancelled {   // the Wi-Fi address can change while the launcher is shown
+                url = phonePadsURL()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+}
 
 private extension LauncherModel {
     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
@@ -146,6 +213,7 @@ private struct LauncherView: View {
                             ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
                         }
                     }
+                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsSection() }
                     Section {
                         Button(tr("Reset to tested defaults")) { m.reset() }
                             .disabled(!m.changed)

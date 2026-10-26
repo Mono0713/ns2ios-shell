@@ -17,6 +17,7 @@ void front_ios_loading_text(NSString *zh, NSString *en);   // front_ios.m: the l
 #endif
 UIViewController *front_ios_root(void);
 void front_ios_focus_event(int ev);
+void phone_pads_start(void);   // phone_pads.c: phones on the same Wi-Fi play as controllers from their browser
 
 static char *g_argv[16]; static int g_argc;   // 2 fixed + the Guest library's module names (a shell has no module list compiled in)
 
@@ -153,5 +154,6 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 
 int main(int argc, char **argv) {
     @autoreleasepool { g_boot_ok = boot_env(); }
+    if (g_boot_ok) phone_pads_start();   // before the launcher, so phones can join while the settings are shown
     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(App.class)); }
 }

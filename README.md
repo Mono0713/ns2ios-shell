@@ -219,6 +219,12 @@ supported list packs and plays from its own files.
   with what to do, instead of leaving it for the phone to find.
 - **First launch takes a while**: the phone compiles every shader once. Hades II's 140 shaders take about 5 s; bigger titles
   take minutes (the progress page estimates). The system caches the result, so later launches start immediately.
+- **Phone controllers.** Friends can play with their phones (Android or iPhone, no app to install): with the phones on the
+  same Wi-Fi as the iPad (or on its Personal Hotspot), scan the QR code on the settings screen or open the address under it
+  in the phone's browser, and hold the phone sideways. Each phone is a player of its own, after any connected controllers,
+  up to player 8; a phone that reloads the page keeps its player. Allow local network access when iOS asks. Touch buttons
+  have no feel, so they suit party games better than fast action. `DM_PHONE_PADS=0` in `Documents/env.txt` turns this off,
+  `DM_PHONE_PADS_PORT=<port>` moves it off 8080.
 - To change a setting on the device without repacking, put `KEY=VALUE` lines in the app's `Documents/env.txt`.
 - If it crashes, the host writes `Documents/log.txt` — in almost every case that file names the reason.
 - Packing needs **disk space of roughly twice the NSP size**: the extracted RomFS, the staged app and the IPA coexist. The
