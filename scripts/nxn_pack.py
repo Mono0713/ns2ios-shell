@@ -956,9 +956,13 @@ def env_for(rows):
     if mtl4: lines.append('DM_PSO_MTL4=' + ('1' if truthy(mtl4) else '0'))
     hold = one(rows, 'fps_hold')
     if hold: lines.append('DM_FPS_HOLD=' + ('1' if truthy(hold) else 'off'))
-    for k, ev in (('fps_target', 'DM_FPS_TARGET'), ('opmode', 'DM_OPMODE')):
+    for k, ev in (('fps_target', 'DM_FPS_TARGET'),):
         v = one(rows, k)
         if v: lines.append('%s=%s' % (ev, v.strip()))
+    # op_mode is read as atoi() against DM_GAME_OPMODE, which is int(om == "console"): atoi("handheld") and
+    # atoi("console") are both 0, so the profile's word has to become the number the host compares.
+    om = one(rows, 'op_mode')
+    if om: lines.append('DM_OPMODE=' + ('1' if om.strip() == 'console' else '0'))
     # program_id is deliberately NOT written. The shell is compiled from the placeholder profile, so its DM_GAME_PROGRAM_ID
     # is 0, and hle_fs.c compares IsSaveDataExisting's argument against that constant, not against the environment:
     # "an app asks whether its own save data exists" is answered by svcGetInfo(ProgramId) == DM_GAME_PROGRAM_ID. Left alone
