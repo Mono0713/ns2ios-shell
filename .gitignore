@@ -1,8 +1,25 @@
-# Not part of the fork: the shader chain lock and the per-profile chain header are rewritten by dmsh_chain.py
-# (--update-lock / --header) on every machine that runs the packing chain. Upstream versions stay as they are.
+# This file is not one of the five directories packer_sync.py syncs, so upstream's rules are repeated here. Without the
+# two table rules below every packing run left dm/games/<id>/*.tsv in the tree and 77 build outputs ended up committed.
+.iosdd/
+.iosdd_mac/
+.iosdd_*/
+.DS_Store
 __pycache__/
 *.pyc
 dm/ios/Gen/
+
+# Made from each shader build's Mac outputs (c1_guard.py, cb_extent.py; the NSP script makes them), not committed
+dm/games/*/c1_full.tsv
+dm/games/*/cb_extent.tsv
+# Same for the per-profile chain version header: nxn_pack.py runs dmsh_chain.py --header and copies it in beside the
+# game_profile.h that make generates. The shell's placeholder profile is the exception, because a shell serves any game:
+# its header says DMSH_CHAIN "000000000000" and the run-time version is read from the library directory instead.
+dm/games/*/dmsh_chain.h
+!dm/games/0000000000000000/dmsh_chain.h
+
+# dm/gfx/tools/dmsh_chain.lock stays tracked (upstream tracks it too): it is the toolchain the chain version was computed
+# with. A packing run rewrites it whenever this machine's tools differ, and that rewrite is this machine's fingerprint,
+# not a source change -- leave it out of a commit unless the change is deliberate.
 
 # This repository is public. Game files and keys must never be committed, whatever a packing run leaves behind
 # in the tree. The shell carries no game content by design, so none of these are ever needed here.
