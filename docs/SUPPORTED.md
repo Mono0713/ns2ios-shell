@@ -9,6 +9,7 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 - **首次启动**要编译着色器：打包时只把 Switch 的着色器翻译成 Metal 源码，编译在手机上做（之后有缓存）。几秒到大作几分钟，启动时有进度页。
 - **内存**：iOS 给不带 entitlement 的应用约 3.4 GB；本项目的壳在构建时已请求提高上限，侧载工具保留该权限后可用到 6–8 GB。
 - 表内是本仓库带参数、并且打包器跟随其快照验证过的游戏。**不在表内**的游戏，打包器会尝试从上游取它的参数并尽力打包（未经本仓库验证，可能跑不起来），不会产出半成品 IPA。
+- **标着「需 Mac 一次」的游戏**：着色器压在 Oodle / LZ5 容器里（Trinity 包、PlatinumGames PKZ、旧式 Unreal pak），只有游戏自己的解码器能解，而它必须跑在 Mac 主机里。这几款**在 Windows 上打不了**——打包器会在拆着色器那步停下并说明，流程见 `docs/CAPTURE.md`。
 
 | 游戏 | Title ID | 已验证版本 | 特性 |
 |---|---|---|---|
@@ -26,7 +27,7 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | BALL x PIT | `010086A022444000` | 1.293 |  |
 | Bayonetta | `010076F0049A2000` | 1.1 |  |
 | Bayonetta 2 | `01007960049A0000` | 1.2 |  |
-| Bayonetta 3 | `01004A4010FEA000` | 1.2.0 |  |
+| Bayonetta 3 | `01004A4010FEA000` | 1.2.0 | 需 Mac 一次 |
 | Big Brain Academy: Brain vs. Brain | `0100620012D6E000` | 1.2.0 | handheld |
 | Brain Memory Training Academy | `0100F5D01DA3A000` | 1.0.0 |  |
 | Captain Toad: Treasure Tracker | `01009BF0072D4000` | 1.4.2 | handheld |
@@ -36,8 +37,8 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | DARK SOULS: REMASTERED | `01004AB00A260000` | 1.0.3 |  |
 | Digimon Story Cyber Sleuth: Complete Edition | `010014E00DB56000` | 1.0.3 |  |
 | DRAGON QUEST VII Reimagined | `0100A9D01C446000` | 1.2.0 | 60 fps |
-| DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition | `01006C300E9F0000` | 1.0.4 | 60 fps |
-| FINAL FANTASY RESONANCE | `0100606026F12000` | 1.0.1 | 60 fps |
+| DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition | `01006C300E9F0000` | 1.0.4 | 60 fps · 需 Mac 一次 |
+| FINAL FANTASY RESONANCE | `0100606026F12000` | 1.0.1 | 60 fps · 需 Mac 一次 |
 | FINAL FANTASY TACTICS - The Ivalice Chronicles | `010038B015560000` | 1.4.0 |  |
 | Fire Emblem Engage | `0100A6301214E000` | 2.0.0 |  |
 | Fire Emblem: Three Houses | `010055D009F78000` | 1.2.0 |  |
@@ -53,14 +54,14 @@ Generated from `dm/games/*/game.tsv` by `dm/tools/supported_list.py` — do not 
 | Monster Hunter Rise | `0100B04011742000` | 16.0.2 | 60 fps |
 | Monster Train 2 | `010051701FB46000` | 1.1.1 |  |
 | NieR:Automata The End of YoRHa Edition | `010056B015FE8000` | 1.0.3 |  |
-| OCTOPATH TRAVELER 0 | `01005270232F2000` | 1.0.5 | 60 fps |
+| OCTOPATH TRAVELER 0 | `01005270232F2000` | 1.0.5 | 60 fps · 需 Mac 一次 |
 | OCTOPATH TRAVELER II | `0100A3501946E000` | 1.1.1 | 60 fps |
 | Paper Mario: The Thousand-Year Door | `0100ECD018EBE000` | 1.0.1 | 60 fps |
 | Patrick's Parabox | `0100E44016C22000` | 1.0.1 |  |
 | Persona 5 Royal | `01005CA01580E000` | 1.0.2 |  |
 | Pikmin 4 | `0100B7C00933A000` | 1.1.1 |  |
 | Pokémon Brilliant Diamond | `0100000011D90000` | 1.3.0 | 60 fps |
-| Pokémon Legends: Z-A | `0100F43008C44000` | 2.0.2 |  |
+| Pokémon Legends: Z-A | `0100F43008C44000` | 2.0.2 | 需 Mac 一次 |
 | Pokémon Shield | `01008DB008C2C000` | 1.3.2 |  |
 | Pokémon Sword | `0100ABF008968000` | 1.3.2 |  |
 | Portal | `01007BB017812000` | 1.0.3 |  |

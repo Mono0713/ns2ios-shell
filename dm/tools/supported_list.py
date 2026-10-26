@@ -60,6 +60,11 @@ def read_games(games_dir):
         features = []
         if one(rows, 'fps_target') == '60': features.append('60 fps')
         if one(rows, 'op_mode').lower() == 'handheld': features.append('handheld')
+        # A game whose shaders sit inside an Oodle- or LZ5-compressed container needs one run on a Mac before it can be packed
+        # at all: only the game's own decoder unpacks those archives (shader_split.py oodle(), dm/host/hle_oodle.c). Said here
+        # rather than inferred from the profile's prose, because a game can mention Oodle for other assets and still pack fine
+        # (Shin Megami Tensei V keeps its shader records inline in Oodle-compressed pak blocks).
+        if one(rows, 'needs_mac_shaders'): features.append('需 Mac 一次')
         games.append({
             'tid': d.name,
             'name': one(rows, 'name') or d.name,
@@ -80,7 +85,10 @@ def render_md(games):
          '几秒到大作几分钟，启动时有进度页。',
          '- **内存**：iOS 给不带 entitlement 的应用约 3.4 GB；本项目的壳在构建时已请求提高上限，'
          '侧载工具保留该权限后可用到 6–8 GB。',
-         '- 表内是本仓库带参数、并且打包器跟随其快照验证过的游戏。**不在表内**的游戏，打包器会尝试从上游取它的参数并尽力打包（未经本仓库验证，可能跑不起来），不会产出半成品 IPA。', '',
+         '- 表内是本仓库带参数、并且打包器跟随其快照验证过的游戏。**不在表内**的游戏，打包器会尝试从上游取它的参数并尽力打包（未经本仓库验证，可能跑不起来），不会产出半成品 IPA。',
+         '- **标着「需 Mac 一次」的游戏**：着色器压在 Oodle / LZ5 容器里（Trinity 包、PlatinumGames PKZ、旧式 Unreal pak），'
+         '只有游戏自己的解码器能解，而它必须跑在 Mac 主机里。这几款**在 Windows 上打不了**——打包器会在拆着色器那步停下并说明，'
+         '流程见 `docs/CAPTURE.md`。' + ('' if any('需 Mac 一次' in g['features'] for g in games) else '（当前没有。）'), '',
          '| 游戏 | Title ID | 已验证版本 | 特性 |',
          '|---|---|---|---|']
     for g in games:
