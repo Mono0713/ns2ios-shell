@@ -11,3 +11,4 @@ Do not write DM_PROGRAM_ID: the shell's save-data answer depends on the compiled
 LICENSE: the copyright line names seedds, whose MIT code this is	LICENSE 版权行改回 `seedds`（这份 MIT 代码的作者）
 Carry every profile switch the shell reads from the environment	壳从环境变量读取的每一个 profile 开关都接进打包器（含 op_mode 的 atoi 语义修正）
 Write the Chinese half of the release notes in Chinese: it listed the English commit subjects	发布说明的中文部分改成中文：原来「本版变更」那一段列的仍是英文提交标题
+Share one player-slot table between controllers and phones	实体手把与手机网页手把共用一份玩家编号表（加锁），两边不会再抢同一个玩家
