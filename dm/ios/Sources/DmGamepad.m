@@ -155,8 +155,14 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
             if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
         }
         _swap = shape(_controls); _swapLabel = label(_swap, @"");
+        // First-launch layout from the game profile (DM_PAD_LAYOUT, atoi; the profile writes simple / full / touch and the packer turns it
+        // into 0 / 1 / 2, the order game.py uses). The game-free shell is compiled against the placeholder profile, which asks for full:
+        // that is the shell's own default, and a profile that sets no key keeps it (upstream's Mac host would compile game.py's default,
+        // simple, instead -- the one key where the two differ, left as it is on purpose, see HANDOFF 1b). A layout the player picks is
+        // saved in NSUserDefaults and takes precedence from then on, which is why the environment only decides the first launch.
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
-        int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
+        const char *pad_env = getenv("DM_PAD_LAYOUT");
+        int l = saved ? (int)saved.integerValue : (pad_env ? atoi(pad_env) : DM_GAME_PAD_LAYOUT);
         if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
         _full = l == 1; _tap = l == 2;
         [self applyLayout];

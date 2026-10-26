@@ -26,6 +26,7 @@ mode (`-DDM_SHELL`) moves each of those to run time:
 | `.metallib` compiled by `xcrun metal` | Files that do not start with `MTLB` are treated as MSL source and compiled on the device, then cached by the system |
 | `romfs_marker`-based RomFS lookup | Any existing, non-empty RomFS directory is accepted |
 | The profile's memory layout (`mem_used`, `app_pool`, `mem_alias`, …) | Read from the environment at startup; the packer writes the game's real values into the app's `dm/env.txt` |
+| The rest of the profile switches the host read as compiled-in constants (`tex_flush_upload`, `tex_dirty_upload`, `render_cond`, `alloc_big_align`, `tex_dyn_slots`, `perf_mode`, `mem_map_limit`, `game_args`, `pad_layout`) | Each host site asks the environment first (`DM_TEX_FLUSH_UPLOAD`, `DM_RENDER_COND`, `DM_PERF_BOOST`, `DM_GAME_ARGS`, …) and falls back to the constant, which the placeholder profile leaves off (it sets `pad_layout full`, so that is the shell's own default); the packer writes the value in the form that site parses — `atoi`, so the profile's `on` and `boost` arrive as `1` |
 | — | `dm/ios/Sources/dm_shader_prep.m` compiles all source-form shaders once on first launch with a progress page |
 
 The rewriter and shader tables needed no work: in nxnative they are already ordinary resources (`Gen/dm`, a resource folder in
@@ -199,7 +200,7 @@ Every one of these was macOS-only code that had never run elsewhere:
 | `dm/gfx/tools/dmsh_chain.py` | A single-file translator build has no `.dll` to fingerprint; the executable is `dmsh_xlate.exe`; a Windows checkout's CRLF makes the embedded source digest differ from the tree's |
 | `dm/gfx/tools/nometal_run.py` | Three `xcrun` probes were unhandled (the ported script raises on any it does not know), and it deletes a temporary file per shader — which a deletion-counting harness kills midway |
 | `dm/ios/tools/pack_ipa.py` | `os.stat` on Windows has no x bit, so the app's main binary was stored as 0644 and the installed app would not start |
-| `dm/host/hle_svc.c` | The memory layout was compile-time only, which a game-free shell cannot supply |
+| `dm/host/hle_svc.c` | The memory layout was compile-time only, which a game-free shell cannot supply — read from the environment now (`DM_MEM_*`, `DM_APP_POOL`, `DM_MEM_MAP_LIMIT`) |
 
 ## Self-checks worth keeping
 

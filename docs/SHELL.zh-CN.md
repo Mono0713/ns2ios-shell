@@ -24,6 +24,7 @@
 | `xcrun metal` 编出的 `.metallib` | 不以 `MTLB` 开头的文件按 MSL 源码处理，在设备上现编，之后由系统缓存 |
 | 按 `romfs_marker` 定位 RomFS | 任何存在且非空的 RomFS 目录都接受 |
 | profile 的内存布局（`mem_used`、`app_pool`、`mem_alias`…） | 启动时从环境变量读；打包器把游戏真实值写进 app 的 `dm/env.txt` |
+| profile 里其余这些开关，宿主原先只读编译期常量（`tex_flush_upload`、`tex_dirty_upload`、`render_cond`、`alloc_big_align`、`tex_dyn_slots`、`perf_mode`、`mem_map_limit`、`game_args`、`pad_layout`） | 每个宿主读取点先问环境变量（`DM_TEX_FLUSH_UPLOAD`、`DM_RENDER_COND`、`DM_PERF_BOOST`、`DM_GAME_ARGS`…），没有再退回常量——占位 profile 里它们是关的（只有 `pad_layout full`，那是壳自己的默认）；打包器按该读取点的解析方式写值（`atoi`，所以 profile 写的 `on`、`boost` 要变成 `1`） |
 | — | `dm/ios/Sources/dm_shader_prep.m`：首启把全部源码形态的着色器编一遍，带进度页 |
 
 改写表和着色器表不用动：在 nxnative 里它们本来就是普通资源（`Gen/dm`，`ios/project.yml` 里是资源目录），运行时读取，
@@ -182,7 +183,7 @@ ENV=1
 | `dm/gfx/tools/dmsh_chain.py` | 单文件发布的翻译器旁边没有 `.dll` 可算指纹；可执行文件叫 `dmsh_xlate.exe`；Windows checkout 的 CRLF 让内嵌源摘要与树里的不一致 |
 | `dm/gfx/tools/nometal_run.py` | 三个 `xcrun` 探测未处理（移植版对不认识的调用直接抛错）；且它每个着色器删一个临时文件，被统计删除量的环境半路打断 |
 | `dm/ios/tools/pack_ipa.py` | Windows 的 `os.stat` 没有 x 位，主程序被打成 0644，装上去起不来 |
-| `dm/host/hle_svc.c` | 内存布局只有编译期常量，无游戏内容的壳提供不了 |
+| `dm/host/hle_svc.c` | 内存布局只有编译期常量，无游戏内容的壳提供不了——现在从环境变量读（`DM_MEM_*`、`DM_APP_POOL`、`DM_MEM_MAP_LIMIT`） |
 
 ## 值得保留的自检
 

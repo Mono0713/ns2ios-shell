@@ -153,6 +153,10 @@ static void sa_init(void) {
     g_sa_alloc_al = ms ? module_sym(ms, "_ZN2nn3mem17StandardAllocator8AllocateEmm") : NULL;
     if (!g_sa_alloc || !g_sa_alloc_al) die("StandardAllocator::Allocate not found in the SDK");
     g_sa_big_align = DM_GAME_ALLOC_BIG_ALIGN;
+    // Profile alloc_big_align as an environment switch (DM_ALLOC_BIG_ALIGN, atoi != 0): the game-free shell is compiled against the
+    // placeholder profile, where this constant is 0, so a game whose profile sets it (13 Sentinels, Unicorn Overlord) gets it only from
+    // what the packer wrote into dm/env.txt. sa_init runs once under pthread_once, so this needs no cache of its own.
+    { const char *e = getenv("DM_ALLOC_BIG_ALIGN"); if (e) g_sa_big_align = atoi(e) != 0; }
     if (g_sa_big_align) LOG("StandardAllocator::Allocate: allocations ≥ 64 KB are 64 KB aligned (game profile alloc_big_align: memory pool storage, see hle_os.c)");
 }
 HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEm", "passed straight to the SDK; with the profile's alloc_big_align (13 Sentinels, Unicorn Overlord) allocations ≥ 64 KB are 64 KB aligned (memory pool start)", void *, h_mem_SAAllocate, void *self, size_t size) {

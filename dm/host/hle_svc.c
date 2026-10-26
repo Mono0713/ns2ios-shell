@@ -28,6 +28,10 @@ static uint64_t mem_used(void) { if (!g_mem_used) g_mem_used = env_u64("DM_MEM_U
 // The NPDM's system resource size: the shell is compiled from the placeholder profile, and a build that declares one
 // where the profile says none gets a wrong answer to GetInfo and mis-sizes its heap (Absolum 1.0.4 declares 16 MB)
 static uint64_t sys_resource(void) { static uint64_t v; if (!v) v = env_u64("DM_SYS_RESOURCE", DM_GAME_SYS_RESOURCE); return v; }
+// Profile mem_map_limit as an environment switch (DM_MEM_MAP_LIMIT, atoi != 0; the profile writes "on", the packer turns it into 1 as it
+// does for op_mode). The game-free shell is compiled against the placeholder profile, where this constant is 0, so the one game whose
+// profile sets it (Pokemon Legends: Z-A) gets the limit only from dm/env.txt. Read once and kept: this sits in svcGetInfo's path.
+static int mem_map_limit(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_MEM_MAP_LIMIT"); v = e ? atoi(e) != 0 : DM_GAME_MEM_MAP_LIMIT; } return v; }
 #define RESERVE g_reserve
 #define APP_POOL app_pool()
 #define MEM_USED mem_used()
@@ -295,7 +299,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             pthread_mutex_unlock(&g_map_lock); regs[0] = 0x10801; return 0;
         }
         uint64_t charged = (uint64_t)MEM_USED + big_bss_bytes() + atomic_load(&g_alias_mapped);
-        if (DM_GAME_MEM_MAP_LIMIT && (charged > APP_POOL || size > APP_POOL - charged)) {
+        if (mem_map_limit() && (charged > APP_POOL || size > APP_POOL - charged)) {
             pthread_mutex_unlock(&g_map_lock); regs[0] = 0x10801; return 0;
         }
         int rc = 0;
@@ -438,7 +442,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         // and maps new ones for later allocations, until a map fails: then it unmaps the cached block and retries (measured on the Mac: the refused 4 MB map at +0x43e2c000 was followed by
         // UnmapPhysicalMemory of the 3.15 GB block and the same map again). Without the limit the mapped total went past the pool in the first minute and the freed block stayed mapped.
         // Off by default: Ace Attorney Investigations Collection maps a little more than the 1 GB pool its profile reports
-        if (DM_GAME_MEM_MAP_LIMIT && num == 0x2C) {
+        if (mem_map_limit() && num == 0x2C) {
             int64_t room = (int64_t)APP_POOL - (int64_t)(g_heap_cur + MEM_USED + big_bss_bytes()) - atomic_load(&g_alias_mapped);
             if (need && need > room) {
                 pthread_mutex_unlock(&g_map_lock);
@@ -503,7 +507,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         case I_UsedMem:  case I_UsedNonSys:  pthread_mutex_lock(&g_map_lock);
                                              v = g_heap_cur + MEM_USED + big_bss_bytes();   // profile mem_used, 64 MB unless the game needs more (see mem_used in dm/games/README.md)
                                              // with mem_map_limit, the pages mapped in the alias region count too, as on Horizon (the limit in MapPhysicalMemory is the pool less this)
-                                             if (DM_GAME_MEM_MAP_LIMIT) v += (uint64_t)atomic_load(&g_alias_mapped);
+                                             if (mem_map_limit()) v += (uint64_t)atomic_load(&g_alias_mapped);
                                              pthread_mutex_unlock(&g_map_lock); break;
         // the system resource the NPDM declares (profile sys_resource; 32 MB without the key). The SDK's IsVirtualAddressMemoryEnabled is "total != 0": Big Brain Academy's nninitStartup
         // asks StandardAllocator for 60 GB of virtual address memory when it is, and sets a heap only when it is not (its NPDM declares none)

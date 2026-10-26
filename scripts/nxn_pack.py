@@ -980,6 +980,31 @@ def env_for(rows):
     for k, ev in (('core_preempt', 'DM_PREEMPT'), ('vconv_range', 'DM_NVN_VCONV_RANGE')):
         v = one(rows, k)
         if v: lines.append('%s=%s' % (ev, '1' if truthy(v) else '0'))
+    # The keys whose host read a compiled-in constant and nothing else (no getenv at all: dm/gfx/nvn/hle_nvn.c, dm/gfx/nvn/nvn_mtl.m,
+    # dm/host/main.c, hle_os.c, hle_oe.c, hle_svc.c, dm/ios/Sources/DmGamepad.m). The game-free shell is compiled against the placeholder
+    # profile, where every one of them is off or 0 (pad_layout is the exception: the placeholder asks for full, deliberately -- see below),
+    # so a profile that sets them changed nothing until the host learned to ask the environment.
+    # Written as the number the host's atoi() compares, never as the profile's word: atoi("on") and atoi("boost") are both 0, which reads as
+    # off -- the same trap op_mode fell into. off is written too, so a stale value in Documents/env.txt cannot turn one on.
+    for k, ev in (('tex_flush_upload', 'DM_TEX_FLUSH_UPLOAD'), ('tex_dirty_upload', 'DM_TEX_DIRTY_UPLOAD'),
+                  ('render_cond', 'DM_RENDER_COND'), ('alloc_big_align', 'DM_ALLOC_BIG_ALIGN'),
+                  ('tex_dyn_slots', 'DM_TEX_DYN_SLOTS'), ('mem_map_limit', 'DM_MEM_MAP_LIMIT')):
+        v = one(rows, k)
+        if v: lines.append('%s=%s' % (ev, '1' if truthy(v) else '0'))
+    # perf_mode is the word "boost", not a switch: truthy("normal") would be 1 while game.py's int(pm == "boost") is 0, so compare the word.
+    pm = one(rows, 'perf_mode')
+    if pm: lines.append('DM_PERF_BOOST=' + ('1' if pm.strip() == 'boost' else '0'))
+    # game_args goes as the profile writes it: the value holds its own '=' (Unreal's -SwitchVirtualAddressSpaceSize=2048), and main.m
+    # splits dm/env.txt at the first '=' only, taking the rest whole.
+    ga = one(rows, 'game_args')
+    if ga: lines.append('DM_GAME_ARGS=' + ga.strip())
+    # pad_layout: the profile writes simple / full / touch and game.py turns them into 0 / 1 / 2 by their position in that tuple.
+    # Written only when the profile sets it. A profile that sets no key leaves the shell's own default, full (the placeholder profile asks
+    # for it), where upstream's Mac host would compile game.py's default, simple. That difference is deliberate and stays: the shell has to
+    # pick one layout for games it knows nothing about, and full is the one whose controls all fit.
+    pl = one(rows, 'pad_layout')
+    if pl and pl.strip() in ('simple', 'full', 'touch'):
+        lines.append('DM_PAD_LAYOUT=%d' % ('simple', 'full', 'touch').index(pl.strip()))
     return lines
 
 

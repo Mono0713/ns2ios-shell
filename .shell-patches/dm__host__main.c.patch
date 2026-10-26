@@ -1,0 +1,24 @@
+diff --git a/dm/host/main.c b/dm/host/main.c
+--- a/dm/host/main.c
++++ b/dm/host/main.c
+@@ -84,13 +84,17 @@
+     { void dm_term_install(void); dm_term_install(); }   // SIGTERM graceful exit (hle_lifecycle.c)
+     { void crash_set_dump_hook(void (*)(void)); void svc_thread_dump(void); crash_set_dump_hook(svc_thread_dump); }   // Dump guest thread state on a crash
+     const char *names[MAX_MOD]; int n = 0;
++    // The game profile's game_args also come from the environment: the game-free shell is compiled against the placeholder profile, whose
++    // string is empty, so a game whose profile sets arguments (Octopath Traveler 0: Unreal's -SwitchVirtualAddressSpaceSize=) gets them
++    // only from what the packer wrote into dm/env.txt (main.m exports it; the value is passed as it stands, '=' included).
++    const char *profile_args = getenv("DM_GAME_ARGS"); if (!profile_args) profile_args = DM_GAME_ARGS;
+     int i = 2;
+     for (; i < argc && strcmp(argv[i], "--") && n < MAX_MOD; i++) names[n++] = argv[i];
+     if (i < argc && !strcmp(argv[i], "--")) for (i++; i < argc && g_argc < 63; i++) g_argv[g_argc++] = argv[i];
+-    else if (*DM_GAME_ARGS) {   // no "--" on the command line (the iOS app, the NSP script's Mac runs): the game profile's game_args, split at spaces
+-        char *s = strdup(DM_GAME_ARGS);
++    else if (*profile_args) {   // no "--" on the command line (the iOS app, the NSP script's Mac runs): the game profile's game_args, split at spaces
++        char *s = strdup(profile_args);
+         for (char *t = strtok(s, " "); t && g_argc < 63; t = strtok(NULL, " ")) g_argv[g_argc++] = t;
+-        LOG("game arguments from the game profile: %s", DM_GAME_ARGS);
++        LOG("game arguments from the game profile: %s", profile_args);
+     }
+     if (!n) { static const char *def[] = DM_GAME_MODULES; for (int k = 0; k < DM_GAME_NMOD && n < MAX_MOD; k++) names[n++] = def[k]; }   // default module list from the game profile's modules (Mario: main sdk)
+     load_modules(argv[1], names, n);
