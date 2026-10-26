@@ -303,6 +303,11 @@ def one(rows, key, default=None):
     return v[0] if v else default
 
 
+def truthy(v):
+    """A profile switch: "on" (how the profiles write it) or a number. Absent and off are the same answer."""
+    return bool(v) and str(v).strip().lower() not in ('0', 'off', 'no', 'false', '')
+
+
 # ---------------------------------------------------------------- NSP scanning
 
 def tid_sidecar(xci):
@@ -838,7 +843,10 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
     if not force and (pkg / 'index.tsv').is_file() and all((tb / n).is_file() for n in tables):
         say('shader split already done'); return pkg, tb
     tb.mkdir(parents=True, exist_ok=True)
-    names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
+    # argv of shader_split.py: romfs, main, package, shader_map.tsv, shader_facts.tsv, shader_pairs.tsv, pso_pairs.tsv --
+    # the last is what the pipeline prebuild takes of agl's BAHS program variations, as upstream's build_ipa_from_nsp.py
+    # asks for it (split_shaders, names + ('pso_pairs.tsv',))
+    names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
     run([PY, GFX / 'shader_split.py', game / 'RomFS', game / 'ExeFS' / 'main', pkg] + [tb / n for n in names],
         env={'DM_GAME': tid}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files')
     for n in names:
@@ -919,6 +927,10 @@ def env_for(rows):
     (IsVirtualAddressMemoryEnabled is "total != 0"), and the two answers are not interchangeable: Big Brain Academy declares 0 and
     runs only when told 0 -- 32 MB and even 1 crash in nninitStartup -- while Brain Memory declares nothing and runs at 32 MB,
     16 MB or 1 (only 0 fails there). So the profile's value is the only one to trust: upstream verified every game against it.
+
+    game_env is the game's own environment (hle_os.c getenv answers these names): a .NET game reserves its GC region from one,
+    and without it the runtime takes the default 5 x heap -- 3.75 GB for Absolum, past the pool, and the game aborts in
+    nninitStartup with nothing in the log to say why.
     """
     pairs = [('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
              ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED')]
@@ -930,6 +942,36 @@ def env_for(rows):
         try: v = int(sr, 0)
         except ValueError: v = None
         if v is not None: lines.append('DM_SYS_RESOURCE=%#x' % v)
+    # The rest of what the profile turns on is compiled into the host upstream and read from the environment here: every one
+    # of these has a DM_* the host asks for before its compiled-in constant (hle_svc.c I_ProgramId, hle_fpslock.c,
+    # hle_nvn.c, hle_oe.c, nvn_mtl.m pso_mtl4 / present_snap). Compiled from the placeholder profile they are all off or
+    # zero, so a game whose profile sets them gets none of them unless the packer writes them here.
+    #
+    # Each one is written in the form that host parses, which is not always the form the profile writes:
+    #   present_snap  the host reads a ring length ("on" is the 2 its own compiled-in value would have been), not a flag
+    #   pso_mtl4      the host compares against "1"
+    #   fps_hold      the host compares against "off", so "0" would read as *on*; omit the line to leave the frame step be
+    #   program_id    the host parses it as hex (strtoull base 16), exactly as the profile writes it
+    if truthy(one(rows, 'present_snap')): lines.append('DM_PRESENT_SNAP=2')
+    mtl4 = one(rows, 'pso_mtl4')
+    if mtl4: lines.append('DM_PSO_MTL4=' + ('1' if truthy(mtl4) else '0'))
+    hold = one(rows, 'fps_hold')
+    if hold: lines.append('DM_FPS_HOLD=' + ('1' if truthy(hold) else 'off'))
+    for k, ev in (('fps_target', 'DM_FPS_TARGET'), ('opmode', 'DM_OPMODE')):
+        v = one(rows, k)
+        if v: lines.append('%s=%s' % (ev, v.strip()))
+    pid = one(rows, 'program_id')
+    if pid: lines.append('DM_PROGRAM_ID=' + pid.strip())
+    # Same again for the keys whose environment name does not follow the profile's: each host reads its own spelling and
+    # takes the profile's text as it stands (a list of shader keys, "segment", "display").
+    for k, ev in (('feedback_snap', 'DM_NVN_FB_SNAP'), ('gpu_timestamps', 'DM_NVN_GPU_TS'),
+                  ('present_interval', 'DM_PRESENT_INTERVAL')):
+        v = one(rows, k)
+        if v: lines.append('%s=%s' % (ev, v.strip()))
+    # ... and the two that are read as atoi != 0, where the profile writes "on" (atoi("on") is 0, which is off)
+    for k, ev in (('core_preempt', 'DM_PREEMPT'), ('vconv_range', 'DM_NVN_VCONV_RANGE')):
+        v = one(rows, k)
+        if v: lines.append('%s=%s' % (ev, '1' if truthy(v) else '0'))
     return lines
 
 
@@ -972,20 +1014,22 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # tables the game profile carries (shader map, c1 list, warm-up list, uniform extents)
     for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv'):
         if (gdir / n).is_file(): shutil.copyfile(gdir / n, A / 'dm' / n)
+    # The shader pairs the pipeline prebuild and the hybrid pipelines read (nvn_mtl.m pso_prebuild, from the folder
+    # DM_NVN_SHMAP names). Upstream's build_ipa.sh copies the profile's two; the split's copy stands in for pso_pairs.tsv
+    # when the profile has none, which is the substitution the Mac route makes with --pso-pairs. Without them a profile
+    # with pso_mtl4 on logs "pipeline prebuild: nothing to do" and every new pipeline compiles on the submit thread.
+    for n in ('shader_pairs.tsv', 'pso_pairs.tsv'):
+        src = gdir / n
+        if not src.is_file(): src = work / 'shader' / 'tables' / n
+        if src.is_file(): shutil.copyfile(src, A / 'dm' / n)
 
     step_launcher(tid, patched, game, A, work)
 
-    # The shell was built from the placeholder profile, so the memory layout baked into its host is the placeholder's. Write
-    # the game's real values here: main.m turns dm/env.txt into environment variables before the host starts, and hle_svc.c
-    # reads them. Getting this wrong does not crash immediately -- the game asks for the wrong heap size and aborts in
-    # SetHeapSize (Hades II asked for pool - 64 MB instead of pool - 108 MB and overflowed the pool by 44 MB).
-    mem_map = (('mem_reserve', 'DM_MEM_RESERVE'), ('mem_alias', 'DM_MEM_ALIAS'), ('mem_stack', 'DM_MEM_STACK'),
-               ('app_pool', 'DM_APP_POOL'), ('mem_used', 'DM_MEM_USED'),
-               # The game's own environment (hle_os.c getenv answers these names): a .NET game reserves its GC region from
-               # one, and without it the runtime takes the default 5 x heap -- 3.75 GB for Absolum, past the pool, and the
-               # game aborts in nninitStartup with nothing in the log to say why. The shell's host was built from the
-               # placeholder profile, so this has to come from here.
-               ('game_env', 'DM_GAME_ENV'))
+    # The shell was built from the placeholder profile, so every value compiled into its host is the placeholder's. The
+    # game's own values are written into dm/env.txt here: main.m turns that into environment variables before the host
+    # starts, and the host reads them (env_for lists them and the form each one takes). Getting the memory layout wrong
+    # does not crash at once -- the game asks for the wrong heap and aborts in SetHeapSize (Hades II asked for pool - 64 MB
+    # instead of pool - 108 MB and overflowed the pool by 44 MB).
     env_lines = env_for(rows)
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
@@ -1323,8 +1367,9 @@ def main():
     if route != 'nvn' and gl_out is None and vk_out is None:
         say('%s game: no NVN shaders to split or translate; building without a shader library (--no-shaders)'
             % ('OpenGL' if route == 'gl' else 'Vulkan'))
-    # the three tables shader_split.py writes (upstream tuple; the .conflicts.tsv is derived by other tools, not passed here)
-    tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv']
+    # the four tables shader_split.py writes (upstream tuple, pso_pairs.tsv included since it is what the pipeline prebuild
+    # reads; the .conflicts.tsv is derived by other tools, not passed here)
+    tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
     if route == 'nvn':
         pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
         if derived_dir is not None:
