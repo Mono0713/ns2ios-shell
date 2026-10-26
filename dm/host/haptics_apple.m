@@ -211,6 +211,18 @@ static void suspend(unsigned reason, BOOL on) {
         for (int p = 0; p < DM_PLAYERS; p++) for (DmRumbleChannel *c in channels[p]) [c stop];
     };
     if (on) { if (dispatch_get_specific(&queue)) stop(); else dispatch_sync(queue, stop); }
+    else {
+        // Back in the foreground the controllers' engines and their GCDeviceHaptics may be dead (iPadOS 26, Xbox Wireless Controller:
+        // rumble stopped for good after a background round trip). Rebuild each controller's route from its current haptics object.
+        pthread_mutex_lock(&routeLock);
+        for (int p = 0; p < DM_PLAYERS; p++) {
+            GCController *c = controllers[p];
+            if (!c) continue;
+            dm_haptics_route(p, 0);   // invalidate queued work before changing hardware
+            dispatch_sync(queue, ^{ configure(p, c); });
+        }
+        pthread_mutex_unlock(&routeLock);
+    }
 }
 void dm_haptics_apple_shutdown(void) {
     if (queue) suspend(DM_HAPTICS_INACTIVE, YES);
