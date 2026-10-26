@@ -71,11 +71,7 @@ static NSString *marker(NSArray<NSString *> *src, NSString *dir) {
 }
 // 要不要做：返回 1 = 已接手（显示进度页，做完调 done）；0 = 不用做（没有源码着色器，或上次已经做完）
 // Whether it needs to run: returns 1 = taken over (shows the progress page, calls done when finished); 0 = nothing to do (no source shaders, or already finished last time)
-int dm_shader_prep_begin(void (^done)(void)) {
-    NSString *dir = libdir();   // NVN 的版本目录；GL 包没有，源码在 msl/gl/src | the chain version's directory; a GL package has none, its sources are in msl/gl/src
-    NSMutableArray<NSString *> *src = [shader_sources() mutableCopy];
-    if (!src.count) return 0;
-    NSString *mk = marker(src, dir); if ([NSFileManager.defaultManager fileExistsAtPath:mk]) return 0;
+static int prep_show(NSArray<NSString *> *src, NSString *mk, void (^done)(void)) {
     UIWindow *win = nil;
     for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (!win || w.isKeyWindow) win = w;
     UIView *host = win.rootViewController.view ?: win; if (!host) { pl(@"【红】着色器准备：没有窗口可放进度页，跳过（进游戏后会边玩边编，第一次进新场景会顿）"); return 0; }
@@ -121,5 +117,18 @@ int dm_shader_prep_begin(void (^done)(void)) {
         dispatch_async(dispatch_get_main_queue(), ^{ [tm invalidate]; [v removeFromSuperview]; UIApplication.sharedApplication.idleTimerDisabled = NO; done(); });
     });
     return 1;
+}
+// Finding the source-form shaders opens every .metallib of the package (tens of thousands for a Unity game) and the marker stats each one: on the main
+// thread that held the screen black for many seconds after Play, before the loading screen could draw. The scan runs in the background; then, on the main
+// thread, either the progress page takes over or done runs at once (nothing to compile, or done last time)
+void dm_shader_prep_start(void (^done)(void)) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+        NSArray<NSString *> *src = shader_sources();   // NVN 的版本目录；GL 包没有，源码在 msl/gl/src | the chain version's directory; a GL package has none, its sources are in msl/gl/src
+        NSString *mk = src.count ? marker(src, libdir()) : nil;
+        BOOL need = mk && ![NSFileManager.defaultManager fileExistsAtPath:mk];
+        pl([NSString stringWithFormat:@"shader preparation: %lu source-form shaders, %@, checked in %.1f s", (unsigned long)src.count, need ? @"to compile" : @"nothing to do", CFAbsoluteTimeGetCurrent() - t0]);
+        dispatch_async(dispatch_get_main_queue(), ^{ if (!need || !prep_show(src, mk, done)) done(); });
+    });
 }
 #endif

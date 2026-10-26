@@ -9,3 +9,9 @@ diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
  DM_RUMBLE	toggle	-	1	always	Controls	Game rumble
  DM_RUMBLE_GAIN	range	0:3:0.1	1.0	always	Controls	Rumble strength
  DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
+@@ -24,4 +25,5 @@
+ DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
+ DM_NVN_ENC_THREAD	toggle	-	1	gfxapi:nvn	Performance	Encode thread
+ DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
++DM_APP_POOL	choice	-=Game default,0x40000000=1 GB,0x80000000=2 GB,0xCD500000=3.2 GB	-	always	Performance	Game memory pool	Change it only if the picture or sound is missing; a wrong size can stop a game from starting.
+ DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD

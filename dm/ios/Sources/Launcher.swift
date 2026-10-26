@@ -28,6 +28,9 @@ private let zhText: [String: String] = [
     "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
     "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
     "Portuguese": "葡萄牙文", "Russian": "俄文", "Korean": "韓文", "Traditional Chinese": "繁體中文", "Simplified Chinese": "簡體中文", "Brazilian Portuguese": "葡萄牙文（巴西）",
+    "Game memory pool": "遊戲記憶體池", "Game default": "遊戲預設",
+    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "畫面或聲音不正常時才需要改；設錯可能讓遊戲無法啟動。",
+    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 和 log.txt 都在這裡（檔案 App）。",
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
 ]
@@ -122,6 +125,14 @@ private struct LauncherView: View {
                             .disabled(!m.changed)
                     } footer: {
                         Text(tr("Brings back all settings this game was tested with."))
+                    }
+                    Section {
+                        Button(tr("Open game folder")) {   // this app's Documents in the Files app (shareddocuments: scheme)
+                            if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                               let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
+                        }
+                    } footer: {
+                        Text(tr("Saves, env.txt and log.txt are here (Files app)."))
                     }
                     Section {
                         HStack {

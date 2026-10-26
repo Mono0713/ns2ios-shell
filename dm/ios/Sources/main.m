@@ -12,7 +12,8 @@
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 #ifdef DM_SHELL
 int dm_shell_modules(const char **out, int max);   // loader.c: the module names found in the Guest library's sections
-int dm_shader_prep_begin(void (^done)(void));      // dm_shader_prep.m: compile source-form shaders once, before the host starts
+void dm_shader_prep_start(void (^done)(void));     // dm_shader_prep.m: compile source-form shaders once, before the host starts (checks in the background, then calls done on the main thread)
+void front_ios_loading_text(NSString *zh, NSString *en);   // front_ios.m: the loading screen's line
 #endif
 UIViewController *front_ios_root(void);
 void front_ios_focus_event(int ev);
@@ -57,10 +58,10 @@ static int boot_env(void) {
             NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
             if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
             NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
-            if (!getenv(k.UTF8String)) { setenv(k.UTF8String, v.UTF8String, 0); [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
+            if (!getenv(k.UTF8String)) { setenv(k.UTF8String, v.UTF8String, 0); if ([ef hasPrefix:doc]) [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
         }
     }
-    setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what an env file set (Launcher.swift)
+    setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what Documents/env.txt set (Launcher.swift); the bundle's dm/env.txt only gives the package's defaults (its memory layout), which a launcher choice replaces
     front_hud_env();   // before the early loading below can make a device
     // Game language (nn::oe::GetDesiredLanguage, hle_oe.c): the one the IPA was packed with (the NSP script's LANGUAGE / --language → DMLanguage in Info.plist), unless an env file sets DM_LANG
     // (or the launcher, which replaces this default before the game starts)
@@ -109,6 +110,7 @@ static void *boot_thread(void *p) {
     return NULL;
 }
 static void boot_start(void) {
+    front_ios_loading_text(@"正在啟動遊戲…", @"Starting the game…");   // until the first frame (front_first_frame)
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 64u << 20);   // the Switch main thread stack is set by npdm; the host gives plenty
     pthread_t t; pthread_create(&t, &a, boot_thread, NULL); pthread_detach(t);
 }
@@ -118,7 +120,8 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 #ifdef DM_SHELL
     // Shaders can be in the package as source when the computer that packed it had no Apple shader compiler: compile them all once
     // here, with a progress page, then start the host. Returns 0 when there is nothing to do (no source shaders, or done last time).
-    if (dm_shader_prep_begin(^{ boot_start(); })) return;
+    front_ios_loading_text(@"正在檢查著色器…", @"Checking shaders…");
+    dm_shader_prep_start(^{ boot_start(); }); return;
 #endif
     boot_start();
 }

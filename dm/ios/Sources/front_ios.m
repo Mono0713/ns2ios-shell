@@ -160,8 +160,14 @@ static void loading_show(UIView *root) {
     UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, CGRectGetMidY(root.bounds) + 24, root.bounds.size.width, 24)];
     l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     l.textAlignment = NSTextAlignmentCenter; l.textColor = [UIColor colorWithWhite:0.72 alpha:1]; l.font = [UIFont systemFontOfSize:15];
-    l.text = zh ? @"遊戲載入中…" : @"Loading the game…";
+    l.text = zh ? @"遊戲載入中…" : @"Loading the game…"; l.tag = 1;
     [g_loading addSubview:spin]; [g_loading addSubview:l]; [root addSubview:g_loading];
+}
+// The loading screen's line for the current step (main.m: checking shaders, starting the game). Main thread
+void front_ios_loading_text(NSString *zh, NSString *en) {
+    NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
+    BOOL z = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
+    ((UILabel *)[g_loading viewWithTag:1]).text = z ? zh : en; LOG("front end: loading screen: %s", en.UTF8String);
 }
 void front_first_frame(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; LOG("front end: first frame, loading screen hidden"); });

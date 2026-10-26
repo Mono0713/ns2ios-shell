@@ -25,4 +25,5 @@ DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4	gfxapi:nvn	Performance	Metal 4 pipelines	K
 DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
 DM_NVN_ENC_THREAD	toggle	-	1	gfxapi:nvn	Performance	Encode thread
 DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
+DM_APP_POOL	choice	-=Game default,0x40000000=1 GB,0x80000000=2 GB,0xCD500000=3.2 GB	-	always	Performance	Game memory pool	Change it only if the picture or sound is missing; a wrong size can stop a game from starting.
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
