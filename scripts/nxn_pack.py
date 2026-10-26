@@ -170,8 +170,13 @@ def check_gates(stamp, patched, mods):
     say('gates: %s (the shell dispatches: %s)' % (' '.join(sorted(kinds)), ' '.join(sorted(allowed))))
 
 
-def run(cmd, env=None, cwd=None, log=None, what=None):
-    """Run a command, echoing it and keeping its output if a log path is given."""
+def run(cmd, env=None, cwd=None, log=None, what=None, hint=None):
+    """Run a command, echoing it and keeping its output if a log path is given.
+
+    hint: called with the log text when the command fails. A truthy return replaces the generic message, for a step whose
+    tool can only describe a Mac-only limitation in its own terms (shader_split.py's DM_OODLE_HOST): the packer should say
+    what that means for someone packing on Windows rather than pass the tool's message through.
+    """
     if what: say(what)
     if os.environ.get('NXN_VERBOSE'): print('    $ ' + ' '.join(str(c) for c in cmd), flush=True)
     e = dict(os.environ, PYTHONUTF8='1')
@@ -184,9 +189,15 @@ def run(cmd, env=None, cwd=None, log=None, what=None):
     else:
         r = subprocess.run([str(c) for c in cmd], env=e, cwd=str(cwd) if cwd else None)
     if r.returncode:
-        tail = ''
+        text = ''
         if log and Path(log).is_file():
-            tail = '\n---- last lines of %s ----\n%s' % (log, '\n'.join(open(log, errors='replace').read().splitlines()[-25:]))
+            text = open(log, errors='replace').read()
+        if hint and text:
+            msg = hint(text)
+            if msg: die(msg)
+        tail = ''
+        if text:
+            tail = '\n---- last lines of %s ----\n%s' % (log, '\n'.join(text.splitlines()[-25:]))
         die('%s failed (exit %d)%s' % (what or cmd[0], r.returncode, tail))
     if what: say('    done in %.1fs' % (time.time() - t0))
     return r
@@ -835,6 +846,23 @@ def need_shaders(prof_dir, what):
            'vk' if route == 'vulkan' else 'gl', what))
 
 
+def shader_split_hint(text):
+    """What shader_split.py's Oodle messages mean for someone packing on Windows, instead of what they say.
+
+    shader_split.py can decode Oodle-compressed archives, but only through the game's own decoder running in the Mac host: it
+    asks for DM_OODLE_HOST and suggests `make -C dm/host GAME=<id> dmhost`. That instruction is useless here -- the whole
+    point of this route is that the user has no Mac -- and repeating it makes a known limitation of the route look like a
+    setup mistake on their side. So the packer says it plainly and points at the two documents that answer the next question.
+    """
+    if 'DM_OODLE_HOST' in text or 'DM_OODLE_MODULES' in text:
+        return ('this game keeps its shaders in Oodle-compressed archives (Trinity packs, PlatinumGames PKZ, or an older\n'
+                "    Unreal pak). Oodle is only decoded by the game's own code, running inside the Mac host, so this title\n"
+                '    cannot be packed on Windows — it needs one run on a Mac (docs/CAPTURE.md).\n'
+                '\n'
+                '    Games that pack straight from Windows are listed in docs/SUPPORTED.md.')
+    return None
+
+
 def step_shaders(game, prof_dir, tables, work, tid, force=False):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
@@ -848,7 +876,8 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
     # asks for it (split_shaders, names + ('pso_pairs.tsv',))
     names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
     run([PY, GFX / 'shader_split.py', game / 'RomFS', game / 'ExeFS' / 'main', pkg] + [tb / n for n in names],
-        env={'DM_GAME': tid}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files')
+        env={'DM_GAME': tid}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
+        hint=shader_split_hint)
     for n in names:
         a, b = tb / n, prof_dir / n
         if b.is_file():
