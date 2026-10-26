@@ -951,7 +951,6 @@ def env_for(rows):
     #   present_snap  the host reads a ring length ("on" is the 2 its own compiled-in value would have been), not a flag
     #   pso_mtl4      the host compares against "1"
     #   fps_hold      the host compares against "off", so "0" would read as *on*; omit the line to leave the frame step be
-    #   program_id    the host parses it as hex (strtoull base 16), exactly as the profile writes it
     if truthy(one(rows, 'present_snap')): lines.append('DM_PRESENT_SNAP=2')
     mtl4 = one(rows, 'pso_mtl4')
     if mtl4: lines.append('DM_PSO_MTL4=' + ('1' if truthy(mtl4) else '0'))
@@ -960,8 +959,13 @@ def env_for(rows):
     for k, ev in (('fps_target', 'DM_FPS_TARGET'), ('opmode', 'DM_OPMODE')):
         v = one(rows, k)
         if v: lines.append('%s=%s' % (ev, v.strip()))
-    pid = one(rows, 'program_id')
-    if pid: lines.append('DM_PROGRAM_ID=' + pid.strip())
+    # program_id is deliberately NOT written. The shell is compiled from the placeholder profile, so its DM_GAME_PROGRAM_ID
+    # is 0, and hle_fs.c compares IsSaveDataExisting's argument against that constant, not against the environment:
+    # "an app asks whether its own save data exists" is answered by svcGetInfo(ProgramId) == DM_GAME_PROGRAM_ID. Left alone
+    # both sides are 0 and the answer is yes, which is what a game needs; write the real title ID here and svcGetInfo
+    # answers it while the constant stays 0, so every game is told it has no save data (Tears of the Kingdom asking for
+    # Breath of the Wild's must still be told no -- that is why the constant, not the environment, is the yardstick).
+    # Fixing this properly means hle_fs.c reading the same source as hle_svc.c's I_ProgramId, a change to the host.
     # Same again for the keys whose environment name does not follow the profile's: each host reads its own spelling and
     # takes the profile's text as it stands (a list of shader keys, "segment", "display").
     for k, ev in (('feedback_snap', 'DM_NVN_FB_SNAP'), ('gpu_timestamps', 'DM_NVN_GPU_TS'),
