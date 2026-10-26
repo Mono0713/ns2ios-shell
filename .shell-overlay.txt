@@ -60,5 +60,8 @@
 ~ dm/host/haptics_apple.m       # controller rumble: plain players and the default locality when advanced players fail; routes rebuilt and the audio-interruption suspension lifted on becoming active
 ~ dm/host/front.h               # front_first_frame: the first present, for the loading screen
 ~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame
-~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it
+~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button
+~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL)
+~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout
+~ dm/games/settings.py          # the memory kind: a GB slider (DM_APP_POOL)

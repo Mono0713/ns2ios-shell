@@ -28,6 +28,9 @@ private let zhText: [String: String] = [
     "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
     "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
     "Portuguese": "葡萄牙文", "Russian": "俄文", "Korean": "韓文", "Traditional Chinese": "繁體中文", "Simplified Chinese": "簡體中文", "Brazilian Portuguese": "葡萄牙文（巴西）",
+    "Game memory pool": "遊戲記憶體池", "Game default": "遊戲預設", 
+    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "畫面或聲音不正常時才需要改；設錯可能讓遊戲無法啟動。",
+    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 和 log.txt 都在這裡（檔案 App）。",
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
 ]
@@ -50,6 +53,20 @@ private struct SettingRow: View {
                 set: { m.values[s.env] = String(format: "%.2f", $0) })
     }
     private var percentage: String { "\(Int((rangeValue.wrappedValue * 100).rounded())) %" }
+    // memory (DM_APP_POOL): a slider in GB writing whole MiB as hex bytes; "-" is the package's own value, which the bundle's dm/env.txt put in the environment
+    private func gb(_ v: String) -> Double? {
+        let t = v.lowercased(); guard let n = t.hasPrefix("0x") ? UInt64(t.dropFirst(2), radix: 16) : UInt64(t) else { return nil }
+        return Double(n) / 1073741824
+    }
+    private var memoryGB: Binding<Double> {
+        Binding(get: {
+                    let v = m.values[s.env] ?? s.def
+                    return gb(v == "-" ? (ProcessInfo.processInfo.environment[s.env] ?? "") : v) ?? s.max ?? 3.2
+                },
+                set: { m.values[s.env] = String(format: "0x%llX", UInt64(($0 * 1024).rounded()) << 20) })
+    }
+    private var memoryIsDefault: Bool { (m.values[s.env] ?? s.def) == "-" }
+    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + tr("Game default") : "") }
 
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -78,6 +95,18 @@ private struct SettingRow: View {
                     Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
                         .accessibilityLabel(tr(s.label))
                         .accessibilityValue(percentage)
+                }
+            case "memory":
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        settingLabel
+                        Spacer()
+                        if !memoryIsDefault && !locked { Button(tr("Game default")) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
+                        Text(memoryText).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Slider(value: memoryGB, in: (s.min ?? 0.5)...(s.max ?? 3.2), step: s.step ?? 0.1)
+                        .accessibilityLabel(tr(s.label))
+                        .accessibilityValue(memoryText)
                 }
             default:
                 Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
@@ -122,6 +151,14 @@ private struct LauncherView: View {
                             .disabled(!m.changed)
                     } footer: {
                         Text(tr("Brings back all settings this game was tested with."))
+                    }
+                    Section {
+                        Button(tr("Open game folder")) {   // this app's Documents in the Files app (shareddocuments: scheme)
+                            if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                               let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
+                        }
+                    } footer: {
+                        Text(tr("Saves, env.txt and log.txt are here (Files app)."))
                     }
                     Section {
                         HStack {
