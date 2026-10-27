@@ -61,7 +61,7 @@ def read_stamp(lib):   # {'game': title ID, 'inputs': digest} of a library direc
 
 def write_stamp(lib, game_id, digest):
     tmp = os.path.join(lib, STAMP + '.tmp')
-    with open(tmp, 'w') as f: f.write(f'# the game and the profile inputs this library was built from (dm/gfx/tools/dmsh_chain.py inputs)\ngame\t{game_id}\ninputs\t{digest}\n')
+    with open(tmp, 'w', newline='\n') as f: f.write(f'# the game and the profile inputs this library was built from (dm/gfx/tools/dmsh_chain.py inputs)\ngame\t{game_id}\ninputs\t{digest}\n')
     os.replace(tmp, os.path.join(lib, STAMP))
 
 def table_head(lib):   # the header c1_full.tsv / cb_extent.tsv start with: the library's chain version and its inputs ("none" when it has no stamp, which nothing takes)

@@ -563,6 +563,8 @@ jobs:
             test -f "flat/$t.exe" || { echo "::error::the windows-tools artifact has no $t.exe"; exit 1; }
           done
           (cd flat && zip -q ../dist/nxnative-windows-tools.zip ./*.exe)
+          # Switch Pad, the Windows app that packs and installs: its updater takes this asset from the latest release
+          (cd switchpad && zip -q -r ../dist/SwitchPad.zip . -x README.md .gitattributes)
 
       - name: Write the notes
         env:
@@ -621,6 +623,7 @@ jobs:
           |---|---|
           | `<version>.zip` | The shell: an unsigned iOS app with no game content. Pack your own game files into it. |
           | `nxnative-windows-tools.zip` | `nx_extract.exe`, `dmsh_xlate.exe`, `spirv-cross.exe`, `glslangValidator.exe`, `zstd.exe` — self-contained; no .NET SDK or C++ toolchain needed, and nothing else to install. |
+          | `SwitchPad.zip` | Switch Pad: a Windows app that packs your games, signs and installs them on the iPad, and updates itself and the files above ([switchpad/README.md](https://github.com/${{ github.repository }}/blob/main/switchpad/README.md)). |
 
           ## Use it
 
@@ -651,6 +654,7 @@ jobs:
           |---|---|
           | `<version>.zip` | 壳：不含游戏内容的未签名 iOS 应用，把自己的游戏文件打进去。 |
           | `nxnative-windows-tools.zip` | `nx_extract.exe`、`dmsh_xlate.exe`、`spirv-cross.exe`、`glslangValidator.exe`、`zstd.exe`——自包含，不需要 .NET SDK 或 C++ 工具链，也不用另装任何东西。 |
+          | `SwitchPad.zip` | Switch Pad：Windows 上打包游戏、签名并安装到 iPad 的程序，会自己更新它和上面这些文件（[switchpad/README.md](https://github.com/${{ github.repository }}/blob/main/switchpad/README.md)）。 |
 
           ## 用法
 
