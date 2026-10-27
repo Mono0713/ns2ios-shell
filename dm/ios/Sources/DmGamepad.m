@@ -122,7 +122,8 @@ static const CGFloat
     K_RSWIPE = 1.0 / 3,                             // right stick area: this fraction of the screen width from the right edge (not in u)
     K_CLICK_X = 102, K_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
 static const int k_btns[] = {B_ZL, B_L, B_ZR, B_R, B_MINUS, B_PLUS, B_LS, B_RS};   // keys locked at touch-down (L3 / R3 only in the 3D layout)
-static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
+// NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers); each game's own in a package of several (main.m sets DM_SHELL_GAME)
+static NSString *layout_key(void) { const char *g = getenv("DM_SHELL_GAME"); return g && *g ? [@"DmPadLayout." stringByAppendingString:@(g)] : @"DmPadLayout"; }
 int dm_opmode(void);   // hle_oe.c: 0 = handheld
 
 @interface DmGamepad : UIView
@@ -199,7 +200,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         // that is the shell's own default, and a profile that sets no key keeps it (upstream's Mac host would compile game.py's default,
         // simple, instead -- the one key where the two differ, left as it is on purpose, see HANDOFF 1b). A layout the player picks is
         // saved in NSUserDefaults and takes precedence from then on, which is why the environment only decides the first launch.
-        NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
+        NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:layout_key()];
         const char *pad_env = getenv("DM_PAD_LAYOUT");
         int l = saved ? (int)saved.integerValue : (pad_env ? atoi(pad_env) : DM_GAME_PAD_LAYOUT);
         if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
@@ -223,7 +224,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     int l = _tap ? 0 : _full ? (dm_opmode() == 0 ? 2 : 0) : 1;
     [self reset];
     _full = l == 1; _tap = l == 2;
-    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
+    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:layout_key()];
     [self applyLayout]; [self setNeedsLayout];
 }
 

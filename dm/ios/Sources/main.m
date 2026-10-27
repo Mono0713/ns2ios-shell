@@ -22,10 +22,32 @@ void shell_players_start(void);   // shell_players.m: each physical controller a
 
 static char *g_argv[16]; static int g_argc;   // 2 fixed + the Guest library's module names (a shell has no module list compiled in)
 
+// A package of several games (scripts/nxn_merge.py): each game in <App>/games/<title ID>/ with its own dm/, msl/, romfs/, aoc/, pso/ and game.json
+// (name, version, language), its program in Frameworks/Guest_<title ID>.framework. The game picker (GamePicker.swift) chooses one, and only then does
+// boot_env read that game's files and start loading it: one process runs one game, because the host maps the game's program at fixed addresses
+// and cannot take it out again. A package of one game keeps everything at the top of the bundle, as before, and starts it at once.
+static NSString *g_game_root;    // the chosen game's folder; the bundle itself for a package of one game
+static NSString *g_game_id;      // its title ID in a package of several games; nil otherwise
+static int g_pick;               // several games and none chosen yet: front_ios.m shows the picker first
+static NSArray<NSString *> *shell_game_ids(void) {
+    NSString *games = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"];
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (NSString *d in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:games error:nil] sortedArrayUsingSelector:@selector(compare:)] ?: @[])
+        if ([NSFileManager.defaultManager fileExistsAtPath:[[games stringByAppendingPathComponent:d] stringByAppendingPathComponent:@"game.json"]]) [ids addObject:d];
+    return ids;
+}
+static NSDictionary *game_info(void) {   // the chosen game's game.json
+    if (!g_game_id) return nil;
+    NSData *d = [NSData dataWithContentsOfFile:[g_game_root stringByAppendingPathComponent:@"game.json"]];
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    return [j isKindOfClass:NSDictionary.class] ? j : nil;
+}
+
 static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-    for (NSString *d in @[[doc stringByAppendingPathComponent:@"romfs"], [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs"]]) {
+    NSString *own = [g_game_root stringByAppendingPathComponent:@"romfs"];
+    for (NSString *d in g_game_id ? @[own] : @[[doc stringByAppendingPathComponent:@"romfs"], own]) {   // Documents/romfs could only be one of several games' files: a package of several reads its own
 #ifdef DM_SHELL
         // One shell serves any game, so it cannot know a single game's romfs_marker: the first existing, non-empty candidate wins.
         // The packer writes the game's own tree there; if it is the wrong game, the host reports it when reading the files.
@@ -37,21 +59,30 @@ static NSString *romfs_locate(void) {
     return nil;
 }
 
-// Boot prerequisites (done before UIApplicationMain): directories / environment variables / log -- the host's early load reads these
+// Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
+static void boot_log(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
+    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
+    if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
+}
+
+// Boot prerequisites (before UIApplicationMain, or once the picker has chosen a game): directories / environment variables -- the host's early load reads these
 static int boot_env(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-    NSString *res = NSBundle.mainBundle.resourcePath;
-    for (NSString *d in @[@"save", @"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *res = g_game_root;   // the game's own files; dm/font is the shell's and stays at the top of the bundle
+    // Saves and scratch data: a package of several games keeps each game's apart, in save/<title ID> and temp/<title ID>
+    NSString *save = [doc stringByAppendingPathComponent:@"save"], *temp = [doc stringByAppendingPathComponent:@"temp"];
+    if (g_game_id) { save = [save stringByAppendingPathComponent:g_game_id]; temp = [temp stringByAppendingPathComponent:g_game_id]; }
+    for (NSString *d in @[save, temp]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
     for (NSString *d in @[@"romfs", @"temp"]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d] isDirectory:YES]; NSError *e = nil;
         if ([fm fileExistsAtPath:u.path] && ![u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e]) fprintf(stderr, "boot: %s could not be excluded from backup: %s\n", d.UTF8String, e.localizedDescription.UTF8String);
     }
-    // Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
-    NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
-    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
-    if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
+    if (g_game_id) fprintf(stderr, "boot: game %s (%s) of the games in this package\n", g_game_id.UTF8String, [game_info()[@"name"] description].UTF8String ?: "?");
     // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
     NSMutableArray<NSString *> *from_file = [NSMutableArray array];
     for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
@@ -67,7 +98,7 @@ static int boot_env(void) {
     front_hud_env();   // before the early loading below can make a device
     // Game language (nn::oe::GetDesiredLanguage, hle_oe.c): the one the IPA was packed with (the NSP script's LANGUAGE / --language → DMLanguage in Info.plist), unless an env file sets DM_LANG
     // (or the launcher, which replaces this default before the game starts)
-    NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
+    NSString *lang = g_game_id ? game_info()[@"language"] : [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
     if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
     fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
     // How much memory iOS will let this process keep. With com.apple.developer.kernel.increased-memory-limit in the package's
@@ -81,12 +112,12 @@ static int boot_env(void) {
     if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
-    setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
-    setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
+    setenv("DM_SAVE", save.fileSystemRepresentation, 0);
+    setenv("DM_TEMP", temp.fileSystemRepresentation, 0);
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
-    setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
+    setenv("DM_FONT_DIR", [[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
     NSString *aoc = [res stringByAppendingPathComponent:@"aoc"];   // add-on content: build_ipa.sh puts the RomFS extracted from the player's DLC NSPs at <App>/aoc/<index>/
     if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
@@ -128,6 +159,20 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
     boot_start();
 }
 int front_ios_boot_ok(void) { return g_boot_ok; }
+int front_ios_pick_needed(void) { return g_pick; }   // front_ios.m: show the game picker before the launcher
+
+// The picker's choice (GamePicker.swift, on the main thread): that game's files, its Guest library, then the same start as a package of one game
+static void choose(NSString *gid) {
+    NSString *games = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"];
+    g_game_id = gid; g_game_root = [games stringByAppendingPathComponent:gid]; g_pick = 0;
+    setenv("DM_SHELL_GAME", gid.UTF8String, 1);   // the launcher and the touch controls keep their settings per game (Launcher.swift, DmGamepad.m)
+    setenv("DM_SHELL_GAME_ROOT", g_game_root.fileSystemRepresentation, 1);
+    NSString *fw = [NSString stringWithFormat:@"Frameworks/Guest_%@.framework/Guest", gid];
+    setenv("DM_GUEST", [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:fw] fileSystemRepresentation], 1);   // loader.c
+    @autoreleasepool { g_boot_ok = boot_env(); }
+    if (g_boot_ok) phone_pads_start();
+}
+void shell_game_choose(const char *gid) { choose(@(gid)); }
 
 @interface App : UIResponder <UIApplicationDelegate>
 @end
@@ -154,8 +199,18 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 @end
 
 int main(int argc, char **argv) {
-    @autoreleasepool { g_boot_ok = boot_env(); }
-    shell_players_start();   // from launch, so the launcher lists the controllers and they take the first players ahead of phones that join later
-    if (g_boot_ok) phone_pads_start();   // before the launcher, so phones can join while the settings are shown
+    @autoreleasepool {
+        boot_log();
+        g_game_root = NSBundle.mainBundle.resourcePath;
+        NSArray<NSString *> *ids = shell_game_ids();
+        setenv("DM_SHELL_GAMES", @(ids.count).stringValue.UTF8String, 1);   // the launcher offers to change games when there is more than one
+        if (ids.count > 1) { g_pick = 1; fprintf(stderr, "boot: %lu games in this package: %s\n", (unsigned long)ids.count, [ids componentsJoinedByString:@" "].UTF8String); }
+    }
+    shell_players_start();   // from launch, so the launcher (and the game picker) list the controllers and they take the first players ahead of phones that join later
+    if (!g_pick) {
+        NSArray<NSString *> *ids = shell_game_ids();
+        if (ids.count == 1) choose(ids[0]);   // a package of several games that holds one
+        else { @autoreleasepool { g_boot_ok = boot_env(); } if (g_boot_ok) phone_pads_start(); }   // before the launcher, so phones can join while the settings are shown
+    }
     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(App.class)); }
 }

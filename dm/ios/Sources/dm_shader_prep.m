@@ -26,7 +26,10 @@ static NSString *zh_for_device(NSString *s) {
     return hant ? ([s stringByApplyingTransform:@"Hans-Hant" reverse:NO] ?: s) : s;
 }
 #define L3(zh, en, es) (lg() == 1 ? zh_for_device(zh) : lg() == 2 ? (es) : (en))
-static NSString *msldir(void) { return [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"]; }
+static NSString *msldir(void) {   // main.m sets DM_MSL_DIR to the chosen game's msl/ (a package of several games has one per game)
+    const char *e = getenv("DM_MSL_DIR");
+    return e && *e ? @(e) : [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
+}
 static NSString *libdir(void) {   // <包>/msl/b-<链版本>：壳里只有一个版本目录 | <package>/msl/b-<chain version>: the shell has only one version directory
     NSString *msl = msldir();
     for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[]) if ([d hasPrefix:@"b-"]) return [msl stringByAppendingPathComponent:d];
