@@ -28,3 +28,4 @@ Packer: pack DLC, take split shader tables for older builds, write the stamp wit
 Switch Pad: the Windows pack-and-install app, with first-run setup and updates from the latest release	Switch Pad：Windows 上打包并安装到 iPad 的程序，第一次使用会自动安装所需工具，之后从最新 release 自动更新（程序、壳、打包器）；release 附上 SwitchPad.zip
 Switch Pad: find an installed Python (PowerShell 5.1 dropped the probe's quotes)	Switch Pad：修正找不到已安装 Python 的问题（PowerShell 5.1 会吃掉传给 Python 的双引号），也会找 py 启动器
 Switch Pad: list merged packages, show the multi-game shell when merging, relative -Out from the app folder	Switch Pad：合成好的包也会列在游戏库（可以只安装、续期）；选「合成一包」时显示用的多游戏壳；合包用记下的 Python；-Out 的相对路径以程序文件夹为准
+Switch Pad: 合成一包 with 只安裝 installs the newest merged package	Switch Pad：选「合成一包」加「只安装」时，直接安装合包文件夹里最新的那包

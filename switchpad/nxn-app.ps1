@@ -1048,8 +1048,16 @@ $timer.Add_Tick({
 function Run-Games($dirs, $mode, $merge) {
     $jobs = @()
     if ($merge) {
-        if ($dirs.Count -lt 2) { [void][Windows.MessageBox]::Show('合成一包至少要選 2 款。', '合成一包'); return }
-        if ($mode -eq 'install') { [void][Windows.MessageBox]::Show('合成一包請選「打包並安裝」或「只打包」。', '合成一包'); return }
+        if ($mode -ne 'install' -and $dirs.Count -lt 2) { [void][Windows.MessageBox]::Show('合成一包至少要選 2 款。', '合成一包'); return }
+        if ($mode -eq 'install') {
+            # 只安裝：裝 nxn\合包 裡最新的那包，不管勾了哪些遊戲
+            $mdir = Join-Path $here '合包'
+            $last = Get-ChildItem -LiteralPath $mdir -Filter '*.ipa' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $last) { [void][Windows.MessageBox]::Show('還沒有合成好的包，先用「打包並安裝」或「只打包」。', '合成一包'); return }
+            $mg2 = [pscustomobject]@{ Dir = $mdir; Name = "合包（$($last.Name)）"; Ipas = @($last); Base = $false }
+            Start-Run @(@{ Game = $mg2; Mode = 'install'; Ipa = $last.FullName })
+            return
+        }
         $ms = Get-MultiShell; $mg = Get-MergeScript
         $id = if ($ms.Name -match 'shell-\d+-([0-9a-f]+)') { $Matches[1] } else { 'multi' }
         $outs = @()
