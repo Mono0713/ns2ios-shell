@@ -13,9 +13,9 @@ The layout it writes (main.m reads it):
 
 One process runs one game: the host maps the game's program at fixed addresses and cannot take it out again, so the
 launcher's Change game closes the app. Entries are copied as they are compressed in the source IPAs (no inflating and
-deflating again), so merging costs about the time it takes to copy the files. The bundle ID is the same for every merge
-(org.nxnative.games unless --bundle-id), so a merge with one more game installs over the last one and keeps the saves,
-which are Documents/save/<title ID>.
+deflating again), so merging costs about the time it takes to copy the files. The bundle ID is kept from the first merged
+IPA given (org.nxnative.games for a first merge, or --bundle-id), so a merge with one more game, or a new --name, installs
+over the last one and keeps the saves, which are Documents/save/<title ID>. Give each separate package its own --bundle-id.
 """
 import argparse, io, json, os, plistlib, re, struct, sys, time, zipfile, zlib
 
@@ -242,7 +242,8 @@ def main():
     ap.add_argument('ipas', nargs='+', help='IPAs from nxn_pack.py (or from this script)')
     ap.add_argument('-o', '--out', required=True, help='the merged IPA')
     ap.add_argument('--name', default='Switch 遊戲', help='the app name on the home screen')
-    ap.add_argument('--bundle-id', default='org.nxnative.games', help='keep it the same to install a new merge over the last one (saves stay)')
+    ap.add_argument('--bundle-id', help='keep it the same to install a new merge over the last one (saves stay); '
+                    'default: that of the first merged IPA given, else org.nxnative.games')
     ap.add_argument('--shell', help='a shell zip (or IPA) whose app to use instead of the first IPA\'s')
     a = ap.parse_args()
     for f in (sys.stdout, sys.stderr):   # a game name a Windows console's code page cannot show must not stop the merge
@@ -256,6 +257,9 @@ def main():
         for g in games_in(z):
             if g.tid in seen: die('%s is in both %s and %s: give each game once' % (g.name, seen[g.tid], z.filename))
             seen[g.tid] = z.filename; games.append(g)
+    if not a.bundle_id:   # a merge of a merged IPA (adding a game, renaming it) stays the same app on the iPad
+        a.bundle_id = next((b for b in (plistlib.loads(z.read(app_dir(z) + 'Info.plist')).get('CFBundleIdentifier', '') for z in zs)
+                            if not re.fullmatch(r'org\.nxnative\.[0-9a-f]{16}', b)), 'org.nxnative.games')
     if len(games) < 2: say('only one game: the picker is skipped and it starts at once')
 
     sz = zipfile.ZipFile(a.shell) if a.shell else zs[0]
