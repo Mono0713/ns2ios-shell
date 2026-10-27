@@ -43,21 +43,27 @@ try {
     # ---- Python ----
     Step '檢查 Python'
     function Find-Python {
+        # 每個候選是 程式 + 前面要加的參數（py 啟動器要 -3）
+        function Cand($exe, $pre = @()) { [pscustomobject]@{ Exe = $exe; Pre = @($pre) } }
         $cands = @()
         $saved = Join-Path $work 'python.txt'
-        if (Test-Path $saved) { $cands += (Get-Content $saved -Raw).Trim() }
-        $cands += 'python'
+        if (Test-Path $saved) { $cands += Cand (Get-Content $saved -Raw).Trim() }
+        $cands += Cand 'python'
+        $cands += Cand 'py' @('-3')
         # 剛用 winget 裝好的還不在這個程式的 PATH 裡：直接看安裝位置
-        $cands += @(Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe", "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue |
-            Sort-Object FullName -Descending | ForEach-Object { $_.FullName })
+        foreach ($f in Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe", "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue |
+                 Sort-Object FullName -Descending) { $cands += Cand $f.FullName }
+        # PowerShell 5.1 傳給外部程式的參數裡如果有雙引號會被吃掉，所以這段 Python 不能用雙引號
+        $probe = 'import sys; print(sys.version_info[0], sys.version_info[1], sys.executable, sep=chr(124))'
         foreach ($c in $cands) {
-            if (-not $c) { continue }
+            if (-not $c.Exe) { continue }
+            $exe = $c.Exe; $pre = $c.Pre
             try {
                 $ErrorActionPreference = 'Continue'
-                $v = (& $c -c 'import sys; print("%d.%d|%s" % (sys.version_info[0], sys.version_info[1], sys.executable))' 2>$null | Out-String).Trim()
+                $v = (& $exe @pre -c $probe 2>$null | Out-String).Trim()
                 $ErrorActionPreference = 'Stop'
                 # Windows 的「python」沒裝時會是 Microsoft Store 的捷徑，它什麼都不印
-                if ($v -match '^3\.(\d+)\|(.+)$' -and [int]$Matches[1] -ge 9) { return $Matches[2] }
+                if ($v -match '^3\|(\d+)\|(.+)$' -and [int]$Matches[1] -ge 9) { return $Matches[2].Trim() }
             } catch { $ErrorActionPreference = 'Stop' }
         }
         return $null
