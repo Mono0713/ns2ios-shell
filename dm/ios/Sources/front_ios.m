@@ -16,6 +16,8 @@ void front_ios_boot(void);
 int front_ios_boot_ok(void);
 static void loading_show(UIView *root);
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
+int front_ios_pick_needed(void);   // main.m: a package of several games, none chosen yet
+void dm_show_picker(void *view_controller, void (*done)(void));   // GamePicker.swift: calls done once main.m has the chosen game's files in place
 
 static CAMetalLayer *g_layer;
 static void front_ios_power_watch(void);
@@ -48,14 +50,17 @@ static UILabel *front_ios_fps_label(void);
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
+- (void)afterPick;
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
+static void picker_done(void) { [g_root afterPick]; }
 @implementation DmRootVC
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
     front_ios_power_watch();
+    if (front_ios_pick_needed()) return;   // the game picker first (viewDidAppear); afterPick does the rest
     if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
         lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -96,9 +101,23 @@ static void launcher_done(void) { [g_root startGame]; }
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
-    if (self.launched || !front_ios_boot_ok()) return;
+    if (self.launched) return;
+    if (front_ios_pick_needed()) { self.launched = YES; g_root = self; dm_show_picker((__bridge void *)self, picker_done); return; }
+    if (!front_ios_boot_ok()) return;
     self.launched = YES; g_root = self;
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
+}
+// A game was chosen in the picker and main.m has set it up (or found its files missing)
+- (void)afterPick {
+    if (!front_ios_boot_ok()) {
+        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
+        lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        lb.numberOfLines = 0; lb.textAlignment = NSTextAlignmentCenter; lb.textColor = UIColor.whiteColor;
+        lb.text = @"這款遊戲的檔案不完整，請重新打包。\nThis game's files are missing from the package: pack it again.";
+        [self.view addSubview:lb]; return;
+    }
+    front_ios_audio_watch();
+    if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits

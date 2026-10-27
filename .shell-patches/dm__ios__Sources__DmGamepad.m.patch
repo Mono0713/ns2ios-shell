@@ -97,7 +97,15 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      }];
  }
  
-@@ -96,6 +128,8 @@
+@@ -90,12 +122,15 @@
+     K_RSWIPE = 1.0 / 3,                             // right stick area: this fraction of the screen width from the right edge (not in u)
+     K_CLICK_X = 102, K_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
+ static const int k_btns[] = {B_ZL, B_L, B_ZR, B_R, B_MINUS, B_PLUS, B_LS, B_RS};   // keys locked at touch-down (L3 / R3 only in the 3D layout)
+-static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
++// NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers); each game's own in a package of several (main.m sets DM_SHELL_GAME)
++static NSString *layout_key(void) { const char *g = getenv("DM_SHELL_GAME"); return g && *g ? [@"DmPadLayout." stringByAppendingString:@(g)] : @"DmPadLayout"; }
+ int dm_opmode(void);   // hle_oe.c: 0 = handheld
+ 
  @interface DmGamepad : UIView
  @end
  static __weak DmGamepad *g_view;
@@ -106,7 +114,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  
  @implementation DmGamepad {
      NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
-@@ -106,12 +140,15 @@
+@@ -106,12 +141,15 @@
      CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
      CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
      CAShapeLayer *_swap; CATextLayer *_swapLabel; BOOL _swapHeld;
@@ -124,10 +132,12 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      UITouch *_game[16];                            // touches on the game's touch screen by finger slot
  }
  
-@@ -155,14 +192,21 @@
+@@ -155,14 +193,21 @@
              if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
          }
          _swap = shape(_controls); _swapLabel = label(_swap, @"");
+-        NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
+-        int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
 +        _qr = shape(_controls); _qrLabel = label(_qr, @"QR");
 +        _controls.opacity = g_touch_opacity;
 +        // First-launch layout from the game profile (DM_PAD_LAYOUT, atoi; the profile writes simple / full / touch and the packer turns it
@@ -135,8 +145,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 +        // that is the shell's own default, and a profile that sets no key keeps it (upstream's Mac host would compile game.py's default,
 +        // simple, instead -- the one key where the two differ, left as it is on purpose, see HANDOFF 1b). A layout the player picks is
 +        // saved in NSUserDefaults and takes precedence from then on, which is why the environment only decides the first launch.
-         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
--        int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
++        NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:layout_key()];
 +        const char *pad_env = getenv("DM_PAD_LAYOUT");
 +        int l = saved ? (int)saved.integerValue : (pad_env ? atoi(pad_env) : DM_GAME_PAD_LAYOUT);
          if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
@@ -149,7 +158,15 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
          [self padsChanged];
          motion_start();
      }
-@@ -186,7 +230,7 @@
+@@ -179,14 +224,14 @@
+     int l = _tap ? 0 : _full ? (dm_opmode() == 0 ? 2 : 0) : 1;
+     [self reset];
+     _full = l == 1; _tap = l == 2;
+-    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
++    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:layout_key()];
+     [self applyLayout]; [self setNeedsLayout];
+ }
+ 
  // ---- Layout (points; computed inside the safe area) ----
  - (CGRect)safe { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
  - (CGRect)corner { UIEdgeInsets i = self.safeAreaInsets; i.left *= K_CORNER_IN; i.right *= K_CORNER_IN; return UIEdgeInsetsInsetRect(self.bounds, i); }   // the rectangle the bottom-corner controls use
@@ -158,7 +175,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
  - (CGPoint)faceCenter { CGRect s = self.corner; CGFloat u = self.u; return side(s, 1, K_FACE_X * u, CGRectGetMaxY(s) - K_PAD_Y * u); }
  - (CGFloat)faceGap { return K_FACE_GAP * self.u; }
-@@ -222,6 +266,8 @@
+@@ -222,6 +267,8 @@
      return -1;
  }
  - (BOOL)inSwap:(CGPoint)p { return dist(p, self.swapCenter) <= K_SWAP_R * self.u * 1.6; }
@@ -167,7 +184,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  - (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count)
      uint64_t m = 0; CGFloat r = self.faceR * 1.25;
      for (int b = B_A; b <= B_Y; b++) if (dist(p, [self facePos:b]) <= r) m |= 1ull << b;
-@@ -295,11 +341,13 @@
+@@ -295,11 +342,13 @@
  }
  - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
      BOOL game = NO;
@@ -181,7 +198,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
          if (_tap) { game |= [self gameBegin:t]; continue; }
          // diamond, D-pad, left stick: take the one with the smallest distance / grab radius, if it is <= 1
          CGFloat best = 1; int kind = C_NONE, idx = 0;
-@@ -340,7 +388,7 @@
+@@ -340,7 +389,7 @@
      [self recompute];
      if (swap) [self nextLayout];
  }
@@ -190,7 +207,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
  - (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
  
-@@ -376,6 +424,7 @@
+@@ -376,6 +425,7 @@
  
  - (void)layoutSubviews {
      [super layoutSubviews];
@@ -198,7 +215,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      CGFloat u = self.u;
      [CATransaction begin]; [CATransaction setDisableActions:YES];
      _controls.frame = self.layer.bounds;
-@@ -394,6 +443,8 @@
+@@ -394,6 +444,8 @@
      static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
      for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u, K_ARM_IN * u, arms[i].angle, 6 * u));
      CGPoint sc = self.swapCenter; setPath(_swap, circlePath(sc, K_SWAP_R * u)); placeLabel(_swapLabel, sc, 12 * u);
@@ -207,7 +224,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      setPath(_ring, circlePath(self.stickHome, [self stickR:0]));
      CGFloat k = K_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
      setPath(_knob, circlePath(CGPointMake(k, k), k));
-@@ -414,37 +465,87 @@
+@@ -414,37 +466,87 @@
      [CATransaction commit];
  }
  

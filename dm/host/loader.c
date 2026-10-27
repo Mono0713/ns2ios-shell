@@ -497,9 +497,13 @@ static const struct mach_header_64 *shell_image_quiet(const char **why) {
     char *sl = strrchr(exe, '/');
     if (!sl || (size_t)(sl - exe) + 40 > sizeof exe) { cached = "unexpected executable path"; if (why) *why = cached; return NULL; }
     strcpy(sl, "/Frameworks/Guest.framework/Guest");
-    if (access(exe, R_OK)) { cached = "Frameworks/Guest.framework/Guest is not in this package"; if (why) *why = cached; return NULL; }
+    // A package of several games (scripts/nxn_merge.py) carries one Frameworks/Guest_<title ID>.framework each; main.m names the chosen one
+    const char *chosen = getenv("DM_GUEST");
+    if (chosen && *chosen) { if (strlen(chosen) >= sizeof exe) { cached = "DM_GUEST is too long"; if (why) *why = cached; return NULL; } strcpy(exe, chosen); }
+    if (access(exe, R_OK)) { cached = "the Guest library (Frameworks/Guest.framework/Guest, or DM_GUEST) is not in this package"; if (why) *why = cached; return NULL; }
     if (!dlopen(exe, RTLD_NOW)) { cached = "dlopen of Frameworks/Guest.framework/Guest failed"; fprintf(stderr, "boot: dlopen %s: %s\n", exe, dlerror()); if (why) *why = cached; return NULL; }
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) if (strstr(_dyld_get_image_name(i), "/Guest.framework/Guest")) mh = (const struct mach_header_64 *)_dyld_get_image_header(i);
+    const char *tail = strstr(exe, "/Frameworks/"); if (!tail) tail = "/Guest.framework/Guest";   // dyld may name it through /private: match from Frameworks/ on
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) if (strstr(_dyld_get_image_name(i), tail)) mh = (const struct mach_header_64 *)_dyld_get_image_header(i);
     if (!mh) { cached = "the Guest library is loaded but its image header was not found"; if (why) *why = cached; return NULL; }
     fprintf(stderr, "boot: module images come from the Guest library %s\n", exe); return mh;
 }

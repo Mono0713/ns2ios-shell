@@ -117,6 +117,23 @@ git -C up apply --check /tmp/xxx.patch
 
 这一步完全在 CI 里完成，Windows 端看到的只是一个新的壳 zip：命令、参数、Python 依赖都不变。
 
+## 多款游戏合成一个包
+
+`scripts/nxn_merge.py` 把 `nxn_pack.py` 打好的单款 IPA 合成一个带游戏选单的 App：
+
+```
+python scripts/nxn_merge.py -o Games.ipa "Boomerang Fu.ipa" "ANIMAL WELL.ipa"
+```
+
+每款游戏放进 `games/<title ID>/`（它的 `dm/` 表、`msl/`、`romfs/`、`aoc/`、`game.json`、`icon.png`），程序放进
+`Frameworks/Guest_<title ID>.framework`；壳自己的文件留在最上层。条目按原样的压缩数据复制，合包的时间约等于复制文件的时间。
+设备上 `main.m` 看到 `games/`：两款以上先显示 `GamePicker.swift`，选好才设定那款的路径（`loader.c` 读 `DM_GUEST`，存档在
+`Documents/save/<title ID>`）并开始载入；只有一款就直接启动；没有 `games/` 的包和以前一样。
+
+一个进程只跑一款：主机把游戏程序映射在固定地址，载入后拿不掉。启动设置的「换游戏」会回到主画面并结束 App，再点一次图示就回到选单。
+每次合包的 bundle ID 相同（`org.nxnative.games`，可用 `--bundle-id` 改），所以多加一款再合包会覆盖安装、保留存档；合好的 IPA 也能再当输入。
+壳的 `dm/shell_info.txt` 要有 `MULTI=1`。
+
 ## 壳与打包器的契约
 
 两边不是同一个东西，所以有一处必须对齐：改写器（`patch_nso.py`）会往游戏模块里写入一批调用点，宿主

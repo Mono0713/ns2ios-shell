@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,296 @@
+@@ -3,10 +3,308 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -10,7 +10,19 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +import CoreImage.CIFilterBuiltins
  import os
  
- private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
+-private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
++// A package of several games (main.m, GamePicker.swift): the chosen game's folder, its game.json standing in for the app's own name and version,
++// and its own UserDefaults suite, so each game keeps its settings
++private let gameRoot: URL? = ProcessInfo.processInfo.environment["DM_SHELL_GAME_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
++private let gameInfo: [String: Any] = gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }
++    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
++let gameDefaults: UserDefaults = ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard
++private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
++private func info(_ key: String) -> Any? {
++    if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
++    if gameRoot != nil, key == "CFBundleShortVersionString", let v = gameInfo["version"] { return v }
++    return Bundle.main.object(forInfoDictionaryKey: key)
++}
 +
 +// Traditional Chinese when the device's first language is (zh-Hant, zh-TW, zh-HK, zh-MO); anything else stays English. launcher.json carries settings.tsv's
 +// English labels and notes and nacp.py's language names, so they are looked up by their English text; an unknown one is shown as it is
@@ -38,7 +50,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    // the launcher's own
 +    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
 +    "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
-+    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
++    "Open game folder": "打開遊戲資料夾", "Change game": "換遊戲",
++    "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
 +    "Motion controls": "體感操作（陀螺儀）",
 +    "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
 +        "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
@@ -298,7 +311,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +304,31 @@
+@@ -18,17 +316,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -332,7 +345,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +338,7 @@
+@@ -38,7 +350,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -341,7 +354,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +351,22 @@
+@@ -51,8 +363,22 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -365,7 +378,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,43 +378,206 @@
+@@ -64,43 +390,221 @@
      }
  }
  
@@ -441,7 +454,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
 +    var fpsLocked: Bool { fromFile.contains("DM_FPS") }
 +    init() {
-+        let env = ProcessInfo.processInfo.environment, d = UserDefaults.standard
++        let env = ProcessInfo.processInfo.environment, d = gameDefaults
 +        gyro = fromFile.contains("DM_GYRO") ? env["DM_GYRO"] != "0" : d.object(forKey: "launcher.DM_GYRO") as? Bool ?? true
 +        fps = fromFile.contains("DM_FPS") ? (env["DM_FPS"] == "30" ? 30 : 60) : (d.bool(forKey: "launcher.DM_FPS30") ? 30 : 60)
 +        touchOpacity = d.object(forKey: "launcher.touchOpacity") as? Double ?? 1
@@ -450,7 +463,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +    private func style() { dmTouchStyle(Float(touchOpacity), Float(touchScale)) }
 +    func apply() {
-+        let d = UserDefaults.standard
++        let d = gameDefaults
 +        d.set(touchOpacity, forKey: "launcher.touchOpacity"); d.set(touchScale, forKey: "launcher.touchScale")
 +        if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
 +        if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30"); if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
@@ -503,6 +516,13 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +}
 +
++// A package of several games runs one game per process (main.m): changing games means starting the app again. Go to the home screen the way
++// the Home gesture does, then end, so the next tap on the icon opens the game picker
++private func changeGame() {
++    fputs("launcher: change game: the app closes\n", stderr)
++    UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
++    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
++}
 +private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
 +    if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
 +       let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -566,6 +586,14 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 -                        Text("Brings back all settings this game was tested with.")
 +                        Text(tr("Brings back all settings this game was tested with."))
 +                    }
++                    if severalGames {
++                        Section {
++                            Button(tr("Change game"), action: changeGame)
++                                .nav("change")
++                        } footer: {
++                            Text(tr("The app closes; tap its icon again to choose another game."))
++                        }
++                    }
 +                    Section {
 +                        Button(tr("Open game folder"), action: openGameFolder)
 +                            .nav("folder")
@@ -579,7 +607,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,21 +585,130 @@
+@@ -108,24 +612,135 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -647,6 +675,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            }
 +        }
 +        items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
++        if severalGames { items.append(NavItem(id: "change", activate: changeGame)) }
 +        items.append(NavItem(id: "folder", activate: openGameFolder))
 +        return items
 +    }
@@ -713,12 +742,20 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
      }
  
      private func appIcon() -> UIImage? {
-@@ -140,12 +726,13 @@
-     guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
++        if let r = gameRoot, let i = UIImage(contentsOfFile: r.appendingPathComponent("icon.png").path) { return i }
+         if let i = UIImage(named: "AppIcon") { return i }
+         guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+               let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
+@@ -137,15 +752,16 @@
+ @_cdecl("dm_show_launcher")
+ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
+     if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
+-    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
++    guard let url = (gameRoot ?? Bundle.main.resourceURL)?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
      guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
      let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
 -    let model = LauncherModel(file.settings)
-+    let model = LauncherModel(file.settings), shell = ShellSettings()
++    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
      var host: UIViewController?
 -    let view = LauncherView(m: model) {
 +    let view = LauncherView(m: model, shell: shell) {
