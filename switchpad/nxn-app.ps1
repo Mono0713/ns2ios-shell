@@ -316,6 +316,14 @@ function Current-Shell {
     return $pick
 }
 function Update-ShellLabel {
+    if ($ui.Merge.IsChecked) {
+        # 合成一包一律用 work\multigame 裡最新的多遊戲殼
+        $ms = Get-MultiShell
+        $id = if ($ms -and $ms.Name -match 'shell-\d+-([0-9a-f]+)') { $Matches[1] } else { '' }
+        $ui.ShellLabel.Text = "多遊戲殼 $id"
+        $ui.ShellLabel.ToolTip = if ($ms) { "合成一包用的殼：$($ms.FullName)" } else { '' }
+        return
+    }
     $s = Current-Shell
     $ui.ShellLabel.Text = if ($s) { ($s.Label -replace '（.*$', '') } else { '找不到殼' }
     $ui.ShellLabel.ToolTip = if ($s) { "打包用的殼：$($s.Label)（在設定裡換）" } else { '請先執行 nxn-setup.ps1 -SetupOnly' }
@@ -337,7 +345,7 @@ function Get-Installed {
 function Scan-Game($dir) {
     $g = [pscustomobject]@{ Dir = $dir.FullName; Name = $dir.Name; Base = $false; BaseFile = ''; Update = ''; UpdateN = -1; Dlc = 0; Ipas = @(); Stray = 0; Tid = '' }
     foreach ($f in Get-ChildItem -LiteralPath $dir.FullName -File -ErrorAction SilentlyContinue) {
-        if ($f.Extension -eq '.ipa') { $g.Ipas += $f; continue }
+        if ($f.Extension -eq '.ipa') { if ($f.Name -notlike '*-multi-*') { $g.Ipas += $f }; continue }   # -multi- 是合包的半成品，不能單獨裝
         if ($f.Extension -notin '.nsp', '.xci') { continue }
         $tid = if ($f.Name -match '(?<![0-9A-Fa-f])(01[0-9A-Fa-f]{14})(?![0-9A-Fa-f])') { $Matches[1].ToUpper() } else { '' }
         $low = if ($tid) { [Convert]::ToInt32($tid.Substring(13), 16) } else { 0 }
@@ -589,7 +597,10 @@ function Build-Library {
     $keep = @($selected)
     $ui.Library.Children.Clear(); $cards.Clear(); $selected.Clear()
     $inst = @(Get-Installed)
-    $dirs = Get-ChildItem -LiteralPath $gamesDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name
+    $dirs = @(Get-ChildItem -LiteralPath $gamesDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
+    # 合成好的包也列出來（只能「只安裝」或續期）
+    $mdir = Join-Path $here '合包'
+    if (Test-Path -LiteralPath $mdir) { $dirs += Get-Item -LiteralPath $mdir }
     foreach ($d in $dirs) {
         $g = Scan-Game $d
         if (-not $g.Base -and -not $g.Ipas.Count) { continue }   # 不是遊戲資料夾
@@ -727,6 +738,12 @@ $ui.NoticeBtn.Add_Click({
     } })
 
 # ---------------------------------------------------------------- 合成一包：要有多遊戲殼（work\multigame）和 nxn_merge.py
+# nxn-update.ps1 記下的 Python，沒有就用 PATH 上的
+function Get-Python {
+    $saved = Join-Path $work 'python.txt'
+    if (Test-Path $saved) { $p = (Get-Content $saved -Raw).Trim(); if ($p) { return $p } }
+    return 'python'
+}
 function Get-MultiShell { Get-ChildItem -Path (Join-Path $work 'multigame') -Recurse -Filter 'shell-*.zip' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
 function Get-MergeScript {
     foreach ($p in (Join-Path $here 'nxn_merge.py'), (Join-Path $work 'multigame\nxn_merge.py'), (Join-Path $work 'src\scripts\nxn_merge.py')) { if (Test-Path $p) { return $p } }
@@ -1048,7 +1065,7 @@ function Run-Games($dirs, $mode, $merge) {
         New-Item -ItemType Directory -Force -Path $mdir | Out-Null
         $mout = Join-Path $mdir ('合包-' + (Get-Date -Format 'yyyyMMdd-HHmm') + '.ipa')
         $names = ($dirs | ForEach-Object { $cards[$_].Tag.Name }) -join '、'
-        $call = "Write-Host '==> 合成一包：$($names -replace "'", "''")'; & python $(Quote $mg) -o $(Quote $mout) --name '遊戲合包' $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
+        $call = "Write-Host '==> 合成一包：$($names -replace "'", "''")'; & $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $mout) --name '遊戲合包' $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
                 "if (`$LASTEXITCODE) { Write-Host '出錯了：合包失敗'; `$global:LASTEXITCODE = 1; return }; Write-Host `"合包完成：$($mout -replace "'", "''")`""
         if ($mode -eq 'both') { $call += "; & $(Quote $script) -Ipa $(Quote $mout) -NoPause" }
         $mg2 = [pscustomobject]@{ Dir = $mdir; Name = "合成一包（$($dirs.Count) 款）"; Ipas = @(); Base = $true }
@@ -1070,6 +1087,8 @@ function Run-Games($dirs, $mode, $merge) {
     Start-Run $jobs
 }
 
+$ui.Merge.Add_Checked({ Update-ShellLabel })
+$ui.Separate.Add_Checked({ Update-ShellLabel })
 $ui.Start.Add_Click({
     if (@(Setup-Missing).Count) { [void][Windows.MessageBox]::Show('還沒安裝打包和簽章工具，請先按上面的「安裝」。', 'Switch Pad'); return }
     $mode = if ($ui.ModePack.IsChecked) { 'pack' } elseif ($ui.ModeInstall.IsChecked) { 'install' } else { 'both' }
