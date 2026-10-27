@@ -464,12 +464,14 @@ def scan_nsps(folder):
             low = int(tid, 16) & 0xFFF
             kind = 'base' if low == 0 else ('update' if low == 0x800 else 'dlc')
         base_id = int(tid, 16) - (int(tid, 16) & 0xFFF)   # updates sit at +0x800, DLC above +0x1000
+        if kind == 'dlc' and base_id & 0x1000:
+            base_id -= 0x1000   # local fix: a DLC (…63001) belongs to the base …62000, not to a game …63000
         key = '%016X' % base_id
         a = apps.setdefault(key, {'base': None, 'updates': {}, 'dlc': [], 'all': []})
         a['all'].append((kind, ver, p))
         if kind == 'base': a['base'] = p
         elif kind == 'update': a['updates'][ver or 'v?'] = p
-        else: a['dlc'].append(p)
+        else: a['dlc'].append(p); a.setdefault('dlc_ids', []).append((int(tid, 16), ver, p))
     return apps
 
 
@@ -1299,7 +1301,7 @@ def main():
     picks = {pkg: (fam['base'], fam['updates'][pkg] if pkg != 'v0' and pkg in fam['updates'] else None)}
     say('files: base %s%s' % (fam['base'].name,
         (', update %s' % fam['updates'][pkg].name) if pkg != 'v0' and pkg in fam['updates'] else ', no update')
-        + (('; ignoring %d DLC' % len(fam['dlc'])) if fam['dlc'] else ''))
+        + (('; %d DLC' % len(fam['dlc'])) if fam['dlc'] else ''))
 
     work = folder / (tid + '_pack')
     work.mkdir(parents=True, exist_ok=True)
@@ -1440,6 +1442,23 @@ def main():
             for f in sorted(tb.glob('*.tsv')):
                 shutil.copyfile(f, derived_dir / f.name)
             say('derived profile tables: %s' % ', '.join(f.name for f in sorted(tb.glob('*.tsv'))))
+        elif any(not (gdir / f.name).is_file() or (gdir / f.name).read_bytes() != f.read_bytes() for f in tb.glob('*.tsv')):
+            # Local fix: an older build the profile registers (Super Mario Bros. Wonder 1.0.1) passes the build ID check, but
+            # the profile's tables were made from the newest build and name shader records its packs lack (IndexError in
+            # dmsh_build.py). Overlay the registered profile with the tables just split, as a derived profile would.
+            ov = work / 'profile' / tid
+            if ov.exists(): shutil.rmtree(ov)
+            ov.mkdir(parents=True)
+            for f in gdir.iterdir():
+                if f.is_file() and (f.name not in DERIVED_SKIP or f.name in ('game.tsv', 'dmsh_chain.h')):
+                    shutil.copyfile(f, ov / f.name)
+            for f in sorted(tb.glob('*.tsv')):
+                shutil.copyfile(f, ov / f.name)
+            os.environ['DM_GAMES_DIR'] = os.pathsep.join(
+                [str(ov.parent)] + [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d])
+            os.environ['DM_GAMES_FIRST'] = '1'
+            gdir = ov   # the app's dm/ takes its tables from gdir (step_assemble): without this it shipped the old map, or none
+            say('profile tables replaced by the ones split from these files: %s' % ov)
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
     if route != 'nvn':
@@ -1484,6 +1503,27 @@ def main():
         shutil.copytree(gl_out, dst)
         say('GL shader table and %d sources → msl/gl (the phone compiles them at first launch)'
             % len(list((dst / 'src').glob('*.metal'))))
+    if fam.get('dlc_ids'):
+        # Local addition: add-on content, as upstream's build_ipa_from_nsp.py extract_aoc does. Each DLC's RomFS goes to
+        # <App>/aoc/<index> (index = title ID - base - 0x1000); the host reports every numeric folder there as owned and
+        # mounts it (main.m DM_AOC_DIR, hle_fs.c). A licence-only DLC (no data NCA) still gets its folder, empty, so the
+        # game sees it as owned. With several copies of one DLC, the highest version wins, then the largest file.
+        best = {}
+        for t, v, p in fam['dlc_ids']:
+            n = (v or '').lstrip('v')
+            k = (int(n) if n.isdigit() else 0, p.stat().st_size)
+            if t not in best or k > best[t][0]: best[t] = (k, p)
+        base_id = int(tid, 16)
+        for t, (_, p) in sorted(best.items()):
+            idx = t - base_id - 0x1000
+            out = A / 'aoc' / str(idx)
+            try:
+                run([nx, keys, '--aoc', p, out], log=work / 'logs' / ('aoc_%d.log' % idx),
+                    what='extracting DLC %d (%s)' % (idx, p.name))
+            except SystemExit:
+                out.mkdir(parents=True, exist_ok=True)
+                warn('DLC %d (%s): no content extracted, packed as owned with an empty folder' % (idx, p.name))
+        say('DLC: %d packed into aoc/' % len(best))
     step_pack(A, out_ipa, rows, work)
     say('done: %s (%.0f MB)' % (out_ipa, out_ipa.stat().st_size / 1048576))
     say('next: sign it with a sideloading tool (SideStore / Sideloadly / LiveContainer) and install it on the phone')
