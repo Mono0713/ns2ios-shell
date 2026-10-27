@@ -169,7 +169,7 @@
   }
 
   // ---- Full screen ----
-  // Android: the first tap on the pad goes full screen (a browser only allows it from a tap), which hides the address bar, and keeps the phone sideways.
+  // Android: any tap on the pad while not full screen goes full screen (a browser only allows it from a tap), which hides the address bar, and keeps the phone sideways.
   // iPhone Safari has no full screen for pages: the button explains Add to Home Screen instead (the page then opens without the address bar)
   const standalone = navigator.standalone || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
   const canFull = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
@@ -361,7 +361,7 @@
       touches.delete(tp.identifier);
     }
     recompute();
-    if (!triedFull && e.type === 'touchend') goFull();   // a touchend counts as the tap full screen needs
+    if (e.type === 'touchend' && (canFull ? !document.fullscreenElement : !triedFull)) goFull();   // a touchend counts as the tap full screen needs; Android goes back to it on any tap after leaving it
   };
   pad.addEventListener('touchend', end, { passive: false });
   pad.addEventListener('touchcancel', end, { passive: false });

@@ -22,8 +22,8 @@ int shell_slot_swap(int a, int b);   // exchanges the holders of players a + 1 a
 int shell_slot_kick(int p);          // removes the holder of player p + 1 through its kind's kick handler; 0 when the slot is free
 int shell_slot_set_layout(int p, int xbox);   // the button layout of player p + 1's holder, through its kind's layout handler; 0 when the slot is free
 int shell_slot_layout(const void *owner);     // owner's button layout (1 Xbox), 0 when it holds no slot
-void shell_slots_on_change(void (*hook)(void));
-// Input from a holder that the app itself looks at (the launcher starts the game on A or +, shell_players.m): each holder reports its buttons after
-// dm_pad_set_player, on its own thread
-void shell_slot_input(int p, uint64_t buttons);
-void shell_slots_on_input(void (*hook)(int p, uint64_t buttons));   // called after every take, free, swap, kick and layout change, on that call's thread, with no lock held
+void shell_slots_on_change(void (*hook)(void));   // called after every take, free, swap, kick and layout change, on that call's thread, with no lock held
+// Input from a holder that the app itself looks at (the launcher's controller navigation, shell_players.m): each holder reports its buttons and left stick
+// (dm_input.h units, y up) after dm_pad_set_player, on its own thread
+void shell_slot_input(int p, uint64_t buttons, int32_t lx, int32_t ly);
+void shell_slots_on_input(void (*hook)(int p, uint64_t buttons, int32_t lx, int32_t ly));

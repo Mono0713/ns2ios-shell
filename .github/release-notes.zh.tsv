@@ -15,3 +15,4 @@ Share one player-slot table between controllers and phones	实体手把与手机
 Phone web gamepads: each phone on the same Wi-Fi is a player of its own	手机网页手柄：同一个 Wi-Fi 的手机用浏览器扫码就能当手柄，每支手机是一个独立玩家（排在实体手柄后面，最多 8P），设置画面显示网址和 QR 码
 Phone gamepads: full screen, a layout editor, and a player list with per-player button layouts	手机手柄第二版：手机页面一点就全屏、可拖动调整按键位置和大小；设置画面最上面显示玩家列表（图标、移除、加入、互换编号），每个玩家各自选 Switch / Xbox 按键配置；实体手柄从 App 启动就算玩家
 Phone gamepads: 8-way D-pad, pinch to resize, A or + starts from the settings screen	手机手柄第三版：方向键改成 8 向（可斜按）、调整按键时两指缩放大小；设置画面可以用手把或手机按 A 或 + 开始游戏；减少连着设备时设置画面的闪烁
+Launcher: player 1's controller moves through the settings; phone list no longer flickers	设置画面可以用 1P 的手柄操作（方向键移动、A 确定、B 回到开始游戏、+ 开始）；手机短暂断线时玩家列表不再闪烁；玩家按 1P、2P… 排序；手机网页每次点击都回到全屏

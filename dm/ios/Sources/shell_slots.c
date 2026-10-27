@@ -13,7 +13,7 @@ static void (*g_moved[SHELL_SLOT_KINDS])(const void *, int, int);
 static void (*g_kick[SHELL_SLOT_KINDS])(const void *);
 static void (*g_layout[SHELL_SLOT_KINDS])(const void *, int);
 static void (*g_hook)(void);
-static void (*g_input)(int, uint64_t);
+static void (*g_input)(int, uint64_t, int32_t, int32_t);
 
 static void changed(void) { void (*h)(void) = g_hook; if (h) h(); }
 
@@ -98,5 +98,5 @@ int shell_slot_layout(const void *owner) {
     return x;
 }
 void shell_slots_on_change(void (*hook)(void)) { g_hook = hook; }
-void shell_slot_input(int p, uint64_t buttons) { void (*h)(int, uint64_t) = g_input; if (h && p >= 0 && p < DM_PLAYERS) h(p, buttons); }
-void shell_slots_on_input(void (*hook)(int, uint64_t)) { g_input = hook; }
+void shell_slot_input(int p, uint64_t buttons, int32_t lx, int32_t ly) { void (*h)(int, uint64_t, int32_t, int32_t) = g_input; if (h && p >= 0 && p < DM_PLAYERS) h(p, buttons, lx, ly); }
+void shell_slots_on_input(void (*hook)(int, uint64_t, int32_t, int32_t)) { g_input = hook; }

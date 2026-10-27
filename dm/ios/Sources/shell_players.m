@@ -7,7 +7,8 @@
 //                                               2 phone), removed: [[index, label]] for the controllers the launcher removed that are still connected
 //   DMPlayersCommand (posted by the launcher)    userInfo op: refresh | swap (a, b: players from 1) | kick (p) | layout (p, xbox 0/1) | add (index into removed)
 //                                               | launcher (on 0/1: the settings screen is shown)
-//   DMLauncherInput (posted here, main thread)   while the launcher is shown, A or + pressed on any player's controller or phone: the launcher starts the game
+//   DMLauncherInput (posted here, main thread)   while the launcher is shown, player 1's controller or phone: userInfo key: a | b | plus | up | down | left | right
+//                                               (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can repeat them)
 // Button layout, per device (its name: a controller's model, a phone's id) and kept in NSUserDefaults: Xbox (A, B, X, Y as printed: A at the bottom) or Switch (by
 // position: right A, bottom B). A device that has no choice yet: an Xbox-branded controller gets Xbox, another controller what DM_PAD_BY_LABEL says (the launcher's
 // old switch, 0 when unset), a phone Switch. A phone's page draws its buttons in its layout (phone_pads.c sends it).
@@ -36,13 +37,26 @@ static int wanted_layout(int kind, const char *name, const char *label) {
     const char *e = getenv("DM_PAD_BY_LABEL"); return e && atoi(e) != 0;
 }
 
-// ---- A or + starts the game from the launcher (shell_slot_input: controllers here, phones on the phone server's thread) ----
+// ---- Player 1 drives the launcher (shell_slot_input: controllers here, phones on the phone server's thread) ----
 static atomic_int g_launcher;
-static _Atomic uint64_t g_last_buttons[DM_PLAYERS];
-static void launcher_input(int p, uint64_t buttons) {
-    uint64_t pressed = buttons & ~atomic_exchange(&g_last_buttons[p], buttons);
-    if (atomic_load(&g_launcher) && (pressed & (1ull << B_A | 1ull << B_PLUS)))
-        dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil]; });
+static _Atomic uint64_t g_last_nav;   // player 1's buttons, the left stick folded into the D-pad
+static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
+    if (p != 0) return;   // the settings screen is player 1's only
+    const int32_t t = DM_STICK_MAX / 2;
+    if (lx < -t) buttons |= 1ull << B_LEFT;
+    if (lx > t) buttons |= 1ull << B_RIGHT;
+    if (ly > t) buttons |= 1ull << B_UP;
+    if (ly < -t) buttons |= 1ull << B_DOWN;
+    uint64_t old = atomic_exchange(&g_last_nav, buttons), pressed = buttons & ~old, released = old & ~buttons;
+    if (!atomic_load(&g_launcher) || !(pressed | released)) return;
+    static const struct { int bit, held; const char *key; } keys[] = {
+        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_PLUS, 0, "plus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
+        int on = (pressed >> keys[i].bit & 1) != 0;
+        if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
+        NSDictionary *u = @{@"key": @(keys[i].key), @"on": @(on)};
+        dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:u]; });
+    }
 }
 
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
@@ -59,8 +73,9 @@ static void read_pad(GCController *c) {
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
-    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
-    shell_slot_input(p, m);
+    int32_t lx = axis(g.leftThumbstick.xAxis.value), ly = axis(g.leftThumbstick.yAxis.value);
+    dm_pad_set_player(p, m, lx, ly, axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+    shell_slot_input(p, m, lx, ly);
 }
 
 static void stop_using(GCController *c, int p) {   // c no longer feeds player p (disconnected or removed)
@@ -110,12 +125,31 @@ static void on_kick(const void *owner) {
 static void on_layout(const void *owner, int xbox) { (void)xbox; GCController *c = pad_of(owner); if (c) read_pad(c); }
 
 // ---- The launcher's list ----
+// A phone whose Wi-Fi drops for a moment reconnects at once and gets its player back; its row would vanish and come back, and the whole list below it jump. So a list
+// that lost a phone is posted only when the phone stays away for PHONE_GRACE seconds (or the launcher removed it)
+enum { PHONE_GRACE = 3 };
+static NSSet<NSString *> *g_shown_phones;          // the phones (their ids) in the list last posted
+static NSMutableSet<NSString *> *g_removing;       // phones the launcher removed: they leave the list at once
+static int g_grace_waiting;
 static void post_players(void) {
     shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
     for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind != SHELL_SLOT_NONE) {   // each device's own layout (a phone that just joined starts at Switch)
         int want = wanted_layout(info[p].kind, info[p].name, info[p].label);
         if (want != info[p].xbox) { shell_slot_set_layout(p, want); return; }   // that change posts again, with the list as it is now
     }
+    NSMutableSet<NSString *> *phones = [NSMutableSet set];
+    for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind == SHELL_SLOT_PHONE) [phones addObject:str(info[p].name)];
+    NSMutableSet<NSString *> *gone = [g_shown_phones mutableCopy] ?: [NSMutableSet set];
+    [gone minusSet:phones];
+    if (g_grace_waiting >= 0 && ![gone isSubsetOfSet:g_removing]) {   // a phone dropped off: give it time to come back
+        if (!g_grace_waiting) {
+            g_grace_waiting = 1;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, PHONE_GRACE * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ g_grace_waiting = -1; post_players(); g_grace_waiting = 0; });
+        }
+        return;
+    }
+    [g_removing minusSet:gone];
+    g_shown_phones = phones;
     NSMutableArray *players = [NSMutableArray array], *removed = [NSMutableArray array];
     for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind != SHELL_SLOT_NONE)
         [players addObject:@[@(p + 1), @(info[p].kind), str(info[p].label), str(info[p].name), @(info[p].xbox)]];
@@ -137,7 +171,11 @@ static void slots_changed(void) {   // any thread (a phone joins on the server's
 static void command(NSDictionary *u) {
     NSString *op = u[@"op"]; int p = [u[@"p"] intValue] - 1;
     if ([op isEqualToString:@"swap"]) shell_slot_swap([u[@"a"] intValue] - 1, [u[@"b"] intValue] - 1);
-    else if ([op isEqualToString:@"kick"]) shell_slot_kick(p);
+    else if ([op isEqualToString:@"kick"]) {
+        shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
+        if (p >= 0 && p < DM_PLAYERS && info[p].kind == SHELL_SLOT_PHONE) [g_removing addObject:str(info[p].name)];
+        shell_slot_kick(p);
+    }
     else if ([op isEqualToString:@"layout"]) {
         shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
         if (p < 0 || p >= DM_PLAYERS || info[p].kind == SHELL_SLOT_NONE) return;
@@ -154,7 +192,7 @@ static void command(NSDictionary *u) {
 }
 
 void shell_players_start(void) {   // main.m, on the main thread, once
-    g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array];
+    g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set];
     shell_slots_handlers(SHELL_SLOT_CONTROLLER, on_moved, on_kick, on_layout);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);

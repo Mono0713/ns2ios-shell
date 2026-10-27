@@ -35,7 +35,7 @@ private let zhText: [String: String] = [
     "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 和 log.txt 都在這裡（檔案 App）。",
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
-    "Phone controllers": "手機手把", "Press A or + on a controller or phone to start.": "在手把或手機上按 A 或 + 也能開始遊戲。", "Scan with a phone camera, or open in its browser:": "用手機相機掃描，或在手機瀏覽器打開：",
+    "Phone controllers": "手機手把", "Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡).": "1P 的手把或手機：方向鍵移動、A 確定、+ 開始遊戲（Xbox 手把是 ≡ 鍵）。", "Scan with a phone camera, or open in its browser:": "用手機相機掃描，或在手機瀏覽器打開：",
     "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請先連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
         "同一個 Wi-Fi 的每支手機都是一個獨立玩家，排在已連線的手把後面，最多到 8P。手機重新整理頁面會保留原本的玩家。",
@@ -44,6 +44,7 @@ private let zhText: [String: String] = [
     "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "還沒有手把或手機。連上藍牙手把，或用手機掃下面的 QR Code。",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
         "iPad 的觸控按鍵也一直是 1P。每個玩家各自記住自己的按鍵配置。被移除的手機可以在手機頁面上重新加入，手把則在這裡按「加入」。",
+    "With player 1's controller: left and right change a player's button layout, A moves it to the next player number.": "用 1P 的手把：左右切換這個玩家的按鍵配置，A 換到下一個玩家編號。",
 ]
 private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : s }
 
@@ -70,7 +71,8 @@ private final class PlayersModel: ObservableObject {
             guard a.count >= 2, let i = a[0] as? Int, let l = a[1] as? String else { return nil }
             return RemovedPad(index: i, label: l)
         }
-        if players != self.players { self.players = players }
+        let sorted = players.sorted { $0.player < $1.player }   // P1 at the top, and after any move too
+        if sorted != self.players { self.players = sorted }
         if removed != self.removed { self.removed = removed }
     }
     func send(_ u: [String: Any]) { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: u) }
@@ -127,14 +129,14 @@ private struct PlayerRowView: View {
 }
 
 private struct PlayersSection: View {
-    @StateObject private var m = PlayersModel()
+    @ObservedObject var m: PlayersModel   // the launcher's, which its controller navigation also uses
 
     var body: some View {
         Section {
             if m.players.isEmpty && m.removed.isEmpty {
                 Text(tr("No controller or phone yet. Connect a controller, or scan the QR code below with a phone.")).foregroundStyle(.secondary)
             }
-            ForEach(m.players) { PlayerRowView(p: $0, m: m) }
+            ForEach(m.players) { PlayerRowView(p: $0, m: m).nav("p\($0.player)") }
             ForEach(m.removed) { r in
                 HStack(spacing: 12) {
                     Image(systemName: controllerIcon(r.label)).font(.title2).frame(width: 44).foregroundStyle(.secondary)
@@ -145,11 +147,13 @@ private struct PlayersSection: View {
                     Spacer()
                     Button(tr("Add")) { m.send(["op": "add", "index": r.index]) }.buttonStyle(.borderless)
                 }
+                .nav("r\(r.index)")
             }
         } header: {
             Text(tr("Players"))
         } footer: {
-            Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here."))
+            Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.")
+                 + " " + tr("With player 1's controller: left and right change a player's button layout, A moves it to the next player number."))
         }
     }
 }
@@ -300,10 +304,54 @@ private struct SettingRow: View {
     }
 }
 
+// Player 1's controller or phone on the launcher (shell_players.m posts DMLauncherInput): the D-pad or left stick moves a highlight over Play and the rows, left and right
+// change the highlighted row, A uses it, B goes back to Play and + starts the game. Touch works as before
+private final class NavModel: ObservableObject { @Published var focus = "play" }
+private struct NavHighlight: ViewModifier {
+    let id: String
+    @EnvironmentObject var nav: NavModel
+    func body(content: Content) -> some View {
+        content.id(id).listRowBackground(nav.focus == id ? Color.accentColor.opacity(0.35) : Color(uiColor: .secondarySystemGroupedBackground))
+    }
+}
+private extension View { func nav(_ id: String) -> some View { modifier(NavHighlight(id: id)) } }
+private struct NavItem { let id: String; var activate: () -> Void = {}; var adjust: ((Int) -> Void)? = nil }
+
+private extension LauncherModel {
+    // One step of a setting from a controller (d -1 or +1): a toggle flips, a choice moves through its options (wrapping around), a slider moves by its step
+    func step(_ s: Setting, _ d: Int) {
+        let v = values[s.env] ?? s.def
+        switch s.kind {
+        case "choice":
+            guard let o = s.options, !o.isEmpty else { return }
+            let i = o.firstIndex { $0[0] == v } ?? 0
+            values[s.env] = o[((i + d) % o.count + o.count) % o.count][0]
+        case "range":
+            let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
+            values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, (Double(v) ?? hi) + Double(d) * st)))
+        case "memory":   // "-" moves from the package's own value
+            let t = (v == "-" ? ProcessInfo.processInfo.environment[s.env] ?? "" : v).lowercased()
+            let lo = s.min ?? 0.5, hi = s.max ?? 3.2, st = s.step ?? 0.1
+            let g = (t.hasPrefix("0x") ? UInt64(t.dropFirst(2), radix: 16) : UInt64(t)).map { Double($0) / 1073741824 } ?? hi
+            let n = Swift.min(hi, Swift.max(lo, (g / st).rounded() * st + Double(d) * st))
+            values[s.env] = String(format: "0x%llX", UInt64((n * 1024).rounded()) << 20)
+        default: values[s.env] = v == s.onValue ? s.offValue : s.onValue
+        }
+    }
+}
+
+private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
+    if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+       let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
+}
+
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
     @State private var memory = os_proc_available_memory()
+    @StateObject private var players = PlayersModel()
+    @StateObject private var nav = NavModel()
+    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
 
     var body: some View {
         GeometryReader { geometry in
@@ -319,31 +367,31 @@ private struct LauncherView: View {
                     Text(tr("Version") + " " + ((info("CFBundleShortVersionString") as? String) ?? ""))
                         .font(.callout).foregroundStyle(.secondary)
                     playButton
-                    Text(tr("Press A or + on a controller or phone to start."))
+                    Text(tr("Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡)."))
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .padding(16)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                ScrollViewReader { proxy in
                 List {
-                    PlayersSection()
+                    PlayersSection(m: players)
                     ForEach(m.sections, id: \.self) { section in
                         Section(tr(section)) {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
-                            ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m) }
+                            ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m).nav("s:" + $0.env) }
                         }
                     }
                     if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsSection() }
                     Section {
                         Button(tr("Reset to tested defaults")) { m.reset() }
                             .disabled(!m.changed)
+                            .nav("reset")
                     } footer: {
                         Text(tr("Brings back all settings this game was tested with."))
                     }
                     Section {
-                        Button(tr("Open game folder")) {   // this app's Documents in the Files app (shareddocuments: scheme)
-                            if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-                               let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
-                        }
+                        Button(tr("Open game folder"), action: openGameFolder)
+                            .nav("folder")
                     } footer: {
                         Text(tr("Saves, env.txt and log.txt are here (Files app)."))
                     }
@@ -357,14 +405,19 @@ private struct LauncherView: View {
                 }
                 .listStyle(.insetGrouped)
                 .contentMargins(.horizontal, 12, for: .scrollContent)
+                .onChange(of: nav.focus) { _, id in withAnimation { proxy.scrollTo(id == "play" ? "p1" : id, anchor: .center) } }
+                }
                 .frame(width: geometry.size.width * 2 / 3)
             }
         }
+        .environmentObject(nav)
         .preferredColorScheme(.dark)
-        // A or + on any player's controller or phone starts the game (shell_players.m posts it only while the launcher says it is shown)
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { _ in play() }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
         .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
-        .onDisappear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
+        .onDisappear {
+            held?.task.cancel()
+            NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
+        }
         .task {
             while !Task.isCancelled {
                 let now = os_proc_available_memory()
@@ -376,7 +429,56 @@ private struct LauncherView: View {
 
     @ViewBuilder var playButton: some View {
         let button = Button(action: play) { Text(tr("Play")).font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
-        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
+        Group {
+            if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
+        }
+        .overlay { if nav.focus == "play" { Capsule().stroke(Color.white, lineWidth: 3).padding(-6) } }
+    }
+
+    // ---- Player 1's controller ----
+    private func navItems() -> [NavItem] {   // in screen order; a setting an env file set is skipped
+        var items = [NavItem(id: "play", activate: play)]
+        let last = players.players.map(\.player).max() ?? 1
+        for r in players.players {
+            items.append(NavItem(id: "p\(r.player)", activate: { players.send(["op": "swap", "a": r.player, "b": r.player % last + 1]) },
+                                 adjust: { _ in players.send(["op": "layout", "p": r.player, "xbox": r.xbox ? 0 : 1]) }))
+        }
+        for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
+        for section in m.sections {
+            for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
+                let slider = s.kind == "range" || s.kind == "memory"
+                items.append(NavItem(id: "s:" + s.env, activate: { if !slider { m.step(s, 1) } }, adjust: { m.step(s, $0) }))
+            }
+        }
+        items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
+        items.append(NavItem(id: "folder", activate: openGameFolder))
+        return items
+    }
+    private func navMove(_ key: String) {
+        let items = navItems()
+        guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.focus = "play"; return }   // its row went away
+        switch key {
+        case "up": nav.focus = items[Swift.max(0, i - 1)].id
+        case "down": nav.focus = items[Swift.min(items.count - 1, i + 1)].id
+        case "left": items[i].adjust?(-1)
+        default: items[i].adjust?(1)
+        }
+    }
+    private func navInput(_ u: [AnyHashable: Any]?) {
+        guard let key = u?["key"] as? String else { return }
+        switch key {
+        case "plus": play()
+        case "a": navItems().first { $0.id == nav.focus }?.activate()
+        case "b": nav.focus = "play"
+        default:   // a direction: once, then repeated while held
+            if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }
+            held?.task.cancel()
+            navMove(key)
+            held = (key, Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                while !Task.isCancelled { navMove(key); try? await Task.sleep(for: .milliseconds(120)) }
+            })
+        }
     }
 
     private func appIcon() -> UIImage? {
