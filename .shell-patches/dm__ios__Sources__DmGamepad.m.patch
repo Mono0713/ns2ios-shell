@@ -10,7 +10,89 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  //   Shaking the phone shakes the controller (DM_BTN_SHAKE: its six-axis sensor, hle_hid.c), whichever controls are in use; see "Shaking the phone" below.
  #import <UIKit/UIKit.h>
  #import <GameController/GameController.h>
-@@ -110,8 +110,10 @@
+@@ -22,6 +22,9 @@
+ #include "front.h"
+ #include "game_profile.h"
+ #include "haptics_apple.h"
++#include "shell_motion.h"
++#include "shell_slots.h"
++#include <stdatomic.h>
+ 
+ enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
+ enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME };   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
+@@ -39,32 +42,60 @@
+     pthread_mutex_unlock(&g_mu);
+ }
+ 
+-// ---- Shaking the phone ----
+-// The accelerometer at 60 Hz (no gyroscope, no permission prompt): gravity is followed by a slow low-pass (about 0.8 s), and a sample whose acceleration beyond it exceeds DM_SHAKE_G
+-// (1.5 G by default; Documents/env.txt overrides) is a hit. The controller is shaken until 120 ms after the last hit: a flick is one shake (the host finishes it as a whole cycle)
+-// and shaking on keeps it going. Holding the phone and pressing the screen stays far below the threshold. Each detected shake is logged with its peak
++// ---- Shaking the phone, and its motion ----
++// Device motion at 100 Hz (accelerometer and gyroscope; no permission prompt), or the accelerometer alone at 60 Hz on a device with no gyroscope. Shaking: gravity is followed by a
++// slow low-pass (about 0.8 s), and a sample whose acceleration beyond it exceeds DM_SHAKE_G (1.5 G by default; Documents/env.txt overrides) is a hit. The controller is shaken until
++// 120 ms after the last hit: a flick is one shake (the host finishes it as a whole cycle) and shaking on keeps it going. Holding the phone and pressing the screen stays far below the
++// threshold. Each detected shake is logged with its peak.
++// Motion: player 1's six-axis sensor follows the device (shell_motion.h) while no controller or phone holds player 1 and the launcher's Motion controls are on. The device's axes
++// go to the controller's by the screen's orientation: the screen's right is x, its top y, out of the screen z, so the device lying flat with the screen up is a controller lying flat
+ static CMMotionManager *g_motion;
++static atomic_int g_screen_orientation = UIInterfaceOrientationLandscapeRight;   // set on the main thread (layoutSubviews), read on the motion queue
++static void to_controller(int o, const double d[3], double c[3]) {   // a device-frame vector (x right, y top, z out of the screen, in portrait) in the controller's frame
++    switch (o) {
++    case UIInterfaceOrientationLandscapeRight: c[0] = -d[1]; c[1] = d[0]; break;   // the device's top on the left
++    case UIInterfaceOrientationLandscapeLeft: c[0] = d[1]; c[1] = -d[0]; break;
++    case UIInterfaceOrientationPortraitUpsideDown: c[0] = -d[0]; c[1] = -d[1]; break;
++    default: c[0] = d[0]; c[1] = d[1]; break;
++    }
++    c[2] = d[2];
++}
+ static void motion_start(void) {
+     if (g_motion) return;
+     g_motion = [CMMotionManager new];
+     if (!g_motion.accelerometerAvailable) { LOG("front end: no accelerometer, shaking the phone does nothing"); return; }
+     const char *e = getenv("DM_SHAKE_G"); double thr = e && atof(e) > 0 ? atof(e) : 1.5;
+-    LOG("front end: shaking the phone shakes the controller (threshold %.2f G)", thr);
+-    g_motion.accelerometerUpdateInterval = 1.0 / 60;
++    BOOL gyro = g_motion.deviceMotionAvailable;
++    LOG("front end: shaking the phone shakes the controller (threshold %.2f G)%s", thr, gyro ? "; its gyroscope is player 1's motion while player 1 plays on it" : "; no gyroscope");
+     NSOperationQueue *q = [NSOperationQueue new]; q.maxConcurrentOperationCount = 1;
+     __block double gx = 0, gy = 0, gz = 0, last = -1, peak = 0; __block BOOL init = NO;
+-    [g_motion startAccelerometerUpdatesToQueue:q withHandler:^(CMAccelerometerData *d, NSError *err) {
+-        (void)err; if (!d) return;
+-        CMAcceleration a = d.acceleration;
++    void (^shake)(CMAcceleration, NSTimeInterval) = ^(CMAcceleration a, NSTimeInterval ts) {
+         if (!init) { gx = a.x; gy = a.y; gz = a.z; init = YES; }
+         double dx = a.x - gx, dy = a.y - gy, dz = a.z - gz, g = sqrt(dx * dx + dy * dy + dz * dz);
+         gx += (a.x - gx) * 0.02; gy += (a.y - gy) * 0.02; gz += (a.z - gz) * 0.02;
+-        if (g > thr) { if (last < 0) peak = 0; last = d.timestamp; peak = fmax(peak, g); }
+-        BOOL on = last >= 0 && d.timestamp - last < 0.12;
++        if (g > thr) { if (last < 0) peak = 0; last = ts; peak = fmax(peak, g); }
++        BOOL on = last >= 0 && ts - last < 0.12;
+         if (!on && last >= 0) { LOG("front end: phone shaken (peak %.1f G)", peak); last = -1; }
+         uint64_t want = on ? DM_BTN_SHAKE : 0;
+         pthread_mutex_lock(&g_mu); BOOL changed = g_shake_btn != want; g_shake_btn = want; pthread_mutex_unlock(&g_mu);
+         if (changed) publish();
++    };
++    if (!gyro) {
++        g_motion.accelerometerUpdateInterval = 1.0 / 60;
++        [g_motion startAccelerometerUpdatesToQueue:q withHandler:^(CMAccelerometerData *d, NSError *err) { (void)err; if (d) shake(d.acceleration, d.timestamp); }];
++        return;
++    }
++    static shell_motion m;
++    g_motion.deviceMotionUpdateInterval = 1.0 / 100;
++    [g_motion startDeviceMotionUpdatesToQueue:q withHandler:^(CMDeviceMotion *d, NSError *err) {
++        (void)err; if (!d) return;
++        CMAcceleration gr = d.gravity, u = d.userAcceleration; CMRotationRate r = d.rotationRate;
++        shake((CMAcceleration){gr.x + u.x, gr.y + u.y, gr.z + u.z}, d.timestamp);   // the accelerometer's reading, as before
++        if (shell_slot_held(0)) { m.init = 0; return; }   // player 1 is a controller's or a phone's: not the iPad's
++        int o = atomic_load(&g_screen_orientation);
++        double dg[3] = {gr.x, gr.y, gr.z}, du[3] = {u.x, u.y, u.z}, dr[3] = {r.x, r.y, r.z}, cg[3], cu[3], cr[3];
++        to_controller(o, dg, cg); to_controller(o, du, cu); to_controller(o, dr, cr);
++        shell_motion_feed(&m, 0, d.timestamp, cg, cu, cr);
+     }];
+ }
+ 
+@@ -110,8 +141,10 @@
      unsigned _hapticSticks;
      BOOL _stickShown;                              // the left stick was held at the last refresh
      BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
@@ -23,7 +105,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      UITouch *_game[16];                            // touches on the game's touch screen by finger slot
  }
  
-@@ -155,14 +157,19 @@
+@@ -155,14 +188,19 @@
              if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
          }
          _swap = shape(_controls); _swapLabel = label(_swap, @"");
@@ -46,7 +128,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
          [self padsChanged];
          motion_start();
      }
-@@ -295,6 +302,7 @@
+@@ -295,6 +333,7 @@
  }
  - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
      BOOL game = NO;
@@ -54,7 +136,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      for (UITouch *t in ts) {
          if (_padOff) { game |= [self gameBegin:t]; continue; }
          CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
-@@ -340,7 +348,7 @@
+@@ -340,7 +379,7 @@
      [self recompute];
      if (swap) [self nextLayout];
  }
@@ -63,7 +145,15 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
  - (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
  
-@@ -414,32 +422,38 @@
+@@ -376,6 +415,7 @@
+ 
+ - (void)layoutSubviews {
+     [super layoutSubviews];
++    if (self.window.windowScene) atomic_store(&g_screen_orientation, (int)self.window.windowScene.interfaceOrientation);   // the motion's axes (motion_start)
+     CGFloat u = self.u;
+     [CATransaction begin]; [CATransaction setDisableActions:YES];
+     _controls.frame = self.layer.bounds;
+@@ -414,32 +454,38 @@
      [CATransaction commit];
  }
  
@@ -126,7 +216,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  }
  @end
  
-@@ -447,4 +461,5 @@
+@@ -447,4 +493,5 @@
  void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
      dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
      pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_shake_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish();

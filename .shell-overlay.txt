@@ -27,6 +27,8 @@
 + dm/ios/tools/gen_phone_pad_page.py
 + dm/ios/tests/phone_pads_check.c       # stand-in host for the server test
 + dm/ios/tests/test_phone_pads.py       # python3 dm/ios/tests/test_phone_pads.py (Linux or Mac)
++ dm/ios/Sources/shell_motion.c         # real motion for the game's six-axis sensors: the iPad's for player 1, a controller's gyroscope for its player
++ dm/ios/Sources/shell_motion.h
 + dm/tools/supported_list.py              # the supported-games page and release asset, from dm/games/*/game.tsv
 + dm/tools/packer_sync.py                 # keeps this fork's copies of dm/tools, dm/gfx/tools and dm/games level with upstream
 + dm/tools/nx_extract/AlignedReadStorage.cs    # 16-byte aligned reads when an update is layered over its base
@@ -69,8 +71,11 @@
 ~ dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
 ~ dm/host/haptics_apple.m       # controller rumble: plain players and the default locality when advanced players fail; routes rebuilt and the audio-interruption suspension lifted on becoming active
 ~ dm/host/front.h               # front_first_frame: the first present, for the loading screen
+~ dm/host/dm_input.h           # dm_motion_set_player: a front end's real motion for a player's six-axis sensor
+~ dm/host/hle_hid.c            # the six-axis sensors read dm_motion_set_player's motion while it is fresh (lying still otherwise)
+~ dm/host/tests/t_hid.c        # the real-motion checks
 ~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame
-~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A, B, +), and the phone gamepads' address and QR code
+~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A, B, +), the phone gamepads' address and QR code, Motion controls and a 30 fps cap; English copy reworded
 ~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL)
 ~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout

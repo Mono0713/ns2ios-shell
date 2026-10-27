@@ -17,36 +17,68 @@ private let zhHant: Bool = {
     return l.hasPrefix("zh-hant") || l.hasPrefix("zh-tw") || l.hasPrefix("zh-hk") || l.hasPrefix("zh-mo")
 }()
 private let zhText: [String: String] = [
+    // sections and launcher.json's labels, notes and choices (settings.tsv)
     "Game": "遊戲", "Controls": "操作", "Performance": "效能",
     "Frame rate": "幀率", "Render scale": "渲染解析度", "Console mode": "主機模式", "Docked": "電視模式", "Handheld": "掌機模式",
-    "Upscaling": "畫面放大", "Standard": "標準", "Uses more GPU time and can increase heat.": "會多用 GPU 時間，可能讓機身變熱。",
-    "Game language": "遊戲語言", "Frame-rate counter": "顯示幀率",
-    "Xbox button layout": "Xbox 按鍵配置", "A, B, X and Y as printed on an Xbox controller (Switch games expect A on the right).": "A、B、X、Y 照 Xbox 手把上印的位置（Switch 遊戲預設 A 在右邊）。",
-    "Touch feedback": "觸控回饋", "Game rumble": "遊戲震動", "Rumble strength": "震動強度",
+    "Upscaling": "畫面放大", "Standard": "標準", "Uses more GPU time and can increase heat.": "會增加 GPU 負擔，機身可能較熱。",
+    "Game language": "遊戲語言", "Frame-rate counter": "顯示 FPS",
+    "Xbox button layout": "Xbox 按鍵配置", "A, B, X and Y as printed on an Xbox controller (Switch games expect A on the right).": "A、B、X、Y 依 Xbox 手把上的標示（Switch 遊戲預設 A 在右側）。",
+    "Touch feedback": "觸控震動回饋", "Game rumble": "震動", "Rumble strength": "震動強度",
     "Frame buffering": "畫面緩衝", "Up to one frame more display latency.": "顯示延遲最多增加一幀。",
-    "Metal 4 pipelines": "Metal 4 管線", "Keeps a pipeline archive; uses more memory.": "保留管線封存檔，會多用記憶體。",
-    "Pipeline prebuild": "預先建置管線", "The first start waits a few minutes for it, once.": "第一次啟動會等幾分鐘，只有一次。",
-    "Encode thread": "獨立編碼執行緒", "Hold frames when late": "延遲時保留畫格", "Performance HUD": "效能監看 HUD",
+    "Metal 4 pipelines": "Metal 4 管線", "Keeps a pipeline archive; uses more memory.": "保留管線快取，會使用較多記憶體。",
+    "Pipeline prebuild": "預先建置管線", "The first start waits a few minutes for it, once.": "首次啟動需要多等幾分鐘（僅此一次）。",
+    "Encode thread": "獨立編碼執行緒", "Hold frames when late": "延遲時保留畫格", "Performance HUD": "效能資訊（HUD）",
     "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
     "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
     "Portuguese": "葡萄牙文", "Russian": "俄文", "Korean": "韓文", "Traditional Chinese": "繁體中文", "Simplified Chinese": "簡體中文", "Brazilian Portuguese": "葡萄牙文（巴西）",
-    "Game memory pool": "遊戲記憶體池", "Game default": "遊戲預設", 
-    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "畫面或聲音不正常時才需要改；設錯可能讓遊戲無法啟動。",
-    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 和 log.txt 都在這裡（檔案 App）。",
+    "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設",
+    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "僅在畫面或聲音異常時調整；設定錯誤可能導致遊戲無法啟動。",
+    // the launcher's own
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
-    "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
-    "Phone controllers": "手機手把", "Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡).": "1P 的手把或手機：方向鍵移動、A 確定、+ 開始遊戲（Xbox 手把是 ≡ 鍵）。", "Scan with a phone camera, or open in its browser:": "用手機相機掃描，或在手機瀏覽器打開：",
-    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請先連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
+    "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
+    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
+    "Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡).": "1P 手把或手機：方向鍵選擇、A 確定、+ 開始（Xbox 手把為 ≡ 鍵）。",
+    "Motion controls": "體感操作（陀螺儀）",
+    "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
+        "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
+    "Frame rate cap": "幀率上限", "30 fps": "30 fps", "Lower heat and battery use; some games may not follow it.": "降低發熱與耗電；部分遊戲可能不受影響。",
+    "Phone controllers": "手機手把", "Scan with a phone camera, or open in its browser:": "用手機相機掃描 QR Code，或在瀏覽器輸入：",
+    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請將 iPad 連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
-        "同一個 Wi-Fi 的每支手機都是一個獨立玩家，排在已連線的手把後面，最多到 8P。手機重新整理頁面會保留原本的玩家。",
+        "連接同一個 Wi-Fi 的手機都能成為獨立玩家，編號排在已連接的手把之後，最多 8 位。重新整理頁面會保留原本的玩家編號。",
     "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
     "Move to": "換到", "Button layout": "按鍵配置",
-    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "還沒有手把或手機。連上藍牙手把，或用手機掃下面的 QR Code。",
+    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描下方的 QR Code。",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
-        "iPad 的觸控按鍵也一直是 1P。每個玩家各自記住自己的按鍵配置。被移除的手機可以在手機頁面上重新加入，手把則在這裡按「加入」。",
-    "With player 1's controller: left and right change a player's button layout, A moves it to the next player number.": "用 1P 的手把：左右切換這個玩家的按鍵配置，A 換到下一個玩家編號。",
+        "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
+    "With player 1's controller: left and right change a player's button layout, A moves it to the next player number.": "使用 1P 手把時：左右切換按鍵配置，A 將該玩家移到下一個編號。",
 ]
-private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : s }
+// English as shown: settings.tsv's labels and notes (and the strings above, which are the keys) rewritten for the screen; a string not listed is shown as it is
+private let enText: [String: String] = [
+    "Frame-rate counter": "Show frame rate", "Game rumble": "Rumble", "Touch feedback": "Haptic feedback on touch", "Performance HUD": "Performance overlay (HUD)",
+    "Uses more GPU time and can increase heat.": "Uses more GPU time; the device may run warmer.", "Up to one frame more display latency.": "Adds up to one frame of display latency.",
+    "Keeps a pipeline archive; uses more memory.": "Keeps a pipeline cache, which uses more memory.", "The first start waits a few minutes for it, once.": "The first launch takes a few extra minutes, once.",
+    "Game memory pool": "Game memory",
+    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "Only change this if graphics or sound are missing. A wrong value can keep the game from starting.",
+    "Memory available": "Available memory", "Reset to tested defaults": "Restore recommended settings", "Brings back all settings this game was tested with.": "Returns every setting to the values this game was tested with.",
+    "Saves, env.txt and log.txt are here (Files app).": "Saves, env.txt and log.txt are kept here (Files app).",
+    "Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡).": "Player 1's controller or phone: D-pad to select, A to confirm, + to start (≡ on Xbox controllers).",
+    "Motion controls": "Motion controls (gyro)",
+    "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
+        "When playing by touch, tilting the iPad drives Player 1's motion. DualSense, DualShock 4 and Switch Pro controllers use their own gyroscope.",
+    "Lower heat and battery use; some games may not follow it.": "Lowers heat and battery use. Some games may ignore it.",
+    "Scan with a phone camera, or open in its browser:": "Scan with your phone's camera, or open this address in its browser:",
+    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "Connect this iPad to Wi-Fi (or turn on Personal Hotspot) so phones can join.",
+    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
+        "Any phone on the same Wi-Fi can join as its own player, after connected controllers, up to 8 players. Reloading the page keeps its player number.",
+    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "No controllers or phones connected. Pair a Bluetooth controller, or scan the QR code below with a phone.",
+    "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
+        "With no controller or phone connected, the iPad's touch controls play as Player 1. Each player's button layout is remembered. A removed phone can rejoin from its page; a removed controller from here.",
+    "With player 1's controller: left and right change a player's button layout, A moves it to the next player number.":
+        "With Player 1's controller: left and right switch a player's button layout, A moves them to the next player number.",
+    "Phone on Wi-Fi": "Phone (Wi-Fi)", "Not playing": "Not playing",
+]
+private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : enText[s] ?? s }
 
 // Players (shell_players.m): who plays which player, from the physical controllers and the phones, at the top of the launcher. The list comes from the
 // DMPlayersChanged notification and the changes go back as DMPlayersCommand (swap, kick, layout, add), so this file needs no C header
@@ -369,6 +401,56 @@ private extension LauncherModel {
     }
 }
 
+// Shell settings every game has (not from launcher.json): motion controls (shell_motion.c, read while the game runs) and a frame-rate cap (DM_FPS, read when the game starts).
+// Kept in UserDefaults; an env file's DM_GYRO or DM_FPS is shown and kept
+@_silgen_name("shell_motion_enable") private func shellMotionEnable(_ on: Int32)
+private final class ShellSettings: ObservableObject {
+    private let fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
+    @Published var gyro: Bool
+    @Published var fps30: Bool
+    var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
+    var fpsLocked: Bool { fromFile.contains("DM_FPS") }
+    init() {
+        let env = ProcessInfo.processInfo.environment
+        gyro = fromFile.contains("DM_GYRO") ? env["DM_GYRO"] != "0" : UserDefaults.standard.object(forKey: "launcher.DM_GYRO") as? Bool ?? true
+        fps30 = fromFile.contains("DM_FPS") ? env["DM_FPS"] == "30" : UserDefaults.standard.bool(forKey: "launcher.DM_FPS30")
+    }
+    func apply() {
+        if !gyroLocked { UserDefaults.standard.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
+        if !fpsLocked { UserDefaults.standard.set(fps30, forKey: "launcher.DM_FPS30"); if fps30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
+        fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps30 ? "30 fps" : "the game's")\n", stderr)
+    }
+}
+// The two rows, in the Controls and Game sections
+private struct GyroRow: View {
+    @ObservedObject var shell: ShellSettings
+    var body: some View {
+        Toggle(isOn: $shell.gyro) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tr("Motion controls"))
+                Text(tr("The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.")).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .disabled(shell.gyroLocked)
+    }
+}
+private struct FpsRow: View {
+    @ObservedObject var shell: ShellSettings
+    var body: some View {
+        Picker(selection: $shell.fps30) {
+            Text(tr("Game default")).tag(false)
+            Text(tr("30 fps")).tag(true)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tr("Frame rate cap"))
+                Text(tr("Lower heat and battery use; some games may not follow it.")).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(shell.fpsLocked)
+    }
+}
+
 private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
     if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
        let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -376,6 +458,7 @@ private func openGameFolder() {   // this app's Documents in the Files app (shar
 
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
+    @ObservedObject var shell: ShellSettings
     let play: () -> Void
     @State private var memory = os_proc_available_memory()
     @StateObject private var players = PlayersModel()
@@ -409,6 +492,8 @@ private struct LauncherView: View {
                         Section(tr(section)) {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
                             ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m).nav("s:" + $0.env) }
+                            if section == "Game" { FpsRow(shell: shell).nav("fps") }
+                            if section == "Controls" { GyroRow(shell: shell).nav("gyro") }
                         }
                     }
                     if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsSection() }
@@ -480,6 +565,8 @@ private struct LauncherView: View {
                 let slider = s.kind == "range" || s.kind == "memory"
                 items.append(NavItem(id: "s:" + s.env, activate: { if !slider { m.step(s, 1) } }, adjust: { m.step(s, $0) }))
             }
+            if section == "Game" && !shell.fpsLocked { items.append(NavItem(id: "fps", activate: { shell.fps30.toggle() }, adjust: { _ in shell.fps30.toggle() })) }
+            if section == "Controls" && !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() }, adjust: { _ in shell.gyro.toggle() })) }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
         items.append(NavItem(id: "folder", activate: openGameFolder))
@@ -527,12 +614,13 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = LauncherModel(file.settings)
+    let model = LauncherModel(file.settings), shell = ShellSettings()
     var host: UIViewController?
-    let view = LauncherView(m: model) {
+    let view = LauncherView(m: model, shell: shell) {
         guard let h = host else { return }
         host = nil
         model.apply()
+        shell.apply()
         h.dismiss(animated: false) { done() }
     }
     let h = UIHostingController(rootView: view)

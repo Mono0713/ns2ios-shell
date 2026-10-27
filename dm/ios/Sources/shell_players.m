@@ -16,6 +16,7 @@
 // old switch, 0 when unset), a phone Switch. A phone's page draws its buttons in its layout (phone_pads.c sends it).
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
+#import <QuartzCore/QuartzCore.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -24,6 +25,7 @@
 #include "dm_input.h"
 #include "haptics_apple.h"
 #include "shell_slots.h"
+#include "shell_motion.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN };
 
@@ -90,8 +92,35 @@ static void read_pad(GCController *c) {
     shell_slot_input(p, m, lx, ly);
 }
 
+// ---- A controller's gyroscope (DualSense, DualShock 4, Switch Pro): its player's six-axis sensor (shell_motion.h). GameController gives it in the controller's frame, x right,
+// y away from the player, z up, the same as the game's ----
+static NSMapTable<GCController *, NSMutableData *> *g_motion_state;   // each controller's shell_motion
+static void motion_on(GCController *c) {
+    GCMotion *mo = c.motion;
+    if (!mo || !mo.hasRotationRate) return;
+    if (mo.sensorsRequireManualActivation) mo.sensorsActive = YES;
+    NSMutableData *st = [NSMutableData dataWithLength:sizeof(shell_motion)];
+    [g_motion_state setObject:st forKey:c];
+    LOG("controller '%s': its gyroscope is its player's motion", c.vendorName.UTF8String ?: "?");
+    __weak GCController *wc = c;
+    mo.valueChangedHandler = ^(GCMotion *m) {
+        GCController *cc = wc; if (!cc) return;
+        int p = shell_slot_of((__bridge const void *)cc); if (p < 0) return;
+        double g[3], u[3] = {0, 0, 0}, r[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
+        if (m.hasGravityAndUserAcceleration) { g[0] = m.gravity.x; g[1] = m.gravity.y; g[2] = m.gravity.z; u[0] = m.userAcceleration.x; u[1] = m.userAcceleration.y; u[2] = m.userAcceleration.z; }
+        else { g[0] = m.acceleration.x; g[1] = m.acceleration.y; g[2] = m.acceleration.z; }
+        shell_motion_feed((shell_motion *)st.mutableBytes, p, CACurrentMediaTime(), g, u, r);
+    };
+}
+static void motion_off(GCController *c) {
+    c.motion.valueChangedHandler = nil;
+    if (c.motion.sensorsRequireManualActivation) c.motion.sensorsActive = NO;
+    [g_motion_state removeObjectForKey:c];
+}
+
 static void stop_using(GCController *c, int p) {   // c no longer feeds player p (disconnected or removed)
     c.extendedGamepad.valueChangedHandler = nil;
+    motion_off(c);
     dm_haptics_apple_controller(p, nil);
     shell_slot_free((__bridge const void *)c);
     if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
@@ -112,6 +141,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         [g_pads addObject:c];
         shell_slot_set_layout(p, wanted_layout(SHELL_SLOT_CONTROLLER, name, name));
         c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g.controller); };
+        motion_on(c);
         LOG("controller '%s' connected: player %d", name, p + 1);
         read_pad(c);
     }
@@ -207,7 +237,7 @@ static void command(NSDictionary *u) {
 }
 
 void shell_players_start(void) {   // main.m, on the main thread, once
-    g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set];
+    g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set]; g_motion_state = [NSMapTable strongToStrongObjectsMapTable];
     shell_slots_handlers(SHELL_SLOT_CONTROLLER, on_moved, on_kick, on_layout);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);

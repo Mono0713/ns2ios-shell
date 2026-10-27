@@ -42,6 +42,13 @@ int shell_slot_of(const void *owner) {
     pthread_mutex_unlock(&g_mu);
     return p;
 }
+int shell_slot_held(int p) {
+    if (p < 0 || p >= DM_PLAYERS) return 0;
+    pthread_mutex_lock(&g_mu);
+    int held = g_slots.owner[p] != NULL;
+    pthread_mutex_unlock(&g_mu);
+    return held;
+}
 void shell_slots_list(shell_slot_info out[]) {
     pthread_mutex_lock(&g_mu);
     for (int i = 0; i < DM_PLAYERS; i++) {

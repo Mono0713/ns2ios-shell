@@ -11,6 +11,7 @@ typedef struct { int kind, xbox; char label[64], name[64]; } shell_slot_info;   
 int shell_slot_take(const void *owner, const char *name, int kind, const char *label);   // the slot (player - 1) owner holds, taking one if it holds none (pad_slot_take's order); -1 when all are held
 int shell_slot_free(const void *owner);   // frees owner's slot and returns it, -1 when it held none; the caller releases that player's input
 int shell_slot_of(const void *owner);
+int shell_slot_held(int p);   // 1 while a controller or a phone holds player p + 1
 void shell_slots_list(shell_slot_info out[]);   // DM_PLAYERS entries, kind SHELL_SLOT_NONE for a free slot
 
 // moved: owner's slot is now `to` (it was `from`), called after the swap with no lock held; the holder feeds `to` its current state at once (a player the swap left
