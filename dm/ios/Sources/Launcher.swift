@@ -37,7 +37,6 @@ private let zhText: [String: String] = [
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
     "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
-    "Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡).": "1P 手把或手機：方向鍵選擇、A 確定、+ 開始（Xbox 手把為 ≡ 鍵）。",
     "Motion controls": "體感操作（陀螺儀）",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
@@ -50,10 +49,13 @@ private let zhText: [String: String] = [
         "連接同一個 Wi-Fi 的手機都能成為獨立玩家，依連線順序取得下一個空的編號，最多 8 位。重新整理頁面會保留原本的玩家編號。",
     "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
     "Move to": "換到", "Button layout": "按鍵配置",
-    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描下方的 QR Code。",
+    "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描左側的 QR Code。",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
         "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
-    "With player 1's controller: left and right change a player's button layout, A moves it to the next player number.": "使用 1P 手把時：左右切換按鍵配置，A 將該玩家移到下一個編號。",
+    "Player 1's controller: A opens a player's options. Other players: A buzzes your own controller, − (Xbox: ⧉) switches your own button layout.":
+        "1P 手把：在玩家上按 A 可以設定任何玩家。其他玩家：按 A 讓自己的手把震動，按 −（Xbox 為 ⧉ 鍵）切換自己的按鍵配置。",
+    "Identify (buzz or flash)": "震動辨識", "Move to %dP": "換到 %dP", "Move to %dP (swap with %@)": "換到 %dP（和 %@ 交換）",
+    "Switch layout": "Switch 配置", "Xbox layout": "Xbox 配置", "Phone": "手機",
 ]
 // English as shown: settings.tsv's labels and notes (and the strings above, which are the keys) rewritten for the screen; a string not listed is shown as it is
 private let enText: [String: String] = [
@@ -64,7 +66,6 @@ private let enText: [String: String] = [
     "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "Only change this if graphics or sound are missing. A wrong value can keep the game from starting.",
     "Memory available": "Available memory", "Reset to tested defaults": "Restore recommended settings", "Brings back all settings this game was tested with.": "Returns every setting to the values this game was tested with.",
     "Saves, env.txt and log.txt are here (Files app).": "Saves, env.txt and log.txt are kept here (Files app).",
-    "Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡).": "Player 1's controller or phone: D-pad to select, A to confirm, + to start (≡ on Xbox controllers).",
     "Motion controls": "Motion controls (gyro)",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "When playing by touch, tilting the iPad drives Player 1's motion. DualSense, DualShock 4 and Switch Pro controllers use their own gyroscope.",
@@ -73,11 +74,9 @@ private let enText: [String: String] = [
     "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "Connect this iPad to Wi-Fi (or turn on Personal Hotspot) so phones can join.",
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
         "Any phone on the same Wi-Fi can join as its own player, taking the next free player number, up to 8 players. Reloading the page keeps its player number.",
-    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "No controllers or phones connected. Pair a Bluetooth controller, or scan the QR code below with a phone.",
+    "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "No controllers or phones connected. Pair a Bluetooth controller, or scan the QR code on the left with a phone.",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
         "With no controller or phone connected, the iPad's touch controls play as Player 1. Each player's button layout is remembered. A removed phone can rejoin from its page; a removed controller from here.",
-    "With player 1's controller: left and right change a player's button layout, A moves it to the next player number.":
-        "With Player 1's controller: left and right switch a player's button layout, A moves them to the next player number.",
     "Phone on Wi-Fi": "Phone (Wi-Fi)", "Not playing": "Not playing",
 ]
 private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : enText[s] ?? s }
@@ -148,16 +147,17 @@ private func controllerIcon(_ label: String) -> String {
     return l.contains("xbox") ? "logo.xbox" : l.contains("dualsense") || l.contains("dualshock") ? "logo.playstation" : "gamecontroller.fill"
 }
 
+private func playerTitle(_ p: PlayerRow) -> String { p.kind == 2 ? (zhHant ? "\(p.label) " + tr("phone") : "\(p.label) phone") : p.label }
+
 private struct PlayerRowView: View {
     let p: PlayerRow
     @ObservedObject var m: PlayersModel
 
     private var phone: Bool { p.kind == 2 }
-    private var title: String { phone ? (zhHant ? "\(p.label) " + tr("phone") : "\(p.label) phone") : p.label }
+    private var title: String { playerTitle(p) }
     private func moveText(_ n: Int) -> String {
         guard let other = m.players.first(where: { $0.player == n }) else { return "\(n)P" }
-        let who = other.kind == 2 ? (zhHant ? "\(other.label) " + tr("phone") : "\(other.label) phone") : other.label
-        return zhHant ? "\(n)P（和 \(who) 交換）" : "\(n)P (swap with \(who))"
+        return zhHant ? "\(n)P（和 \(playerTitle(other)) 交換）" : "\(n)P (swap with \(playerTitle(other)))"
     }
 
     var body: some View {
@@ -203,7 +203,7 @@ private struct PlayersSection: View {
     var body: some View {
         Section {
             if m.players.isEmpty && m.removed.isEmpty {
-                Text(tr("No controller or phone yet. Connect a controller, or scan the QR code below with a phone.")).foregroundStyle(.secondary)
+                Text(tr("No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.")).foregroundStyle(.secondary)
             }
             ForEach(m.players) { PlayerRowView(p: $0, m: m).nav("p\($0.player)") }
             ForEach(m.removed) { r in
@@ -222,7 +222,7 @@ private struct PlayersSection: View {
             Text(tr("Players"))
         } footer: {
             Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.")
-                 + " " + tr("With player 1's controller: left and right change a player's button layout, A moves it to the next player number."))
+                 + " " + tr("Player 1's controller: A opens a player's options. Other players: A buzzes your own controller, − (Xbox: ⧉) switches your own button layout."))
         }
     }
 }
@@ -255,32 +255,31 @@ private func qrImage(_ text: String) -> UIImage? {
     return UIImage(cgImage: cg)
 }
 
-private struct PhonePadsSection: View {
+private struct PhonePadsCard: View {   // under Play, in the launcher's left column
     @State private var url = phonePadsURL()
     @State private var qr: UIImage?   // made once per address, not on every redraw
 
     var body: some View {
-        Section {
+        VStack(spacing: 8) {
+            Label(tr("Phone controllers"), systemImage: "iphone.gen3").font(.headline)
             if let url {
-                HStack(spacing: 16) {
-                    if let qr {
-                        Image(uiImage: qr).interpolation(.none).resizable().frame(width: 132, height: 132)
-                            .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 8))
-                            .accessibilityLabel("QR code of \(url)")
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(tr("Scan with a phone camera, or open in its browser:")).font(.callout).foregroundStyle(.secondary)
-                        Text(url).font(.body.monospaced()).textSelection(.enabled)
-                    }
+                if let qr {
+                    Image(uiImage: qr).interpolation(.none).resizable().frame(width: 120, height: 120)
+                        .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel("QR code of \(url)")
                 }
+                Text(tr("Scan with a phone camera, or open in its browser:")).font(.footnote).foregroundStyle(.secondary)
+                Text(url).font(.callout.monospaced()).textSelection(.enabled)
             } else {
-                Text(tr("Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.")).foregroundStyle(.secondary)
+                Text(tr("Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.")).font(.footnote).foregroundStyle(.secondary)
             }
-        } header: {
-            Text(tr("Phone controllers"))
-        } footer: {
             Text(tr("Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player."))
+                .font(.caption).foregroundStyle(.secondary)
         }
+        .multilineTextAlignment(.center)
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(uiColor: .secondarySystemGroupedBackground)))
         .task {
             while !Task.isCancelled {   // the Wi-Fi address can change while the launcher is shown
                 let now = phonePadsURL()
@@ -375,28 +374,77 @@ private struct SettingRow: View {
     }
 }
 
-// Player 1's controller or phone on the launcher (shell_players.m posts DMLauncherInput): the D-pad or left stick moves a highlight over Play and the rows, left and right
-// change the highlighted row, A uses it, B goes back to Play and + starts the game. Touch works as before
-private final class NavModel: ObservableObject { @Published var focus = "play" }
+// Player 1's controller or phone on the launcher (shell_players.m posts DMLauncherInput): up and down move a highlight over the rows, left goes to Play (right comes
+// back), A uses the highlighted row: a switch flips, a choice or a player opens a menu of its options, a slider takes left and right until A or B. B goes back
+// (closes the menu, ends the slider, or goes to Play) and + starts the game. Touch works as before
+private struct NavMenu {
+    struct Option { let label: String; var current = false; var destructive = false; let run: () -> Void }
+    let title: String
+    let options: [Option]
+    var index: Int
+}
+private final class NavModel: ObservableObject {
+    @Published var focus = "play"
+    @Published var editing = false   // the highlighted slider takes left and right
+    @Published var menu: NavMenu?
+    var list = ""                     // the row left for Play, where right goes back to
+}
 private struct NavHighlight: ViewModifier {
     let id: String
     @EnvironmentObject var nav: NavModel
     func body(content: Content) -> some View {
-        content.id(id).listRowBackground(nav.focus == id ? Color.accentColor.opacity(0.35) : Color(uiColor: .secondarySystemGroupedBackground))
+        let on = nav.focus == id
+        content.id(id).listRowBackground(on ? Color.accentColor.opacity(nav.editing ? 0.6 : 0.35) : Color(uiColor: .secondarySystemGroupedBackground))
     }
 }
 private extension View { func nav(_ id: String) -> some View { modifier(NavHighlight(id: id)) } }
-private struct NavItem { let id: String; var activate: () -> Void = {}; var adjust: ((Int) -> Void)? = nil }
+private struct NavItem { let id: String; var slider = false; var activate: () -> Void = {}; var adjust: (Int) -> Void = { _ in } }
+
+private struct NavMenuView: View {   // the menu A opened, over the launcher; it takes touches too
+    @ObservedObject var nav: NavModel
+    var body: some View {
+        if let menu = nav.menu {
+            ZStack {
+                Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { nav.menu = nil }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(menu.title).font(.headline).padding(.horizontal, 12).padding(.bottom, 6)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 4) {
+                                ForEach(menu.options.indices, id: \.self) { i in
+                                    let o = menu.options[i]
+                                    Button { nav.menu = nil; o.run() } label: {
+                                        HStack {
+                                            Text(o.label).foregroundStyle(o.destructive ? Color.red : Color.primary)
+                                            Spacer()
+                                            if o.current { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                                        }
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(RoundedRectangle(cornerRadius: 10).fill(i == menu.index ? Color.accentColor.opacity(0.45) : Color.clear))
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(i)
+                                }
+                            }
+                        }
+                        .frame(height: min(CGFloat(menu.options.count) * 46, 420))
+                        .onChange(of: menu.index) { _, i in withAnimation { proxy.scrollTo(i, anchor: .center) } }
+                    }
+                }
+                .padding(16)
+                .frame(width: 420)
+                .background(RoundedRectangle(cornerRadius: 18).fill(Color(uiColor: .secondarySystemBackground)))
+            }
+        }
+    }
+}
 
 private extension LauncherModel {
-    // One step of a setting from a controller (d -1 or +1): a toggle flips, a choice moves through its options (wrapping around), a slider moves by its step
+    // One step of a setting from a controller (d -1 or +1): a toggle flips, a slider moves by its step (a choice opens a menu instead)
     func step(_ s: Setting, _ d: Int) {
         let v = values[s.env] ?? s.def
         switch s.kind {
-        case "choice":
-            guard let o = s.options, !o.isEmpty else { return }
-            let i = o.firstIndex { $0[0] == v } ?? 0
-            values[s.env] = o[((i + d) % o.count + o.count) % o.count][0]
         case "range":
             let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
             values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, (Double(v) ?? hi) + Double(d) * st)))
@@ -505,6 +553,7 @@ private struct LauncherView: View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 VStack(spacing: 16) {
+                    Spacer(minLength: 0)
                     if let icon = appIcon() {
                         Image(uiImage: icon).resizable().frame(width: 96, height: 96)
                             .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -515,8 +564,8 @@ private struct LauncherView: View {
                     Text(tr("Version") + " " + ((info("CFBundleShortVersionString") as? String) ?? ""))
                         .font(.callout).foregroundStyle(.secondary)
                     playButton
-                    Text(tr("Player 1's controller or phone: D-pad to move, A to choose, + to start (Xbox: ≡)."))
-                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Spacer(minLength: 8)
+                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
                 }
                 .padding(16)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
@@ -535,7 +584,6 @@ private struct LauncherView: View {
                             }
                         }
                     }
-                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsSection() }
                     Section {
                         Button(tr("Reset to tested defaults")) { m.reset() }
                             .disabled(!m.changed)
@@ -563,6 +611,7 @@ private struct LauncherView: View {
                 }
                 .frame(width: geometry.size.width * 2 / 3)
             }
+            .overlay { NavMenuView(nav: nav) }
         }
         .environmentObject(nav)
         .environmentObject(activity)
@@ -591,53 +640,93 @@ private struct LauncherView: View {
     }
 
     // ---- Player 1's controller ----
-    private func navItems() -> [NavItem] {   // in screen order; a setting an env file set is skipped
-        var items = [NavItem(id: "play", activate: play)]
-        let last = players.players.map(\.player).max() ?? 1
-        for r in players.players {
-            items.append(NavItem(id: "p\(r.player)", activate: { players.send(["op": "swap", "a": r.player, "b": r.player % last + 1]) },
-                                 adjust: { _ in players.send(["op": "layout", "p": r.player, "xbox": r.xbox ? 0 : 1]) }))
+    private func choices(_ title: String, _ o: [(String, Bool, () -> Void)]) -> NavMenu {
+        NavMenu(title: title, options: o.map { NavMenu.Option(label: $0.0, current: $0.1, run: $0.2) }, index: o.firstIndex { $0.1 } ?? 0)
+    }
+    private func playerMenu(_ r: PlayerRow) -> NavMenu {   // player 1 sets up any player
+        var o = [NavMenu.Option(label: tr("Switch layout"), current: !r.xbox, run: { players.send(["op": "layout", "p": r.player, "xbox": 0]) }),
+                 NavMenu.Option(label: tr("Xbox layout"), current: r.xbox, run: { players.send(["op": "layout", "p": r.player, "xbox": 1]) }),
+                 NavMenu.Option(label: tr("Identify (buzz or flash)"), run: { players.send(["op": "identify", "p": r.player]) })]
+        for n in 1...8 where n != r.player {
+            let who = players.players.first { $0.player == n }.map(playerTitle)
+            let label = zhHant ? "換到 \(n)P" + (who.map { "（和 \($0) 交換）" } ?? "") : "Move to \(n)P" + (who.map { " (swap with \($0))" } ?? "")
+            o.append(NavMenu.Option(label: label, run: { players.send(["op": "swap", "a": r.player, "b": n]); nav.focus = "p\(n)" }))   // the highlight goes with it
         }
+        o.append(NavMenu.Option(label: tr("Remove"), destructive: true, run: { players.send(["op": "kick", "p": r.player]) }))
+        return NavMenu(title: "\(r.player)P · " + playerTitle(r), options: o, index: r.xbox ? 1 : 0)
+    }
+    private func navItems() -> [NavItem] {   // the rows in screen order (Play is apart); a setting an env file set is skipped
+        var items: [NavItem] = []
+        for r in players.players { items.append(NavItem(id: "p\(r.player)", activate: { nav.menu = playerMenu(r) })) }
         for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
         for section in m.sections {
             for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
-                let slider = s.kind == "range" || s.kind == "memory"
-                items.append(NavItem(id: "s:" + s.env, activate: { if !slider { m.step(s, 1) } }, adjust: { m.step(s, $0) }))
+                switch s.kind {
+                case "choice":
+                    items.append(NavItem(id: "s:" + s.env, activate: {
+                        let v = m.values[s.env] ?? s.def
+                        nav.menu = choices(tr(s.label), (s.options ?? []).map { o in (tr(o[1]), o[0] == v, { m.values[s.env] = o[0] }) })
+                    }))
+                case "range", "memory": items.append(NavItem(id: "s:" + s.env, slider: true, adjust: { m.step(s, $0) }))
+                default: items.append(NavItem(id: "s:" + s.env, activate: { m.step(s, 1) }))
+                }
             }
-            if section == "Game" && !shell.fpsLocked { items.append(NavItem(id: "fps", activate: { shell.fps = shell.fps == 30 ? 60 : 30 }, adjust: { _ in shell.fps = shell.fps == 30 ? 60 : 30 })) }
+            if section == "Game" && !shell.fpsLocked {
+                items.append(NavItem(id: "fps", activate: {
+                    nav.menu = choices(tr("Frame rate cap"), [("30 fps", shell.fps == 30, { shell.fps = 30 }), ("60 fps", shell.fps == 60, { shell.fps = 60 })])
+                }))
+            }
             if section == "Controls" {
-                if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() }, adjust: { _ in shell.gyro.toggle() })) }
-                items.append(NavItem(id: "touchOpacity", adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
-                items.append(NavItem(id: "touchScale", adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) }))
+                if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() })) }
+                items.append(NavItem(id: "touchOpacity", slider: true, adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
+                items.append(NavItem(id: "touchScale", slider: true, adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) }))
             }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
         items.append(NavItem(id: "folder", activate: openGameFolder))
         return items
     }
-    private func navMove(_ key: String) {
+    private func navDirection(_ key: String) {
+        if var menu = nav.menu {
+            if key == "up" || key == "down" { menu.index = Swift.max(0, Swift.min(menu.options.count - 1, menu.index + (key == "up" ? -1 : 1))); nav.menu = menu }
+            return
+        }
         let items = navItems()
-        guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.focus = "play"; return }   // its row went away
+        if nav.focus == "play" {   // right (or down) goes back to the row left for Play
+            if key == "right" || key == "down" { nav.focus = items.contains { $0.id == nav.list } ? nav.list : items.first?.id ?? "play" }
+            return
+        }
+        guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.editing = false; nav.focus = items.first?.id ?? "play"; return }   // its row went away
         switch key {
-        case "up": nav.focus = items[Swift.max(0, i - 1)].id
-        case "down": nav.focus = items[Swift.min(items.count - 1, i + 1)].id
-        case "left": items[i].adjust?(-1)
-        default: items[i].adjust?(1)
+        case "left": if nav.editing { items[i].adjust(-1) } else { nav.list = nav.focus; nav.focus = "play" }
+        case "right": if nav.editing { items[i].adjust(1) }
+        case "up": nav.editing = false; nav.focus = items[Swift.max(0, i - 1)].id
+        default: nav.editing = false; nav.focus = items[Swift.min(items.count - 1, i + 1)].id
         }
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
         guard let key = u?["key"] as? String else { return }
+        if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
+        held?.task.cancel(); held = nil
         switch key {
-        case "plus": play()
-        case "a": navItems().first { $0.id == nav.focus }?.activate()
-        case "b": nav.focus = "play"
-        default:   // a direction: once, then repeated while held
-            if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }
-            held?.task.cancel()
-            navMove(key)
+        case "plus": nav.menu = nil; play()
+        case "a":
+            if let menu = nav.menu { nav.menu = nil; menu.options[menu.index].run(); return }
+            if nav.editing { nav.editing = false; return }
+            if nav.focus == "play" { play(); return }
+            guard let item = navItems().first(where: { $0.id == nav.focus }) else { return }
+            if item.slider { nav.editing = true } else { item.activate() }
+        case "b":   // back: out of the menu or the slider, else to Play
+            if nav.menu != nil { nav.menu = nil }
+            else if nav.editing { nav.editing = false }
+            else if nav.focus != "play" { nav.list = nav.focus; nav.focus = "play" }
+        default:   // a direction: once, then repeated while held (moving up and down, or a slider)
+            let repeats = key == "up" || key == "down" || nav.editing
+            navDirection(key)
+            guard repeats else { return }
             held = (key, Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(400))
-                while !Task.isCancelled { navMove(key); try? await Task.sleep(for: .milliseconds(120)) }
+                while !Task.isCancelled { navDirection(key); try? await Task.sleep(for: .milliseconds(120)) }
             })
         }
     }
