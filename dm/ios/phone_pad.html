@@ -14,12 +14,10 @@
   #pad { position:fixed; inset:0; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   .piece { position:absolute; inset:0; pointer-events:none; }
   .piece > * { pointer-events:auto; }
-  /* Xbox layout (the iPad picks it per phone): A bottom, B right, X left, Y top, the letters in Xbox colours */
-  body.xbox [data-bit="0"] { color:#6cc04a; box-shadow:inset 0 0 0 2px #6cc04a55; }
-  body.xbox [data-bit="1"] { color:#ef4b3f; box-shadow:inset 0 0 0 2px #ef4b3f55; }
-  body.xbox [data-bit="2"] { color:#3a8ee6; box-shadow:inset 0 0 0 2px #3a8ee655; }
-  body.xbox [data-bit="3"] { color:#f2c230; box-shadow:inset 0 0 0 2px #f2c23055; }
-  body.xbox .b.on[data-bit] { color:var(--fg); }
+  /* Xbox layout (the iPad picks it per phone): A bottom, B right, X left, Y top, each button in its Xbox colour (lit in full while pressed) */
+  body.xbox .b[data-bit="0"] { --c:#5fbf3f; } body.xbox .b[data-bit="1"] { --c:#ec4134; } body.xbox .b[data-bit="2"] { --c:#3a8ee6; } body.xbox .b[data-bit="3"] { --c:#f2c230; }
+  body.xbox .piece[data-k="abxy"] .b { color:var(--c); background:var(--btn); background:color-mix(in srgb, var(--c) 22%, var(--btn)); box-shadow:inset 0 0 0 2px var(--c); font-size:22px; font-weight:800; }
+  body.xbox .piece[data-k="abxy"] .b.on { color:#fff; background:var(--c); }
   body.editing .piece.sel > * { outline:2px dashed var(--btn-on); outline-offset:3px; }
   .b { position:absolute; display:flex; align-items:center; justify-content:center; background:var(--btn); border-radius:50%; font-weight:600; font-size:18px; }
   .b.on { background:var(--btn-on); }

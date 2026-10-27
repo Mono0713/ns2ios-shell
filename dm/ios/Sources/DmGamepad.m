@@ -110,8 +110,10 @@ static __weak DmGamepad *g_view;
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
     BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
-    CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
-    BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
+    CALayer *_controls;                            // holds every control layer: hidden while a controller or phone plays (the view itself stays, for game touches)
+    BOOL _padOff;                                  // the controls are hidden: every touch goes to the game
+    BOOL _external;                                // a physical controller or a phone plays: the controls show only for a while after a tap
+    NSTimer *_peekTimer;
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
 }
 
@@ -300,6 +302,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     BOOL game = NO;
+    if (_external) [self peek];   // a tap brings the hidden controls back for a while; this touch already uses them
     for (UITouch *t in ts) {
         if (_padOff) { game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
@@ -345,7 +348,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     [self recompute];
     if (swap) [self nextLayout];
 }
-- (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
+- (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; if (_external) [self peek]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
 - (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
 
@@ -419,15 +422,38 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     [CATransaction commit];
 }
 
-// ---- Physical controllers ----
-// Each controller is a player of its own, from app launch: shell_players.m reads them and takes their players from the shared slot table (shell_slots.h). Here they only
-// hide the touch gamepad while one plays; a phone does not hide it (the iPad may still be played by touch).
-int shell_players_controllers(void);
+// ---- Physical controllers and phones ----
+// Each controller is a player of its own, from app launch: shell_players.m reads them and takes their players from the shared slot table (shell_slots.h), as phone_pads.c
+// does for the phones. Here they only hide the touch gamepad while one plays: a tap on the screen shows it again for PEEK_SECONDS after the last touch (the iPad may
+// still be played by touch), then it fades out.
+enum { PEEK_SECONDS = 5 };
+int shell_players_external(void);
 void shell_players_release(void);
+- (void)showControls:(BOOL)on {
+    if (on == !_padOff) return;
+    _padOff = !on;
+    [CATransaction begin]; [CATransaction setAnimationDuration:on ? 0.15 : 0.4];
+    _controls.opacity = on ? 1 : 0;
+    [CATransaction commit];
+    if (!on) [self reset];
+}
+- (void)peek {
+    [self showControls:YES];
+    [_peekTimer invalidate];
+    __weak DmGamepad *weakSelf = self;
+    _peekTimer = [NSTimer scheduledTimerWithTimeInterval:PEEK_SECONDS repeats:NO block:^(NSTimer *t) { [weakSelf peekEnd]; }];
+}
+- (void)peekEnd {
+    if (!_external) return;
+    if (_owner.count) { [self peek]; return; }   // still held: wait for its release
+    [self showControls:NO];
+}
 - (void)padsChanged {
-    BOOL any = shell_players_controllers() > 0;
-    if (any == _padOff) return;
-    _padOff = any; _controls.hidden = any; [self reset];
+    BOOL any = shell_players_external() > 0;
+    if (any == _external) return;
+    _external = any;
+    [_peekTimer invalidate]; _peekTimer = nil;
+    [self showControls:!any];
 }
 @end
 

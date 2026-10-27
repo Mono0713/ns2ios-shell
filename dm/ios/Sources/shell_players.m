@@ -9,6 +9,8 @@
 //                                               | launcher (on 0/1: the settings screen is shown)
 //   DMLauncherInput (posted here, main thread)   while the launcher is shown, player 1's controller or phone: userInfo key: a | b | plus | up | down | left | right
 //                                               (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can repeat them)
+//   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
+//                                               about 7 times a second per player: its row lights up
 // Button layout, per device (its name: a controller's model, a phone's id) and kept in NSUserDefaults: Xbox (A, B, X, Y as printed: A at the bottom) or Switch (by
 // position: right A, bottom B). A device that has no choice yet: an Xbox-branded controller gets Xbox, another controller what DM_PAD_BY_LABEL says (the launcher's
 // old switch, 0 when unset), a phone Switch. A phone's page draws its buttons in its layout (phone_pads.c sends it).
@@ -17,6 +19,7 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <time.h>
 #include "dm.h"
 #include "dm_input.h"
 #include "haptics_apple.h"
@@ -40,9 +43,18 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 // ---- Player 1 drives the launcher (shell_slot_input: controllers here, phones on the phone server's thread) ----
 static atomic_int g_launcher;
 static _Atomic uint64_t g_last_nav;   // player 1's buttons, the left stick folded into the D-pad
+static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
-    if (p != 0) return;   // the settings screen is player 1's only
     const int32_t t = DM_STICK_MAX / 2;
+    if (atomic_load(&g_launcher) && (buttons || abs(lx) > t || abs(ly) > t)) {   // any player's input lights its row, so each one sees which player it is
+        uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        if (now - atomic_load(&g_last_active[p]) > 150000000) {
+            atomic_store(&g_last_active[p], now);
+            NSDictionary *u = @{@"p": @(p + 1)};
+            dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayerActive" object:nil userInfo:u]; });
+        }
+    }
+    if (p != 0) return;   // the settings screen is player 1's only
     if (lx < -t) buttons |= 1ull << B_LEFT;
     if (lx > t) buttons |= 1ull << B_RIGHT;
     if (ly > t) buttons |= 1ull << B_UP;
@@ -103,7 +115,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         LOG("controller '%s' connected: player %d", name, p + 1);
         read_pad(c);
     }
-    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: the touch gamepad hides while a controller plays
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: the touch gamepad hides while a controller or phone plays
 }
 
 // ---- The launcher's moves (shell_slots.h handlers for controllers; main thread) ----
@@ -165,7 +177,10 @@ static void post_players(void) {
 static atomic_int g_post_pending;   // changes in a burst (a swap is two moves and a change) post the list once
 static void slots_changed(void) {   // any thread (a phone joins on the server's)
     if (atomic_exchange(&g_post_pending, 1)) return;
-    dispatch_async(dispatch_get_main_queue(), ^{ atomic_store(&g_post_pending, 0); post_players(); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        atomic_store(&g_post_pending, 0); post_players();
+        [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: a phone that joined or left
+    });
 }
 
 static void command(NSDictionary *u) {
@@ -204,5 +219,9 @@ void shell_players_start(void) {   // main.m, on the main thread, once
     [nc addObserverForName:@"DMPlayersCommand" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { command(note.userInfo); }];
     dispatch_async(dispatch_get_main_queue(), ^{ pads_changed(nil); });   // the ones already connected, once the app runs
 }
-int shell_players_controllers(void) { return (int)g_pads.count; }   // controllers playing now (main thread): the touch gamepad hides while there is one
+int shell_players_external(void) {   // controllers and phones playing now (main thread): the touch gamepad hides while there is one
+    shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
+    int n = 0; for (int p = 0; p < DM_PLAYERS; p++) n += info[p].kind != SHELL_SLOT_NONE;
+    return n;
+}
 void shell_players_release(void) { for (GCController *c in g_pads) { int p = shell_slot_of((__bridge const void *)c); if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0); } }   // on resign active

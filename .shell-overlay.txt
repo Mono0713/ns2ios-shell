@@ -64,7 +64,7 @@
 ~ dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
 ~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host; shell_players_start and phone_pads_start at launch
-~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only; physical controllers moved to shell_players.m (the pad only hides while one plays)
+~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only; physical controllers moved to shell_players.m (the pad hides while a controller or phone plays and shows for a few seconds after a tap)
 ~ dm/ios/project.yml           # local network permission and the Bonjour service (_nxpad._tcp) for the phone gamepads
 ~ dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
 ~ dm/host/haptics_apple.m       # controller rumble: plain players and the default locality when advanced players fail; routes rebuilt and the audio-interruption suspension lifted on becoming active

@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,224 @@
+@@ -3,10 +3,253 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -80,6 +80,36 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    func send(_ u: [String: Any]) { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: u) }
 +}
 +
++// Which players just pressed something (shell_players.m posts DMPlayerActive): their badge lights up for a moment, so each one sees which row is theirs.
++// Apart from PlayersModel, so a press redraws only the badges
++private final class ActivityModel: ObservableObject {
++    @Published var lit: Set<Int> = []
++    private var token: NSObjectProtocol?
++    private var generation: [Int: Int] = [:]
++    init() {
++        token = NotificationCenter.default.addObserver(forName: Notification.Name("DMPlayerActive"), object: nil, queue: .main) { [weak self] n in
++            guard let self, let p = n.userInfo?["p"] as? Int else { return }
++            let g = (generation[p] ?? 0) + 1; generation[p] = g
++            if !lit.contains(p) { lit.insert(p) }
++            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if self?.generation[p] == g { self?.lit.remove(p) } }
++        }
++    }
++    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
++}
++private struct PlayerBadge: View {
++    let player: Int
++    @EnvironmentObject var activity: ActivityModel
++    var body: some View {
++        let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
++        Text("\(player)P").font(.headline.monospacedDigit()).foregroundStyle(.white)
++            .frame(width: 44, height: 44).background(Circle().fill(color))
++            .overlay(Circle().stroke(Color.white, lineWidth: on ? 3 : 0))
++            .shadow(color: color, radius: on ? 12 : 0)
++            .scaleEffect(on ? 1.15 : 1)
++            .animation(.easeOut(duration: 0.15), value: on)
++    }
++}
++
 +private let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
 +private func controllerIcon(_ label: String) -> String {
 +    let l = label.lowercased()
@@ -100,8 +130,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +
 +    var body: some View {
 +        HStack(spacing: 12) {
-+            Text("\(p.player)P").font(.headline.monospacedDigit()).foregroundStyle(.white)
-+                .frame(width: 44, height: 44).background(Circle().fill(playerColors[(p.player - 1) % playerColors.count]))
++            PlayerBadge(player: p.player)
 +            Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.title2).frame(width: 32)
 +                .accessibilityHidden(true)
 +            VStack(alignment: .leading, spacing: 2) {
@@ -226,7 +255,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +232,31 @@
+@@ -18,17 +261,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -260,7 +289,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +266,7 @@
+@@ -38,7 +295,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -269,7 +298,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +279,20 @@
+@@ -51,8 +308,20 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -291,7 +320,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -62,12 +302,56 @@
+@@ -62,12 +331,57 @@
          }
          .disabled(locked)
      }
@@ -344,11 +373,12 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
      @State private var memory = os_proc_available_memory()
 +    @StateObject private var players = PlayersModel()
 +    @StateObject private var nav = NavModel()
++    @StateObject private var activity = ActivityModel()
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
  
      var body: some View {
          GeometryReader { geometry in
-@@ -78,29 +362,42 @@
+@@ -78,29 +392,42 @@
                              .clipShape(RoundedRectangle(cornerRadius: 22))
                              .accessibilityHidden(true)
                      }
@@ -398,7 +428,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,21 +405,80 @@
+@@ -108,21 +435,81 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -408,6 +438,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              }
          }
 +        .environmentObject(nav)
++        .environmentObject(activity)
          .preferredColorScheme(.dark)
 +        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
 +        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }

@@ -78,6 +78,36 @@ private final class PlayersModel: ObservableObject {
     func send(_ u: [String: Any]) { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: u) }
 }
 
+// Which players just pressed something (shell_players.m posts DMPlayerActive): their badge lights up for a moment, so each one sees which row is theirs.
+// Apart from PlayersModel, so a press redraws only the badges
+private final class ActivityModel: ObservableObject {
+    @Published var lit: Set<Int> = []
+    private var token: NSObjectProtocol?
+    private var generation: [Int: Int] = [:]
+    init() {
+        token = NotificationCenter.default.addObserver(forName: Notification.Name("DMPlayerActive"), object: nil, queue: .main) { [weak self] n in
+            guard let self, let p = n.userInfo?["p"] as? Int else { return }
+            let g = (generation[p] ?? 0) + 1; generation[p] = g
+            if !lit.contains(p) { lit.insert(p) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in if self?.generation[p] == g { self?.lit.remove(p) } }
+        }
+    }
+    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
+}
+private struct PlayerBadge: View {
+    let player: Int
+    @EnvironmentObject var activity: ActivityModel
+    var body: some View {
+        let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
+        Text("\(player)P").font(.headline.monospacedDigit()).foregroundStyle(.white)
+            .frame(width: 44, height: 44).background(Circle().fill(color))
+            .overlay(Circle().stroke(Color.white, lineWidth: on ? 3 : 0))
+            .shadow(color: color, radius: on ? 12 : 0)
+            .scaleEffect(on ? 1.15 : 1)
+            .animation(.easeOut(duration: 0.15), value: on)
+    }
+}
+
 private let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
 private func controllerIcon(_ label: String) -> String {
     let l = label.lowercased()
@@ -98,8 +128,7 @@ private struct PlayerRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text("\(p.player)P").font(.headline.monospacedDigit()).foregroundStyle(.white)
-                .frame(width: 44, height: 44).background(Circle().fill(playerColors[(p.player - 1) % playerColors.count]))
+            PlayerBadge(player: p.player)
             Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.title2).frame(width: 32)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
@@ -351,6 +380,7 @@ private struct LauncherView: View {
     @State private var memory = os_proc_available_memory()
     @StateObject private var players = PlayersModel()
     @StateObject private var nav = NavModel()
+    @StateObject private var activity = ActivityModel()
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
 
     var body: some View {
@@ -411,6 +441,7 @@ private struct LauncherView: View {
             }
         }
         .environmentObject(nav)
+        .environmentObject(activity)
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
         .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
