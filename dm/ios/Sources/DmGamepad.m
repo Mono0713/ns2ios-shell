@@ -10,7 +10,7 @@
 //     then in 3D the right stick for a touch in the right third.
 //   Everything hugs the edges and corners to leave the picture room; controls sit over the picture, one CAShapeLayer each: a press only swaps the fill, a stick only moves its knob, nothing redraws the whole screen.
 //   Touches no control takes (in 3D, those outside the right third) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
-//   The virtual gamepad (layout button included) hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included) and map by position: bottom = B, right = A, left = Y, top = X (same positions as on a Switch controller).
+//   The virtual gamepad (layout button included) hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included); each is a player of its own and has its own button layout (shell_players.m).
 //   Shaking the phone shakes the controller (DM_BTN_SHAKE: its six-axis sensor, hle_hid.c), whichever controls are in use; see "Shaking the phone" below.
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
@@ -22,7 +22,6 @@
 #include "front.h"
 #include "game_profile.h"
 #include "haptics_apple.h"
-#include "shell_slots.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME };   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
@@ -168,8 +167,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _full = l == 1; _tap = l == 2;
         [self applyLayout];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-        [nc addObserver:self selector:@selector(padsChangedNote:) name:GCControllerDidConnectNotification object:nil];
-        [nc addObserver:self selector:@selector(padsChangedNote:) name:GCControllerDidDisconnectNotification object:nil];
+        [nc addObserver:self selector:@selector(padsChanged) name:@"DMPadsChanged" object:nil];   // shell_players.m, on the main thread
         [self padsChanged];
         motion_start();
     }
@@ -422,52 +420,14 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 }
 
 // ---- Physical controllers ----
-// Each controller is a player of its own (local co-op), as on the Mac (front_mac.m): pad_slots.h gives the first one player 1, the next player 2, and so on up to 8 (a reconnected
-// controller gets its player back). They go to dm_pad_set_player; player 1's is ORed with the touch gamepad in hle_hid.c, and a one-player game still sees every controller as player 1.
-// The slots are the app's shared table (shell_slots.h), which the phones (phone_pads.c) take theirs from too.
-static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
-// DM_PAD_BY_LABEL=1 (the launcher's Xbox button layout): A, B, X and Y as printed on the controller. Off, they go by position as on a Switch pad
-// (right A, bottom B), so an Xbox controller's A, at the bottom, is the Switch's B. Read once: the launcher sets it before the game view and the pad exist
-static int by_label(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_PAD_BY_LABEL"); v = e && atoi(e) != 0; } return v; }
-static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
-static void read_pad(GCExtendedGamepad *g) {
-    int p = shell_slot_of((__bridge const void *)g.controller); if (p < 0) return;
-    dm_haptics_apple_controller(p, g.controller);
-    uint64_t m = 0;
-    #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
-    if (by_label()) { K(g.buttonA, B_A); K(g.buttonB, B_B); K(g.buttonX, B_X); K(g.buttonY, B_Y); }   // by label (Xbox layout)
-    else { K(g.buttonB, B_A); K(g.buttonA, B_B); K(g.buttonY, B_X); K(g.buttonX, B_Y); }   // by position: right A, bottom B, top X, left Y
-    K(g.leftShoulder, B_L); K(g.rightShoulder, B_R); K(g.leftTrigger, B_ZL); K(g.rightTrigger, B_ZR);
-    K(g.buttonMenu, B_PLUS); if (g.buttonOptions) K(g.buttonOptions, B_MINUS);
-    if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
-    K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
-    #undef K
-    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
-}
-- (void)padsChangedNote:(NSNotification *)n {   // a disconnect may still list the controller that went away: it is the notification's object
-    [self padsChangedGone:[n.name isEqualToString:GCControllerDidDisconnectNotification] ? n.object : nil];
-}
-- (void)padsChanged { [self padsChangedGone:nil]; }
-- (void)padsChangedGone:(GCController *)gone {
-    NSArray<GCController *> *now = GCController.controllers;
-    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p] && (g_held[p] == gone || ![now containsObject:g_held[p]])) {
-        LOG("controller '%s' disconnected: player %d is free", g_held[p].vendorName.UTF8String ?: "?", p + 1);
-        g_held[p].extendedGamepad.valueChangedHandler = nil;
-        dm_haptics_apple_controller(p, nil);
-        shell_slot_free((__bridge const void *)g_held[p]); g_held[p] = nil;
-        dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
-    }
-    for (GCController *c in now) if (c.extendedGamepad && c != gone && shell_slot_of((__bridge const void *)c) < 0) {
-        int p = shell_slot_take((__bridge const void *)c, c.vendorName.UTF8String ?: "?");
-        if (p < 0) { LOG("controller connected: all %d players are taken, not used", DM_PLAYERS); continue; }
-        g_held[p] = c;
-        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
-        LOG("controller '%s' connected: player %d", c.vendorName.UTF8String ?: "?", p + 1);
-        read_pad(c.extendedGamepad);
-    }
-    BOOL any = NO;   // a physical controller hides the touch gamepad; a phone does not (the iPad may still be played by touch)
-    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) any = YES;
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });
+// Each controller is a player of its own, from app launch: shell_players.m reads them and takes their players from the shared slot table (shell_slots.h). Here they only
+// hide the touch gamepad while one plays; a phone does not hide it (the iPad may still be played by touch).
+int shell_players_controllers(void);
+void shell_players_release(void);
+- (void)padsChanged {
+    BOOL any = shell_players_controllers() > 0;
+    if (any == _padOff) return;
+    _padOff = any; _controls.hidden = any; [self reset];
 }
 @end
 
@@ -475,5 +435,5 @@ UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWi
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
     pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_shake_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish();
-    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);   // each controller's player too
+    dispatch_async(dispatch_get_main_queue(), ^{ shell_players_release(); });   // each controller's player too
 }

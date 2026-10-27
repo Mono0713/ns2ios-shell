@@ -13,3 +13,4 @@ Carry every profile switch the shell reads from the environment	壳从环境变�
 Write the Chinese half of the release notes in Chinese: it listed the English commit subjects	发布说明的中文部分改成中文：原来「本版变更」那一段列的仍是英文提交标题
 Share one player-slot table between controllers and phones	实体手把与手机网页手把共用一份玩家编号表（加锁），两边不会再抢同一个玩家
 Phone web gamepads: each phone on the same Wi-Fi is a player of its own	手机网页手柄：同一个 Wi-Fi 的手机用浏览器扫码就能当手柄，每支手机是一个独立玩家（排在实体手柄后面，最多 8P），设置画面显示网址和 QR 码
+Phone gamepads: full screen, a layout editor, and a player list with per-player button layouts	手机手柄第二版：手机页面一点就全屏、可拖动调整按键位置和大小；设置画面最上面显示玩家列表（图标、移除、加入、互换编号），每个玩家各自选 Switch / Xbox 按键配置；实体手柄从 App 启动就算玩家

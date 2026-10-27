@@ -71,7 +71,8 @@ class PhonePadsTests(unittest.TestCase):
         if r.returncode: raise AssertionError(r.stdout + r.stderr)
         cls.port = free_port()
         cls.state_file = cls.tmp / 'state.json'
-        cls.proc = subprocess.Popen([str(exe), str(cls.state_file), str(cls.controllers)], env=dict(os.environ, DM_PHONE_PADS_PORT=str(cls.port)), stderr=subprocess.PIPE, text=True)
+        cls.proc = subprocess.Popen([str(exe), str(cls.state_file), str(cls.controllers)], env=dict(os.environ, DM_PHONE_PADS_PORT=str(cls.port)), stdin=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True)
         for _ in range(100):
             if cls.state_file.exists(): break
             time.sleep(0.02)
@@ -80,6 +81,9 @@ class PhonePadsTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.proc.kill(); cls.proc.wait()
         shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def launcher(self, line):   # what the launcher's player list does (shell_slots.h)
+        self.proc.stdin.write(line + '\n'); self.proc.stdin.flush()
 
     def host(self):
         time.sleep(0.1)
@@ -101,8 +105,8 @@ class PhonePadsTests(unittest.TestCase):
     def test_players(self):
         a, b = Phone(self.port), Phone(self.port)
         self.assertTrue(a.handshake_ok and b.handshake_ok)
-        self.assertEqual(a.hello('phone-a'), {'t': 'assign', 'player': 1})
-        self.assertEqual(b.hello('phone-b'), {'t': 'assign', 'player': 2})
+        self.assertEqual(a.hello('phone-a'), {'t': 'assign', 'layout': 'switch', 'player': 1})
+        self.assertEqual(b.hello('phone-b'), {'t': 'assign', 'layout': 'switch', 'player': 2})
         self.assertEqual(self.host()['mask'], 0b11)
         # input reaches each phone's own player; NpadButton bits pass through, sticks scale to the host's range
         a.state(1, 1 << 0, lx=127, ly=-127)
@@ -126,10 +130,10 @@ class PhonePadsTests(unittest.TestCase):
         self.assertEqual(host['mask'], 0b01)
         self.assertEqual(host['players'][1], [0, 0, 0, 0, 0])
         b = Phone(self.port)
-        self.assertEqual(b.hello('phone-b'), {'t': 'assign', 'player': 2})
+        self.assertEqual(b.hello('phone-b'), {'t': 'assign', 'layout': 'switch', 'player': 2})
         # the same phone on a second connection while the first is still open (a reloaded page): the new one takes over its player
         b2 = Phone(self.port)
-        self.assertEqual(b2.hello('phone-b'), {'t': 'assign', 'player': 2})
+        self.assertEqual(b2.hello('phone-b'), {'t': 'assign', 'layout': 'switch', 'player': 2})
         self.assertEqual(self.host()['mask'], 0b11)
         # eight players at most
         more = [Phone(self.port, f'phone-{i}') for i in range(6)]
@@ -147,10 +151,10 @@ class PhonePadsWithControllersTests(PhonePadsTests):
     test_page_is_served = None
     test_embedded_page_is_current = None
 
-    def test_phones_after_controllers(self):
+    def test_phones_after_controllers(self):   # and the launcher's swap, layout and remove
         self.assertEqual(self.host()['mask'], 0b11)
         a = Phone(self.port)
-        self.assertEqual(a.hello('phone-a'), {'t': 'assign', 'player': 3})
+        self.assertEqual(a.hello('phone-a'), {'t': 'assign', 'layout': 'switch', 'player': 3})
         self.assertEqual(self.host()['mask'], 0b111)
         a.state(1, 1 << 0)
         self.assertEqual(self.host()['players'][2][0], 1)
@@ -158,8 +162,31 @@ class PhonePadsWithControllersTests(PhonePadsTests):
         self.assertEqual(self.host()['mask'], 0xff)
         extra = Phone(self.port)
         self.assertEqual(extra.hello('phone-x'), {'t': 'full'})
+        # the launcher swaps a phone with a controller: the phone is told its new player and its input goes there
+        self.launcher('swap 0 2')
+        self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'switch'})
+        self.assertEqual(self.host()['slots'][0][0], 2)   # a phone (SHELL_SLOT_PHONE) holds player 1 now, a controller player 3
+        self.assertEqual(self.host()['slots'][2][0], 1)
+        a.state(2, 1 << 1)
+        self.assertEqual(self.host()['players'][0][0], 1 << 1)
+        # the Xbox layout reaches the page
+        self.launcher('layout 0 1')
+        self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'xbox'})
+        self.assertEqual(self.host()['slots'][0], [2, 1])
+        # a removed phone is released, told so, and stays out when it reconnects until it asks to join again
+        a.state(3, 1 << 0)
+        self.launcher('kick 0')
+        self.assertEqual(a.reply(), {'t': 'kicked'})
+        host = self.host()
+        self.assertEqual(host['players'][0][0], 0)
+        self.assertEqual(host['slots'][0][0], 0)
+        a.close()
+        a = Phone(self.port)
+        self.assertEqual(a.hello('phone-a'), {'t': 'kicked'})
+        a.frame(1, json.dumps({'t': 'hello', 'v': 1, 'id': 'phone-a', 'name': 'test', 'join': 1}).encode())
+        self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'switch'})
         for ph in [a, extra] + more: ph.close()
-        self.assertEqual(self.host()['mask'], 0b11)   # the phones leaving does not take the controllers' players away
+        self.assertEqual(self.host()['mask'], 0b110)   # the phones leaving does not take the controllers' players away (now players 2 and 3)
 
 if __name__ == '__main__':
     unittest.main()

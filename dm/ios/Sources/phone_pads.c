@@ -2,8 +2,11 @@
 // from the app's one player-slot table (shell_slots.h), which the physical controllers (DmGamepad.m) take theirs from too, so a phone and a controller never share a player and
 // dm_pad_players is set from one mask: a phone gets player 1 while no controller holds it (together with the touch gamepad, which stays player 1's), else the next free one,
 // up to 8. A phone that reloads its page or reconnects gets its player back while it is free, keyed on the id its page keeps in localStorage.
+// The launcher may swap a phone's player with another or remove the phone (shell_slots.h): a removed phone is told so (kicked) and stays out, even across reconnects, until
+// its page asks to join again or the app restarts.
 // One port serves the page (GET /, phone_pad_page.h, generated from phone_pad.html) and the controller stream (GET /ws, WebSocket). Protocol, all from the phone:
-//   text   {"t":"hello","v":1,"id":"<device id>","name":"<label>"}  -> answered {"t":"assign","player":<1..8>} or {"t":"full"}
+//   text   {"t":"hello","v":1,"id":"<device id>","name":"<label>"[,"join":1]}  -> answered {"t":"assign","player":<1..8>,"layout":"switch"|"xbox"}, {"t":"full"} or {"t":"kicked"}
+//          (join: the player asked to come back after the launcher removed the phone); assign comes again whenever the launcher moves the phone to another player or changes its button layout
 //   binary 8 bytes: 0x01, sequence (u8, wraps), buttons (u16 LE, NpadButton bits as dm_input.h), lx, ly, rx, ry (i8 each, -127..127, y up)
 // The phone sends on every change and at least every 100 ms; a phone silent for a second has everything released. One thread, poll(), plain BSD sockets.
 // The service is announced over Bonjour as _nxpad._tcp: besides letting tools find it, that is what makes iOS ask for local network access (NSLocalNetworkUsageDescription).
@@ -15,6 +18,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,8 +41,10 @@ typedef struct {
     size_t n; uint8_t in[IN_CAP];
     int last_seq; uint64_t last_ns; int released;
     char name[64], id[64];       // id: the phone's own (its page's localStorage), the slot table's name for it
+    _Atomic int moved, kicked, relayout;   // set by the launcher (shell_slots.h handlers, main thread), handled on the server thread
 } client;
-static client g_cl[MAX_CLIENTS];   // a client's address is its owner in the slot table
+static client g_cl[MAX_CLIENTS];   // a client's address is its owner in the slot table; only the server thread touches a client, but for the two flags
+static char g_banned[MAX_CLIENTS][64];   // ids of phones the launcher removed: they stay out until they ask to join again
 
 
 // ---- SHA-1 + base64, for the WebSocket handshake only ----
@@ -93,12 +99,13 @@ static void ws_text(int fd, const char *s) {
 }
 
 // ---- Players ----
-static void release(client *c) { if (c->player >= 0 && !c->released) { dm_pad_set_player(c->player, 0, 0, 0, 0, 0); c->released = 1; } }
+static void send_assign(client *c, int p);
+static void release(client *c) { int p = shell_slot_of(c); if (p >= 0 && !c->released) { dm_pad_set_player(p, 0, 0, 0, 0, 0); c->released = 1; } }
 static void drop(client *c) {
     if (c->player >= 0) {
         release(c);
-        shell_slot_free(c);
-        LOG("phone pads: '%s' disconnected: player %d is free (the phone gets it back when it reconnects)", c->name, c->player + 1);
+        int p = shell_slot_free(c);
+        LOG("phone pads: '%s' disconnected: player %d is free (the phone gets it back when it reconnects)", c->name, p + 1);
     }
     close(c->fd);
     memset(c, 0, sizeof *c); c->fd = -1; c->player = -1;
@@ -112,28 +119,60 @@ static int json_str(const char *j, const char *key, char *out, size_t cap) {
     size_t n = 0; while (*p && *p != '"' && n + 1 < cap) { unsigned char ch = (unsigned char)*p++; out[n++] = ch < 0x20 ? '?' : (char)ch; }
     out[n] = 0; return n > 0;
 }
+static int banned(const char *id, int unban) {
+    for (int i = 0; i < MAX_CLIENTS; i++) if (g_banned[i][0] && !strcmp(g_banned[i], id)) { if (unban) g_banned[i][0] = 0; return !unban; }
+    return 0;
+}
 static void on_hello(client *c, const char *json) {
     char id[64], name[32] = "phone";
     if (!json_str(json, "id", id, sizeof id)) return;
     json_str(json, "name", name, sizeof name);
+    if (banned(id, strstr(json, "\"join\"") != NULL)) { ws_text(c->fd, "{\"t\":\"kicked\"}"); return; }
     if (c->player >= 0) { release(c); shell_slot_free(c); c->player = -1; }
     // The same phone still connected on an older socket (a page that reloaded before the old connection timed out): close that one, so this one takes its player
     for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) drop(&g_cl[i]);
-    int p = shell_slot_take(c, id);   // a phone that held a player before has its id on that slot and gets it back while it is free
+    int p = shell_slot_take(c, id, SHELL_SLOT_PHONE, name);   // a phone that held a player before has its id on that slot and gets it back while it is free
     snprintf(c->name, sizeof c->name, "%s", name); snprintf(c->id, sizeof c->id, "%s", id);
     if (p < 0) { ws_text(c->fd, "{\"t\":\"full\"}"); LOG("phone pads: '%s' connected: all %d players are taken, not used", name, DM_PLAYERS); return; }
     c->player = p; c->last_seq = -1; c->last_ns = now_ns(); c->released = 1;
-    char msg[48]; snprintf(msg, sizeof msg, "{\"t\":\"assign\",\"player\":%d}", p + 1); ws_text(c->fd, msg);
+    send_assign(c, p);
     LOG("phone pads: '%s' connected: player %d", name, p + 1);
 }
 static void on_state(client *c, const uint8_t *b, size_t n) {
-    if (c->player < 0 || n < 8 || b[0] != 1) return;
+    int p = c->player < 0 ? -1 : shell_slot_of(c);   // the table's, not c->player: the launcher may have just moved the phone
+    if (p < 0 || n < 8 || b[0] != 1) return;
     int seq = b[1];
     if (c->last_seq >= 0 && ((seq - c->last_seq) & 255) > 128) return;   // older than the last one taken: arrived out of order
     c->last_seq = seq; c->last_ns = now_ns(); c->released = 0;
     uint64_t btn = (uint64_t)(b[2] | b[3] << 8);
     int32_t ax[4]; for (int i = 0; i < 4; i++) ax[i] = (int8_t)b[4 + i] * (DM_STICK_MAX / 127);
-    dm_pad_set_player(c->player, btn, ax[0], ax[1], ax[2], ax[3]);
+    dm_pad_set_player(p, btn, ax[0], ax[1], ax[2], ax[3]);
+}
+
+// ---- The launcher's moves and removals (shell_slots.h handlers): called on the main thread, carried out by the server thread ----
+static client *client_of(const void *owner) { const client *c = owner; return c >= g_cl && c < g_cl + MAX_CLIENTS ? (client *)c : NULL; }
+static void on_moved(const void *owner, int from, int to) { (void)from; (void)to; client *c = client_of(owner); if (c) atomic_store(&c->moved, 1); }
+static void on_kick(const void *owner) { client *c = client_of(owner); if (c) atomic_store(&c->kicked, 1); }
+static void on_layout(const void *owner, int xbox) { (void)xbox; client *c = client_of(owner); if (c) atomic_store(&c->relayout, 1); }
+static void send_assign(client *c, int p) {   // the player and the button layout the page shows
+    char msg[64]; snprintf(msg, sizeof msg, "{\"t\":\"assign\",\"player\":%d,\"layout\":\"%s\"}", p + 1, shell_slot_layout(c) ? "xbox" : "switch"); ws_text(c->fd, msg);
+}
+static void launcher_requests(client *c) {
+    if (atomic_exchange(&c->kicked, 0) && c->player >= 0) {
+        release(c);
+        shell_slot_free(c);
+        for (int i = 0; i < MAX_CLIENTS; i++) if (!g_banned[i][0]) { snprintf(g_banned[i], sizeof g_banned[i], "%s", c->id); break; }
+        LOG("phone pads: '%s' removed in the launcher: player %d is free", c->name, c->player + 1);
+        c->player = -1;
+        ws_text(c->fd, "{\"t\":\"kicked\"}");
+    }
+    if (atomic_exchange(&c->moved, 0) && c->player >= 0) {
+        int p = shell_slot_of(c); if (p < 0) return;
+        LOG("phone pads: '%s' moved in the launcher: player %d -> %d", c->name, c->player + 1, p + 1);
+        c->player = p; c->released = 0;   // its next packet (at most 100 ms away) feeds the new player
+        send_assign(c, p);
+    }
+    if (atomic_exchange(&c->relayout, 0) && c->player >= 0) send_assign(c, c->player);
 }
 
 // ---- HTTP and the WebSocket frames ----
@@ -213,6 +252,7 @@ static void *serve(void *arg) {
             }
             if (!on_readable(&g_cl[map[k]])) drop(&g_cl[map[k]]);
         }
+        for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0) launcher_requests(&g_cl[i]);
         uint64_t t = now_ns();   // a phone that went quiet (screen locked, out of range) leaves nothing pressed
         for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0 && g_cl[i].player >= 0 && t - g_cl[i].last_ns > SILENT_NS) release(&g_cl[i]);
     }
@@ -225,6 +265,7 @@ void phone_pads_start(void) {
     const char *ps = getenv("DM_PHONE_PADS_PORT"); int port = ps ? atoi(ps) : 8080;
     if (port <= 0 || port > 65535) port = 8080;
     signal(SIGPIPE, SIG_IGN);
+    shell_slots_handlers(SHELL_SLOT_PHONE, on_moved, on_kick, on_layout);
     int ls = socket(AF_INET, SOCK_STREAM, 0), one = 1;
     if (ls < 0) { LOG("[RED] phone pads: no socket (errno %d)", errno); return; }
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);

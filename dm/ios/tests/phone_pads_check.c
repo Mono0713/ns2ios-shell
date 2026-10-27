@@ -1,5 +1,6 @@
 // Stand-in host for test_phone_pads.py: runs phone_pads.c's server and writes what it hands the host (players mask, each player's buttons and sticks) to a file every 20 ms.
-// A second argument holds that many players for physical controllers first (DmGamepad.m takes them from the same table, shell_slots.c)
+// A second argument holds that many players for physical controllers first (shell_players.m takes them from the same table, shell_slots.c). Lines on stdin act as the
+// launcher: "swap <a> <b>", "kick <p>", "layout <p> <0|1>" (players counted from 0); the file also lists each slot's kind and layout
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,16 +19,30 @@ void dm_pad_set_player(int p, uint64_t b, int32_t lx, int32_t ly, int32_t rx, in
 void dm_pad_players(uint32_t mask) { pthread_mutex_lock(&g_mu); g_mask = mask; pthread_mutex_unlock(&g_mu); }
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec; }
 
+static void *commands(void *arg) {
+    (void)arg; char line[64]; int a, b;
+    while (fgets(line, sizeof line, stdin)) {
+        if (sscanf(line, "swap %d %d", &a, &b) == 2) shell_slot_swap(a, b);
+        else if (sscanf(line, "kick %d", &a) == 1) shell_slot_kick(a);
+        else if (sscanf(line, "layout %d %d", &a, &b) == 2) shell_slot_set_layout(a, b);
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) return 2;
     char tmp[1024]; snprintf(tmp, sizeof tmp, "%s.tmp", argv[1]);
     static int controllers[DM_PLAYERS];
-    for (int i = 0; argc > 2 && i < atoi(argv[2]) && i < DM_PLAYERS; i++) shell_slot_take(&controllers[i], "Xbox Wireless Controller");
+    for (int i = 0; argc > 2 && i < atoi(argv[2]) && i < DM_PLAYERS; i++) shell_slot_take(&controllers[i], "Xbox Wireless Controller", SHELL_SLOT_CONTROLLER, "Xbox Wireless Controller");
     phone_pads_start();
+    pthread_t th; pthread_create(&th, NULL, commands, NULL);
     for (;;) {
         FILE *f = fopen(tmp, "w"); if (!f) return 1;
+        shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);   // before g_mu: the table calls dm_pad_players under its own lock
         pthread_mutex_lock(&g_mu);
-        fprintf(f, "{\"mask\": %u, \"players\": [", g_mask);
+        fprintf(f, "{\"slots\": [");
+        for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%d, %d]", i ? ", " : "", info[i].kind, info[i].xbox);
+        fprintf(f, "], \"mask\": %u, \"players\": [", g_mask);
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%llu, %d, %d, %d, %d]", i ? ", " : "", (unsigned long long)g_btn[i], g_ax[i][0], g_ax[i][1], g_ax[i][2], g_ax[i][3]);
         fprintf(f, "]}\n");
         pthread_mutex_unlock(&g_mu);

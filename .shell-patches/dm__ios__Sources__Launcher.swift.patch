@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -4,9 +4,104 @@
+@@ -4,9 +4,214 @@
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
  import UIKit
@@ -39,8 +39,118 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請先連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
 +    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
 +        "同一個 Wi-Fi 的每支手機都是一個獨立玩家，排在已連線的手把後面，最多到 8P。手機重新整理頁面會保留原本的玩家。",
++    "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
++    "Move to": "換到", "Button layout": "按鍵配置",
++    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "還沒有手把或手機。連上藍牙手把，或用手機掃下面的 QR Code。",
++    "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
++        "iPad 的觸控按鍵也一直是 1P。每個玩家各自記住自己的按鍵配置。被移除的手機可以在手機頁面上重新加入，手把則在這裡按「加入」。",
 +]
 +private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : s }
++
++// Players (shell_players.m): who plays which player, from the physical controllers and the phones, at the top of the launcher. The list comes from the
++// DMPlayersChanged notification and the changes go back as DMPlayersCommand (swap, kick, layout, add), so this file needs no C header
++private struct PlayerRow: Identifiable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
++private struct RemovedPad: Identifiable { let index: Int; let label: String; var id: Int { index } }
++private final class PlayersModel: ObservableObject {
++    @Published var players: [PlayerRow] = []
++    @Published var removed: [RemovedPad] = []
++    private var token: NSObjectProtocol?
++
++    init() {
++        token = NotificationCenter.default.addObserver(forName: Notification.Name("DMPlayersChanged"), object: nil, queue: .main) { [weak self] n in self?.update(n.userInfo) }
++        send(["op": "refresh"])
++    }
++    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
++    private func update(_ u: [AnyHashable: Any]?) {
++        players = ((u?["players"] as? [[Any]]) ?? []).compactMap { a in
++            guard a.count >= 5, let p = a[0] as? Int, let k = a[1] as? Int, let l = a[2] as? String, let n = a[3] as? String, let x = a[4] as? Int else { return nil }
++            return PlayerRow(player: p, kind: k, label: l, name: n, xbox: x != 0)
++        }
++        removed = ((u?["removed"] as? [[Any]]) ?? []).compactMap { a in
++            guard a.count >= 2, let i = a[0] as? Int, let l = a[1] as? String else { return nil }
++            return RemovedPad(index: i, label: l)
++        }
++    }
++    func send(_ u: [String: Any]) { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: u) }
++}
++
++private let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
++private func controllerIcon(_ label: String) -> String {
++    let l = label.lowercased()
++    return l.contains("xbox") ? "logo.xbox" : l.contains("dualsense") || l.contains("dualshock") ? "logo.playstation" : "gamecontroller.fill"
++}
++
++private struct PlayerRowView: View {
++    let p: PlayerRow
++    @ObservedObject var m: PlayersModel
++
++    private var phone: Bool { p.kind == 2 }
++    private var title: String { phone ? (zhHant ? "\(p.label) " + tr("phone") : "\(p.label) phone") : p.label }
++    private func moveText(_ n: Int) -> String {
++        guard let other = m.players.first(where: { $0.player == n }) else { return "\(n)P" }
++        let who = other.kind == 2 ? (zhHant ? "\(other.label) " + tr("phone") : "\(other.label) phone") : other.label
++        return zhHant ? "\(n)P（和 \(who) 交換）" : "\(n)P (swap with \(who))"
++    }
++
++    var body: some View {
++        HStack(spacing: 12) {
++            Text("\(p.player)P").font(.headline.monospacedDigit()).foregroundStyle(.white)
++                .frame(width: 44, height: 44).background(Circle().fill(playerColors[(p.player - 1) % playerColors.count]))
++            Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.title2).frame(width: 32)
++                .accessibilityHidden(true)
++            VStack(alignment: .leading, spacing: 2) {
++                Text(title)
++                Text(tr(phone ? "Phone on Wi-Fi" : "Controller")).font(.footnote).foregroundStyle(.secondary)
++            }
++            Spacer()
++            Picker(tr("Button layout"), selection: Binding(get: { p.xbox }, set: { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) })) {
++                Text("Switch").tag(false)
++                Text("Xbox").tag(true)
++            }
++            .pickerStyle(.segmented).frame(width: 150)
++            Menu {
++                ForEach(1...8, id: \.self) { n in
++                    if n != p.player { Button(moveText(n)) { m.send(["op": "swap", "a": p.player, "b": n]) } }
++                }
++            } label: {
++                Label(tr("Move to"), systemImage: "arrow.left.arrow.right")
++            }
++            Button(role: .destructive) { m.send(["op": "kick", "p": p.player]) } label: {
++                Image(systemName: "xmark.circle.fill").font(.title3)
++            }
++            .buttonStyle(.borderless)
++            .accessibilityLabel(tr("Remove"))
++        }
++    }
++}
++
++private struct PlayersSection: View {
++    @StateObject private var m = PlayersModel()
++
++    var body: some View {
++        Section {
++            if m.players.isEmpty && m.removed.isEmpty {
++                Text(tr("No controller or phone yet. Connect a controller, or scan the QR code below with a phone.")).foregroundStyle(.secondary)
++            }
++            ForEach(m.players) { PlayerRowView(p: $0, m: m) }
++            ForEach(m.removed) { r in
++                HStack(spacing: 12) {
++                    Image(systemName: controllerIcon(r.label)).font(.title2).frame(width: 44).foregroundStyle(.secondary)
++                    VStack(alignment: .leading, spacing: 2) {
++                        Text(r.label)
++                        Text(tr("Not playing")).font(.footnote).foregroundStyle(.secondary)
++                    }
++                    Spacer()
++                    Button(tr("Add")) { m.send(["op": "add", "index": r.index]) }.buttonStyle(.borderless)
++                }
++            }
++        } header: {
++            Text(tr("Players"))
++        } footer: {
++            Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here."))
++        }
++    }
++}
 +
 +// Phone controllers (phone_pads.c): the address phones open, and a QR code of it. DM_PHONE_PADS_LIVE is the port the server listens on (unset when it is off or could not start);
 +// the address is this device's IPv4 address on Wi-Fi (en0), or on another interface that is up (a personal hotspot's bridge) when there is no Wi-Fi
@@ -106,7 +216,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +113,31 @@
+@@ -18,17 +223,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -140,7 +250,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +147,7 @@
+@@ -38,7 +257,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -149,7 +259,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +160,20 @@
+@@ -51,8 +270,20 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -171,7 +281,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -78,9 +199,9 @@
+@@ -78,29 +309,40 @@
                              .clipShape(RoundedRectangle(cornerRadius: 22))
                              .accessibilityHidden(true)
                      }
@@ -183,13 +293,16 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                          .font(.callout).foregroundStyle(.secondary)
                      playButton
                  }
-@@ -88,19 +209,28 @@
+                 .padding(16)
                  .frame(width: geometry.size.width / 3, height: geometry.size.height)
                  List {
++                    PlayersSection()
                      ForEach(m.sections, id: \.self) { section in
 -                        Section(section) {
+-                            ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
 +                        Section(tr(section)) {
-                             ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
++                            // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
++                            ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m) }
                          }
                      }
 +                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsSection() }
@@ -216,7 +329,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -121,7 +251,7 @@
+@@ -121,7 +363,7 @@
      }
  
      @ViewBuilder var playButton: some View {
