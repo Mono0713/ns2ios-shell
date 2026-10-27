@@ -47,7 +47,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Phone controllers": "手機手把", "Scan with a phone camera, or open in its browser:": "用手機相機掃描 QR Code，或在瀏覽器輸入：",
 +    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請將 iPad 連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
 +    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
-+        "連接同一個 Wi-Fi 的手機都能成為獨立玩家，編號排在已連接的手把之後，最多 8 位。重新整理頁面會保留原本的玩家編號。",
++        "連接同一個 Wi-Fi 的手機都能成為獨立玩家，依連線順序取得下一個空的編號，最多 8 位。重新整理頁面會保留原本的玩家編號。",
 +    "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
 +    "Move to": "換到", "Button layout": "按鍵配置",
 +    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描下方的 QR Code。",
@@ -72,7 +72,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Scan with a phone camera, or open in its browser:": "Scan with your phone's camera, or open this address in its browser:",
 +    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "Connect this iPad to Wi-Fi (or turn on Personal Hotspot) so phones can join.",
 +    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
-+        "Any phone on the same Wi-Fi can join as its own player, after connected controllers, up to 8 players. Reloading the page keeps its player number.",
++        "Any phone on the same Wi-Fi can join as its own player, taking the next free player number, up to 8 players. Reloading the page keeps its player number.",
 +    "No controller or phone yet. Connect a controller, or scan the QR code below with a phone.": "No controllers or phones connected. Pair a Bluetooth controller, or scan the QR code below with a phone.",
 +    "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
 +        "With no controller or phone connected, the iPad's touch controls play as Player 1. Each player's button layout is remembered. A removed phone can rejoin from its page; a removed controller from here.",
@@ -312,7 +312,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                set: { m.values[s.env] = String(format: "0x%llX", UInt64(($0 * 1024).rounded()) << 20) })
 +    }
 +    private var memoryIsDefault: Bool { (m.values[s.env] ?? s.def) == "-" }
-+    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + tr("Game default") : "") }
++    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + tr("Game default") : "") }   // VoiceOver's value
  
      private var settingLabel: some View {
          VStack(alignment: .leading, spacing: 4) {
@@ -330,7 +330,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +340,20 @@
+@@ -51,8 +340,22 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -343,8 +343,10 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                    HStack {
 +                        settingLabel
 +                        Spacer()
-+                        if !memoryIsDefault && !locked { Button(tr("Game default")) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
-+                        Text(memoryText).monospacedDigit().foregroundStyle(.secondary)
++                        // the size, then "Game default" in the same place: a label at the default, a button that goes back to it otherwise
++                        Text(String(format: "%.1f GB", memoryGB.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
++                        if memoryIsDefault || locked { Text(tr("Game default")).foregroundStyle(.secondary).opacity(memoryIsDefault ? 1 : 0) }
++                        else { Button(tr("Game default")) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
 +                    }
 +                    Slider(value: memoryGB, in: (s.min ?? 0.5)...(s.max ?? 3.2), step: s.step ?? 0.1)
 +                        .accessibilityLabel(tr(s.label))
@@ -352,7 +354,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,10 +365,106 @@
+@@ -64,10 +367,106 @@
      }
  }
  
@@ -459,7 +461,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
      var body: some View {
          GeometryReader { geometry in
-@@ -78,29 +475,44 @@
+@@ -78,29 +477,44 @@
                              .clipShape(RoundedRectangle(cornerRadius: 22))
                              .accessibilityHidden(true)
                      }
@@ -511,7 +513,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,21 +520,83 @@
+@@ -108,21 +522,83 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -598,7 +600,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
      }
  
      private func appIcon() -> UIImage? {
-@@ -140,12 +614,13 @@
+@@ -140,12 +616,13 @@
      guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
      guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
      let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
