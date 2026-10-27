@@ -1,0 +1,18 @@
+diff --git a/dm/host/tests/t_hid.c b/dm/host/tests/t_hid.c
+--- a/dm/host/tests/t_hid.c
++++ b/dm/host/tests/t_hid.c
+@@ -84,6 +84,14 @@
+     arg[1] = 1; h_hid_ShowCtrl(info, arg);
+     CHECK(info[0] == 1, "the applet's count is capped at the game's maximum");
+     CHECK(six_connected(0x0100 | 0) && !six_connected(0x0200 | 0), "player 2 has a six-axis sensor, No3 none");
++    SixAxisState six[2];
++    CHECK(six_states(six, 2, 0x0100) == 2 && six[0].acc[2] == -1 && six[0].gyro[2] == 0 && six[0].dir[0] == 1 && h_hid_SixRest(&(uint32_t){0x0100}),
++          "player 2's sensor lies still while no real motion is reported");
++    dm_motion_set_player(1, (const float[]){0.5f, 0, -0.8f}, (const float[]){0, 0, 0.25f}, (const float[]){0, 0, 0.1f}, (const float[]){0, 1, 0, -1, 0, 0, 0, 0, 1});
++    CHECK(six_states(six, 2, 0x0100) == 2 && six[0].acc[0] == 0.5f && six[1].gyro[2] == 0.25f && six[0].angle[2] == 0.1f && six[0].dir[1] == 1 && six[0].attributes == 1,
++          "player 2's real motion fills every entry");
++    CHECK(!h_hid_SixRest(&(uint32_t){0x0100}), "a turning sensor is not at rest");
++    CHECK(six_states(six, 1, 0x0000) == 1 && six[0].acc[0] == 0 && six[0].acc[2] == -1, "player 1 does not see player 2's motion");
+ 
+     // A one-player game ({No1, Handheld}): player 2's controller plays as player 1, No2 reads as not connected
+     g_signals = 0; ids((const uint32_t[]){0, NPAD_HANDHELD}, 2);

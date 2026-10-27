@@ -48,6 +48,9 @@ targets:
         GCSupportsControllerUserInteraction: true   # Physical controllers (GameController)
         GCSupportedGameControllers:
           - ProfileName: ExtendedGamepad
+        NSLocalNetworkUsageDescription: "同一個 Wi-Fi 的手機打開這台裝置的網址，就能當手把。Phones on this Wi-Fi can join as controllers by opening this device's address in their browser."   # phone_pads.c
+        NSBonjourServices:
+          - _nxpad._tcp
         CADisableMinimumFrameDurationOnPhone: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Phone controller</title>
+<style>
+  :root { --bg:#16181d; --btn:#2a2e37; --btn-on:#4f8cff; --fg:#e8eaf0; --dim:#8a90a0; }
+  * { box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px system-ui,sans-serif; overflow:hidden; touch-action:none; }
+  #pad { position:fixed; inset:0; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .piece { position:absolute; inset:0; pointer-events:none; }
+  .piece > * { pointer-events:auto; }
+  /* Xbox layout (the iPad picks it per phone): A bottom, B right, X left, Y top, each button in its Xbox colour (lit in full while pressed) */
+  body.xbox .b[data-bit="0"] { --c:#5fbf3f; } body.xbox .b[data-bit="1"] { --c:#ec4134; } body.xbox .b[data-bit="2"] { --c:#3a8ee6; } body.xbox .b[data-bit="3"] { --c:#f2c230; }
+  body.xbox .piece[data-k="abxy"] .b { color:var(--c); background:var(--btn); background:color-mix(in srgb, var(--c) 22%, var(--btn)); box-shadow:inset 0 0 0 2px var(--c); font-size:22px; font-weight:800; }
+  body.xbox .piece[data-k="abxy"] .b.on { color:#fff; background:var(--c); }
+  body.editing .piece.sel > * { outline:2px dashed var(--btn-on); outline-offset:3px; }
+  .b { position:absolute; display:flex; align-items:center; justify-content:center; background:var(--btn); border-radius:50%; font-weight:600; font-size:18px; }
+  .b.on { background:var(--btn-on); }
+  .sh { border-radius:12px; font-size:15px; }
+  .dpad { position:absolute; }
+  .arm { position:absolute; width:33.3%; height:33.3%; display:flex; align-items:center; justify-content:center; background:var(--btn); border-radius:12px; font-weight:600; font-size:18px; }
+  .arm.on { background:var(--btn-on); }
+  .stick { position:absolute; width:34dvh; height:34dvh; border-radius:50%; background:#20232a; border:2px solid #2f3440; }
+  .knob { position:absolute; left:50%; top:50%; width:40%; height:40%; margin:-20% 0 0 -20%; border-radius:50%; background:#3a4050; }
+  .stick.on .knob { background:var(--btn-on); }
+  #top { position:fixed; left:50%; top:max(6px, env(safe-area-inset-top)); transform:translateX(-50%); display:flex; align-items:flex-start; gap:14px; z-index:5; }
+  #status { text-align:center; color:var(--dim); font-size:13px; min-width:90px; }
+  .tb { background:var(--btn); color:var(--fg); border:0; border-radius:10px; padding:6px 10px; font:inherit; font-size:13px; }
+  .tb.on { background:var(--btn-on); }
+  #bar { display:none; position:fixed; left:50%; top:max(6px, env(safe-area-inset-top)); transform:translateX(-50%); align-items:center; gap:8px; z-index:6;
+         background:rgba(22,24,29,.92); padding:6px 10px; border-radius:12px; white-space:nowrap; color:var(--dim); font-size:13px; }
+  body.editing #bar { display:flex; }
+  body.editing #top { display:none; }
+  #toast { display:none; position:fixed; left:50%; bottom:12px; transform:translateX(-50%); background:rgba(42,46,55,.96); padding:10px 14px; border-radius:12px; z-index:7; max-width:90vw; text-align:center; }
+  #kicked { display:none; position:fixed; inset:0; background:var(--bg); z-index:8; flex-direction:column; align-items:center; justify-content:center; gap:16px; font-size:18px; }
+  body.kicked #kicked { display:flex; }
+  #player { font-size:28px; font-weight:700; color:var(--fg); }
+  /* the iPad's "which one is this?" (the launcher's player list): the screen flashes in this player's colour */
+  #flash { position:fixed; inset:0; background:var(--btn-on); opacity:0; pointer-events:none; z-index:10; }
+  #flash.on { animation:flash .8s ease-out; }
+  @keyframes flash { 0%, 30% { opacity:.75; } 100% { opacity:0; } }
+  #rotate { display:none; position:fixed; inset:0; background:var(--bg); align-items:center; justify-content:center; font-size:20px; z-index:9; }
+  @media (orientation:portrait) { #rotate { display:flex; } }
+</style>
+</head>
+<body>
+<div id="flash"></div>
+<div id="rotate" data-t="rotate">Turn your phone sideways ↻</div>
+<div id="pad">
+  <!-- Each piece is a layer over the whole pad holding one control (or one group): the layout editor moves and scales the piece, never its controls -->
+  <div class="piece" data-k="zl"><div class="b sh" data-bit="8" style="left:2dvw;top:2dvh;width:16dvw;height:11dvh">ZL</div></div>
+  <div class="piece" data-k="l"><div class="b sh" data-bit="6" style="left:2dvw;top:15dvh;width:16dvw;height:11dvh">L</div></div>
+  <div class="piece" data-k="zr"><div class="b sh" data-bit="9" style="right:2dvw;top:2dvh;width:16dvw;height:11dvh">ZR</div></div>
+  <div class="piece" data-k="r"><div class="b sh" data-bit="7" style="right:2dvw;top:15dvh;width:16dvw;height:11dvh">R</div></div>
+  <div class="piece" data-k="minus"><div class="b" data-bit="11" style="left:38dvw;top:22dvh;width:9dvh;height:9dvh">−</div></div>
+  <div class="piece" data-k="plus"><div class="b" data-bit="10" style="right:38dvw;top:22dvh;width:9dvh;height:9dvh">+</div></div>
+
+  <!-- Left stick -->
+  <div class="piece" data-k="ls"><div class="stick" id="ls" style="left:4dvw;top:30dvh"><div class="knob"></div></div></div>
+
+  <!-- D-pad: one 8-way control (a finger on it rocks it like a real D-pad: a diagonal holds two directions) -->
+  <div class="piece" data-k="dpad">
+    <div class="dpad" id="dp" style="left:30dvw;top:58dvh;width:27dvh;height:27dvh">
+      <div class="arm" data-arm="13" style="left:33.4%;top:0">▲</div>
+      <div class="arm" data-arm="15" style="left:33.4%;top:66.6%">▼</div>
+      <div class="arm" data-arm="12" style="left:0;top:33.4%">◀</div>
+      <div class="arm" data-arm="14" style="left:66.6%;top:33.4%">▶</div>
+    </div>
+  </div>
+
+  <!-- ABXY in Switch positions: X top, B bottom, Y left, A right -->
+  <div class="piece" data-k="abxy">
+    <div class="b" data-bit="2" style="right:calc(4dvw + 13dvh);top:30dvh;width:13dvh;height:13dvh">X</div>
+    <div class="b" data-bit="1" style="right:calc(4dvw + 13dvh);top:56dvh;width:13dvh;height:13dvh">B</div>
+    <div class="b" data-bit="3" style="right:calc(4dvw + 26dvh);top:43dvh;width:13dvh;height:13dvh">Y</div>
+    <div class="b" data-bit="0" style="right:4dvw;top:43dvh;width:13dvh;height:13dvh">A</div>
+  </div>
+
+  <!-- Right stick (smaller) -->
+  <div class="piece" data-k="rs"><div class="stick" id="rs" style="right:30dvw;bottom:4dvh;width:26dvh;height:26dvh"><div class="knob"></div></div></div>
+</div>
+
+<!-- Outside the pad, so its taps are ordinary clicks: the player, the full-screen and layout buttons, the layout editor's bar, and the removed notice -->
+<div id="top">
+  <button class="tb" id="fs" aria-label="Full screen">⛶</button>
+  <div id="status"><div id="player">--</div><div id="conn"></div></div>
+  <button class="tb" id="edit" data-t="layout">Layout</button>
+</div>
+<div id="bar">
+  <span data-t="drag">Drag to move, pinch to resize</span>
+  <button class="tb" id="smaller" aria-label="Smaller">−</button><span data-t="size">Size</span><button class="tb" id="bigger" aria-label="Bigger">+</button>
+  <button class="tb" id="reset" data-t="reset">Reset</button>
+  <button class="tb on" id="done" data-t="done">Done</button>
+</div>
+<div id="toast"></div>
+<div id="kicked"><div data-t="kicked">This phone was removed on the iPad</div><button class="tb on" id="rejoin" data-t="rejoin">Join again</button></div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  // Page text: Traditional Chinese when the phone's language is Chinese, English otherwise
+  const zh = /^zh/i.test(navigator.language || '');
+  const T = zh ? { rotate: '請把手機橫過來 ↻', connecting: '連線中…', connected: '已連線', full: '玩家已滿（最多 8 人）', lost: '已斷線，重新連線中…',
+                   layout: '版面', drag: '拖曳移動，兩指縮放', size: '大小', reset: '還原', done: '完成',
+                   kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入',
+                   ios: 'iPhone 沒辦法讓網頁全螢幕：按 Safari 的「分享」→「加入主畫面」，再從主畫面打開，就不會有網址列。' }
+               : { rotate: 'Turn your phone sideways ↻', connecting: 'Connecting…', connected: 'Connected', full: 'All 8 players are taken', lost: 'Disconnected, reconnecting…',
+                   layout: 'Layout', drag: 'Drag to move, pinch to resize', size: 'Size', reset: 'Reset', done: 'Done',
+                   kicked: 'This phone was removed on the iPad', rejoin: 'Join again',
+                   ios: 'iPhone cannot show a web page full screen: tap Share, then Add to Home Screen in Safari, and open it from the Home Screen for no address bar.' };
+  if (zh) document.documentElement.lang = 'zh-Hant';
+  document.querySelectorAll('[data-t]').forEach(e => { e.textContent = T[e.dataset.t]; });
+  const state = { buttons: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
+  let ws = null, seq = 0, dirty = true, lastSent = 0, backoff = 500, join = false;
+
+  // Device id: a reconnecting phone gets its player back
+  let id;
+  try { id = localStorage.getItem('padId'); } catch (e) {}
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+    try { localStorage.setItem('padId', id); } catch (e) {}
+  }
+  const name = /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'Browser';
+
+  function hello() { ws.send(JSON.stringify(join ? { t: 'hello', v: 1, id, name, join: 1 } : { t: 'hello', v: 1, id, name })); join = false; }
+  function connect() {
+    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    $('#conn').textContent = T.connecting;
+    ws.onopen = () => { backoff = 500; hello(); };
+    ws.onmessage = ev => {
+      if (typeof ev.data !== 'string') return;
+      const m = JSON.parse(ev.data);
+      if (m.t === 'assign') {
+        document.body.classList.remove('kicked'); $('#player').textContent = 'P' + m.player; $('#conn').textContent = T.connected; dirty = true;
+        faceLayout(m.layout === 'xbox');
+      }
+      else if (m.t === 'full') { $('#player').textContent = '--'; $('#conn').textContent = T.full; }
+      else if (m.t === 'kicked') { $('#player').textContent = '--'; document.body.classList.add('kicked'); release(); }
+      else if (m.t === 'rumble') {
+        if (navigator.vibrate) navigator.vibrate(m.ms || 100);
+        if (m.flash) { const f = $('#flash'); f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); }
+      }
+    };
+    ws.onclose = () => {
+      $('#conn').textContent = T.lost;
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 4000);
+    };
+  }
+  $('#rejoin').addEventListener('click', () => { join = true; if (ws && ws.readyState === 1) hello(); });
+
+  function send() {
+    if (!ws || ws.readyState !== 1) return;
+    const buf = new ArrayBuffer(8), v = new DataView(buf);
+    v.setUint8(0, 1);
+    v.setUint8(1, seq = (seq + 1) & 255);
+    v.setUint16(2, state.buttons, true);
+    v.setInt8(4, state.lx); v.setInt8(5, state.ly);
+    v.setInt8(6, state.rx); v.setInt8(7, state.ry);
+    ws.send(buf);
+    dirty = false; lastSent = performance.now();
+  }
+
+  // Send at once on a change, otherwise every 100 ms as a heartbeat
+  function tick() {
+    if (dirty || performance.now() - lastSent > 100) send();
+    requestAnimationFrame(tick);
+  }
+
+  // ---- Full screen ----
+  // Android: any tap on the pad while not full screen goes full screen (a browser only allows it from a tap), which hides the address bar, and keeps the phone sideways.
+  // iPhone Safari has no full screen for pages: the button explains Add to Home Screen instead (the page then opens without the address bar)
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+  const canFull = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+  let triedFull = false;
+  function toast(text) { const t = $('#toast'); t.textContent = text; t.style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.style.display = 'none'; }, 6000); }
+  function goFull() {
+    triedFull = true;
+    if (!canFull) { if (!standalone) toast(T.ios); return; }
+    if (document.fullscreenElement) return;
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+      .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {})).catch(() => {});
+  }
+  if (standalone) $('#fs').style.display = 'none';
+  $('#fs').addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else goFull(); });
+
+  // ---- Button layout: where A, B, X and Y sit (each button keeps its own letter and sends that button) ----
+  const places = { top: ['calc(4dvw + 13dvh)', '30dvh'], bottom: ['calc(4dvw + 13dvh)', '56dvh'], left: ['calc(4dvw + 26dvh)', '43dvh'], right: ['4dvw', '43dvh'] };
+  const faces = { switch: { 0: 'right', 1: 'bottom', 2: 'top', 3: 'left' }, xbox: { 0: 'bottom', 1: 'right', 2: 'left', 3: 'top' } };
+  function faceLayout(xbox) {
+    if (document.body.classList.contains('xbox') === xbox) return;
+    document.body.classList.toggle('xbox', xbox);
+    const f = faces[xbox ? 'xbox' : 'switch'];
+    for (const bit in f) { const e = document.querySelector(`.piece[data-k="abxy"] [data-bit="${bit}"]`); [e.style.right, e.style.top] = places[f[bit]]; }
+    applyLayout();
+  }
+
+  // ---- Layout ----
+  // Each piece (a control or a group) may be moved and scaled; kept per phone in localStorage as {key: {x, y, s}}, x and y as fractions of the pad's size
+  const pad = $('#pad');
+  const pieces = [...document.querySelectorAll('.piece')];
+  let layout = {};
+  try { layout = JSON.parse(localStorage.getItem('padLayout') || '{}') || {}; } catch (e) { layout = {}; }
+  function applyPiece(p) {
+    const l = layout[p.dataset.k] || { x: 0, y: 0, s: 1 };
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;   // the controls' box, untransformed: the piece scales about its centre
+    for (const c of p.children) { x0 = Math.min(x0, c.offsetLeft); y0 = Math.min(y0, c.offsetTop); x1 = Math.max(x1, c.offsetLeft + c.offsetWidth); y1 = Math.max(y1, c.offsetTop + c.offsetHeight); }
+    p.style.transformOrigin = `${(x0 + x1) / 2}px ${(y0 + y1) / 2}px`;
+    p.style.transform = `translate(${l.x * pad.clientWidth}px,${l.y * pad.clientHeight}px) scale(${l.s})`;
+  }
+  function applyLayout() { pieces.forEach(applyPiece); }
+  function saveLayout() { try { localStorage.setItem('padLayout', JSON.stringify(layout)); } catch (e) {} }
+  addEventListener('resize', applyLayout);
+  applyLayout();
+
+  let editing = false, sel = null, drag = null, pinch = null;
+  const editTouches = new Map();
+  function spread() { const [a, b] = [...editTouches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)); }
+  function select(p) { pieces.forEach(q => q.classList.toggle('sel', q === p)); sel = p; }
+  function scaleSel(f) {
+    if (!sel) return;
+    const l = layout[sel.dataset.k] || (layout[sel.dataset.k] = { x: 0, y: 0, s: 1 });
+    l.s = Math.min(2.5, Math.max(0.4, Math.round(l.s * f * 100) / 100));
+    applyPiece(sel);
+  }
+  $('#edit').addEventListener('click', () => { editTouches.clear(); pinch = drag = null; editing = true; release(); document.body.classList.add('editing'); select(pieces[0]); });
+  $('#done').addEventListener('click', () => { editing = false; select(null); document.body.classList.remove('editing'); saveLayout(); });
+  $('#reset').addEventListener('click', () => { layout = {}; applyLayout(); saveLayout(); });
+  $('#smaller').addEventListener('click', () => scaleSel(1 / 1.1));
+  $('#bigger').addEventListener('click', () => scaleSel(1.1));
+
+  // ---- Multi-touch ----
+  // Each finger keeps what it landed on: a stick stays held by that finger; on buttons the finger may slide to a neighbour
+  const touches = new Map();
+  const sticks = { ls: ['lx', 'ly'], rs: ['rx', 'ry'] };
+
+  function targetAt(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return null;
+    const st = el.closest('.stick, .dpad');
+    if (st) return st;
+    return el.closest('[data-bit]');
+  }
+
+  function recompute() {
+    let mask = 0;
+    document.querySelectorAll('[data-bit], [data-arm]').forEach(e => e.classList.remove('on'));
+    for (const t of touches.values()) {
+      if (t.dpad) mask |= t.bits;
+      else if (t.el && t.el.dataset.bit !== undefined) { mask |= 1 << +t.el.dataset.bit; t.el.classList.add('on'); }
+    }
+    document.querySelectorAll('[data-arm]').forEach(e => { if (mask >> +e.dataset.arm & 1) e.classList.add('on'); });
+    if (mask !== state.buttons) {
+      if (mask & ~state.buttons && navigator.vibrate) navigator.vibrate(8);
+      state.buttons = mask; dirty = true;
+    }
+  }
+
+  function moveStick(t, x, y) {
+    const r = t.el.getBoundingClientRect();   // on screen, so a scaled stick reads its own size
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2, rad = r.width / 2;
+    let dx = (x - cx) / rad, dy = (y - cy) / rad;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    const [ax, ay] = sticks[t.el.id];
+    state[ax] = Math.round(dx * 127);
+    state[ay] = Math.round(-dy * 127); // up is positive
+    const local = t.el.offsetWidth / 2;   // the knob moves inside the (possibly scaled) stick, in its own units
+    t.el.querySelector('.knob').style.transform = `translate(${dx * local * 0.6}px,${dy * local * 0.6}px)`;
+    dirty = true;
+  }
+
+  // The D-pad: the direction from its centre, each axis held within 67.5° of it, so the eight 45° sectors give four directions and four diagonals;
+  // the centre (a quarter of the radius) holds nothing
+  function moveDpad(t, x, y) {
+    const r = t.el.getBoundingClientRect();
+    const dx = x - (r.left + r.width / 2), dy = (r.top + r.height / 2) - y, len = Math.hypot(dx, dy);
+    let bits = 0;
+    if (len > r.width / 8) {
+      const k = 0.3827 * len;   // cos 67.5°
+      if (dx > k) bits |= 1 << 14; else if (dx < -k) bits |= 1 << 12;
+      if (dy > k) bits |= 1 << 13; else if (dy < -k) bits |= 1 << 15;
+    }
+    t.bits = bits;
+  }
+
+  function releaseStick(el) {
+    const [ax, ay] = sticks[el.id];
+    state[ax] = 0; state[ay] = 0;
+    el.querySelector('.knob').style.transform = '';
+    el.classList.remove('on');
+    dirty = true;
+  }
+  function release() {   // nothing stays pressed
+    touches.clear();
+    ['ls', 'rs'].forEach(i => releaseStick(document.getElementById(i)));
+    recompute();
+  }
+
+  pad.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (editing) {   // the editor: a finger on a control picks its piece and drags it; a second finger anywhere pinches it larger or smaller
+      for (const tp of e.changedTouches) editTouches.set(tp.identifier, { x: tp.clientX, y: tp.clientY });
+      if (editTouches.size >= 2 && sel) { drag = null; pinch = { d: spread(), s: (layout[sel.dataset.k] || { s: 1 }).s }; return; }
+      const tp = e.changedTouches[0], el = document.elementFromPoint(tp.clientX, tp.clientY), p = el && el.closest('.piece');
+      if (!p) return;
+      select(p);
+      const l = layout[p.dataset.k] || (layout[p.dataset.k] = { x: 0, y: 0, s: 1 });
+      drag = { id: tp.identifier, x: tp.clientX, y: tp.clientY, lx: l.x, ly: l.y };
+      return;
+    }
+    for (const tp of e.changedTouches) {
+      const el = targetAt(tp.clientX, tp.clientY);
+      const t = { el, stick: !!(el && el.classList.contains('stick')), dpad: !!(el && el.classList.contains('dpad')), bits: 0 };
+      touches.set(tp.identifier, t);
+      if (t.stick) { el.classList.add('on'); moveStick(t, tp.clientX, tp.clientY); }
+      if (t.dpad) moveDpad(t, tp.clientX, tp.clientY);
+    }
+    recompute();
+  }, { passive: false });
+
+  pad.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (editing) {
+      for (const tp of e.changedTouches) if (editTouches.has(tp.identifier)) editTouches.set(tp.identifier, { x: tp.clientX, y: tp.clientY });
+      if (pinch && sel && editTouches.size >= 2) {
+        const l = layout[sel.dataset.k] || (layout[sel.dataset.k] = { x: 0, y: 0, s: 1 });
+        l.s = Math.min(2.5, Math.max(0.4, pinch.s * spread() / pinch.d));
+        applyPiece(sel);
+        return;
+      }
+      for (const tp of e.changedTouches) if (drag && tp.identifier === drag.id && sel) {
+        const l = layout[sel.dataset.k];
+        l.x = Math.max(-1, Math.min(1, drag.lx + (tp.clientX - drag.x) / pad.clientWidth));
+        l.y = Math.max(-1, Math.min(1, drag.ly + (tp.clientY - drag.y) / pad.clientHeight));
+        applyPiece(sel);
+      }
+      return;
+    }
+    for (const tp of e.changedTouches) {
+      const t = touches.get(tp.identifier);
+      if (!t) continue;
+      if (t.stick) moveStick(t, tp.clientX, tp.clientY);
+      else if (t.dpad) moveDpad(t, tp.clientX, tp.clientY);
+      else t.el = targetAt(tp.clientX, tp.clientY);
+    }
+    recompute();
+  }, { passive: false });
+
+  const end = e => {
+    e.preventDefault();
+    if (editing) {
+      for (const tp of e.changedTouches) editTouches.delete(tp.identifier);
+      drag = null; if (editTouches.size < 2) pinch = null;
+      return;
+    }
+    for (const tp of e.changedTouches) {
+      const t = touches.get(tp.identifier);
+      if (t && t.stick) releaseStick(t.el);
+      touches.delete(tp.identifier);
+    }
+    recompute();
+    if (e.type === 'touchend' && (canFull ? !document.fullscreenElement : !triedFull)) goFull();   // a touchend counts as the tap full screen needs; Android goes back to it on any tap after leaving it
+  };
+  pad.addEventListener('touchend', end, { passive: false });
+  pad.addEventListener('touchcancel', end, { passive: false });
+
+  // Release everything when the page goes to the background, so nothing stays pressed
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { release(); send(); }
+  });
+
+  // Keep the screen on where the browser allows it
+  if (navigator.wakeLock) {
+    const lock = () => navigator.wakeLock.request('screen').catch(() => {});
+    lock(); document.addEventListener('visibilitychange', () => { if (!document.hidden) lock(); });
+  }
+
+  connect();
+  tick();
+})();
+</script>
+</body>
+</html>
