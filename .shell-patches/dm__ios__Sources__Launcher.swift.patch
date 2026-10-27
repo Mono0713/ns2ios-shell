@@ -1,9 +1,11 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -4,9 +4,214 @@
+@@ -3,10 +3,220 @@
+ // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
++import Combine
  import UIKit
 +import CoreImage.CIFilterBuiltins
  import os
@@ -35,7 +37,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 和 log.txt 都在這裡（檔案 App）。",
 +    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
 +    "Reset to tested defaults": "還原為測試過的預設值", "Brings back all settings this game was tested with.": "恢復這款遊戲測試時使用的所有設定。",
-+    "Phone controllers": "手機手把", "Scan with a phone camera, or open in its browser:": "用手機相機掃描，或在手機瀏覽器打開：",
++    "Phone controllers": "手機手把", "Press A or + on a controller or phone to start.": "在手把或手機上按 A 或 + 也能開始遊戲。", "Scan with a phone camera, or open in its browser:": "用手機相機掃描，或在手機瀏覽器打開：",
 +    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請先連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
 +    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
 +        "同一個 Wi-Fi 的每支手機都是一個獨立玩家，排在已連線的手把後面，最多到 8P。手機重新整理頁面會保留原本的玩家。",
@@ -49,8 +51,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +
 +// Players (shell_players.m): who plays which player, from the physical controllers and the phones, at the top of the launcher. The list comes from the
 +// DMPlayersChanged notification and the changes go back as DMPlayersCommand (swap, kick, layout, add), so this file needs no C header
-+private struct PlayerRow: Identifiable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
-+private struct RemovedPad: Identifiable { let index: Int; let label: String; var id: Int { index } }
++private struct PlayerRow: Identifiable, Equatable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
++private struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; var id: Int { index } }
 +private final class PlayersModel: ObservableObject {
 +    @Published var players: [PlayerRow] = []
 +    @Published var removed: [RemovedPad] = []
@@ -61,15 +63,17 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        send(["op": "refresh"])
 +    }
 +    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
-+    private func update(_ u: [AnyHashable: Any]?) {
-+        players = ((u?["players"] as? [[Any]]) ?? []).compactMap { a in
++    private func update(_ u: [AnyHashable: Any]?) {   // only what changed is assigned: an unchanged list must not redraw the screen
++        let players: [PlayerRow] = ((u?["players"] as? [[Any]]) ?? []).compactMap { a in
 +            guard a.count >= 5, let p = a[0] as? Int, let k = a[1] as? Int, let l = a[2] as? String, let n = a[3] as? String, let x = a[4] as? Int else { return nil }
 +            return PlayerRow(player: p, kind: k, label: l, name: n, xbox: x != 0)
 +        }
-+        removed = ((u?["removed"] as? [[Any]]) ?? []).compactMap { a in
++        let removed: [RemovedPad] = ((u?["removed"] as? [[Any]]) ?? []).compactMap { a in
 +            guard a.count >= 2, let i = a[0] as? Int, let l = a[1] as? String else { return nil }
 +            return RemovedPad(index: i, label: l)
 +        }
++        if players != self.players { self.players = players }
++        if removed != self.removed { self.removed = removed }
 +    }
 +    func send(_ u: [String: Any]) { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: u) }
 +}
@@ -182,12 +186,13 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +
 +private struct PhonePadsSection: View {
 +    @State private var url = phonePadsURL()
++    @State private var qr: UIImage?   // made once per address, not on every redraw
 +
 +    var body: some View {
 +        Section {
 +            if let url {
 +                HStack(spacing: 16) {
-+                    if let qr = qrImage(url) {
++                    if let qr {
 +                        Image(uiImage: qr).interpolation(.none).resizable().frame(width: 132, height: 132)
 +                            .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 8))
 +                            .accessibilityLabel("QR code of \(url)")
@@ -207,7 +212,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        }
 +        .task {
 +            while !Task.isCancelled {   // the Wi-Fi address can change while the launcher is shown
-+                url = phonePadsURL()
++                let now = phonePadsURL()
++                if now != url || (qr == nil && now != nil) { url = now; qr = now.flatMap(qrImage) }
 +                try? await Task.sleep(for: .seconds(3))
 +            }
 +        }
@@ -216,7 +222,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +223,31 @@
+@@ -18,17 +228,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -250,7 +256,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +257,7 @@
+@@ -38,7 +262,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -259,7 +265,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +270,20 @@
+@@ -51,8 +275,20 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -281,7 +287,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -78,29 +309,40 @@
+@@ -78,29 +314,42 @@
                              .clipShape(RoundedRectangle(cornerRadius: 22))
                              .accessibilityHidden(true)
                      }
@@ -292,6 +298,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                    Text(tr("Version") + " " + ((info("CFBundleShortVersionString") as? String) ?? ""))
                          .font(.callout).foregroundStyle(.secondary)
                      playButton
++                    Text(tr("Press A or + on a controller or phone to start."))
++                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                  }
                  .padding(16)
                  .frame(width: geometry.size.width / 3, height: geometry.size.height)
@@ -329,7 +337,22 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -121,7 +363,7 @@
+@@ -112,16 +361,21 @@
+             }
+         }
+         .preferredColorScheme(.dark)
++        // A or + on any player's controller or phone starts the game (shell_players.m posts it only while the launcher says it is shown)
++        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { _ in play() }
++        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
++        .onDisappear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
+         .task {
+             while !Task.isCancelled {
+-                memory = os_proc_available_memory()
++                let now = os_proc_available_memory()
++                if now / 10_485_760 != memory / 10_485_760 { memory = now }   // in 10 MB steps: a redraw every two seconds for a changing last digit is wasted
+                 try? await Task.sleep(for: .seconds(2))
+             }
+         }
      }
  
      @ViewBuilder var playButton: some View {

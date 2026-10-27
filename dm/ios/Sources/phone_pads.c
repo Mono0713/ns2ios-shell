@@ -147,6 +147,7 @@ static void on_state(client *c, const uint8_t *b, size_t n) {
     uint64_t btn = (uint64_t)(b[2] | b[3] << 8);
     int32_t ax[4]; for (int i = 0; i < 4; i++) ax[i] = (int8_t)b[4 + i] * (DM_STICK_MAX / 127);
     dm_pad_set_player(p, btn, ax[0], ax[1], ax[2], ax[3]);
+    shell_slot_input(p, btn);
 }
 
 // ---- The launcher's moves and removals (shell_slots.h handlers): called on the main thread, carried out by the server thread ----

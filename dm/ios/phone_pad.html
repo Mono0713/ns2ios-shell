@@ -24,6 +24,9 @@
   .b { position:absolute; display:flex; align-items:center; justify-content:center; background:var(--btn); border-radius:50%; font-weight:600; font-size:18px; }
   .b.on { background:var(--btn-on); }
   .sh { border-radius:12px; font-size:15px; }
+  .dpad { position:absolute; }
+  .arm { position:absolute; width:33.3%; height:33.3%; display:flex; align-items:center; justify-content:center; background:var(--btn); border-radius:12px; font-weight:600; font-size:18px; }
+  .arm.on { background:var(--btn-on); }
   .stick { position:absolute; width:34dvh; height:34dvh; border-radius:50%; background:#20232a; border:2px solid #2f3440; }
   .knob { position:absolute; left:50%; top:50%; width:40%; height:40%; margin:-20% 0 0 -20%; border-radius:50%; background:#3a4050; }
   .stick.on .knob { background:var(--btn-on); }
@@ -57,12 +60,14 @@
   <!-- Left stick -->
   <div class="piece" data-k="ls"><div class="stick" id="ls" style="left:4dvw;top:30dvh"><div class="knob"></div></div></div>
 
-  <!-- D-pad -->
+  <!-- D-pad: one 8-way control (a finger on it rocks it like a real D-pad: a diagonal holds two directions) -->
   <div class="piece" data-k="dpad">
-    <div class="b sh" data-bit="13" style="left:calc(30dvw + 9dvh);top:58dvh;width:9dvh;height:9dvh">▲</div>
-    <div class="b sh" data-bit="15" style="left:calc(30dvw + 9dvh);top:76dvh;width:9dvh;height:9dvh">▼</div>
-    <div class="b sh" data-bit="12" style="left:30dvw;top:67dvh;width:9dvh;height:9dvh">◀</div>
-    <div class="b sh" data-bit="14" style="left:calc(30dvw + 18dvh);top:67dvh;width:9dvh;height:9dvh">▶</div>
+    <div class="dpad" id="dp" style="left:30dvw;top:58dvh;width:27dvh;height:27dvh">
+      <div class="arm" data-arm="13" style="left:33.4%;top:0">▲</div>
+      <div class="arm" data-arm="15" style="left:33.4%;top:66.6%">▼</div>
+      <div class="arm" data-arm="12" style="left:0;top:33.4%">◀</div>
+      <div class="arm" data-arm="14" style="left:66.6%;top:33.4%">▶</div>
+    </div>
   </div>
 
   <!-- ABXY in Switch positions: X top, B bottom, Y left, A right -->
@@ -84,7 +89,7 @@
   <button class="tb" id="edit" data-t="layout">Layout</button>
 </div>
 <div id="bar">
-  <span data-t="drag">Drag a control to move it</span>
+  <span data-t="drag">Drag to move, pinch to resize</span>
   <button class="tb" id="smaller" aria-label="Smaller">−</button><span data-t="size">Size</span><button class="tb" id="bigger" aria-label="Bigger">+</button>
   <button class="tb" id="reset" data-t="reset">Reset</button>
   <button class="tb on" id="done" data-t="done">Done</button>
@@ -98,11 +103,11 @@
   // Page text: Traditional Chinese when the phone's language is Chinese, English otherwise
   const zh = /^zh/i.test(navigator.language || '');
   const T = zh ? { rotate: '請把手機橫過來 ↻', connecting: '連線中…', connected: '已連線', full: '玩家已滿（最多 8 人）', lost: '已斷線，重新連線中…',
-                   layout: '版面', drag: '拖曳按鍵來移動', size: '大小', reset: '還原', done: '完成',
+                   layout: '版面', drag: '拖曳移動，兩指縮放', size: '大小', reset: '還原', done: '完成',
                    kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入',
                    ios: 'iPhone 沒辦法讓網頁全螢幕：按 Safari 的「分享」→「加入主畫面」，再從主畫面打開，就不會有網址列。' }
                : { rotate: 'Turn your phone sideways ↻', connecting: 'Connecting…', connected: 'Connected', full: 'All 8 players are taken', lost: 'Disconnected, reconnecting…',
-                   layout: 'Layout', drag: 'Drag a control to move it', size: 'Size', reset: 'Reset', done: 'Done',
+                   layout: 'Layout', drag: 'Drag to move, pinch to resize', size: 'Size', reset: 'Reset', done: 'Done',
                    kicked: 'This phone was removed on the iPad', rejoin: 'Join again',
                    ios: 'iPhone cannot show a web page full screen: tap Share, then Add to Home Screen in Safari, and open it from the Home Screen for no address bar.' };
   if (zh) document.documentElement.lang = 'zh-Hant';
@@ -209,15 +214,17 @@
   addEventListener('resize', applyLayout);
   applyLayout();
 
-  let editing = false, sel = null, drag = null;
+  let editing = false, sel = null, drag = null, pinch = null;
+  const editTouches = new Map();
+  function spread() { const [a, b] = [...editTouches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)); }
   function select(p) { pieces.forEach(q => q.classList.toggle('sel', q === p)); sel = p; }
   function scaleSel(f) {
     if (!sel) return;
     const l = layout[sel.dataset.k] || (layout[sel.dataset.k] = { x: 0, y: 0, s: 1 });
-    l.s = Math.min(2, Math.max(0.5, Math.round(l.s * f * 100) / 100));
+    l.s = Math.min(2.5, Math.max(0.4, Math.round(l.s * f * 100) / 100));
     applyPiece(sel);
   }
-  $('#edit').addEventListener('click', () => { editing = true; release(); document.body.classList.add('editing'); select(pieces[0]); });
+  $('#edit').addEventListener('click', () => { editTouches.clear(); pinch = drag = null; editing = true; release(); document.body.classList.add('editing'); select(pieces[0]); });
   $('#done').addEventListener('click', () => { editing = false; select(null); document.body.classList.remove('editing'); saveLayout(); });
   $('#reset').addEventListener('click', () => { layout = {}; applyLayout(); saveLayout(); });
   $('#smaller').addEventListener('click', () => scaleSel(1 / 1.1));
@@ -231,17 +238,19 @@
   function targetAt(x, y) {
     const el = document.elementFromPoint(x, y);
     if (!el) return null;
-    const st = el.closest('.stick');
+    const st = el.closest('.stick, .dpad');
     if (st) return st;
     return el.closest('[data-bit]');
   }
 
   function recompute() {
     let mask = 0;
-    document.querySelectorAll('[data-bit]').forEach(e => e.classList.remove('on'));
+    document.querySelectorAll('[data-bit], [data-arm]').forEach(e => e.classList.remove('on'));
     for (const t of touches.values()) {
-      if (t.el && t.el.dataset.bit !== undefined) { mask |= 1 << +t.el.dataset.bit; t.el.classList.add('on'); }
+      if (t.dpad) mask |= t.bits;
+      else if (t.el && t.el.dataset.bit !== undefined) { mask |= 1 << +t.el.dataset.bit; t.el.classList.add('on'); }
     }
+    document.querySelectorAll('[data-arm]').forEach(e => { if (mask >> +e.dataset.arm & 1) e.classList.add('on'); });
     if (mask !== state.buttons) {
       if (mask & ~state.buttons && navigator.vibrate) navigator.vibrate(8);
       state.buttons = mask; dirty = true;
@@ -262,6 +271,20 @@
     dirty = true;
   }
 
+  // The D-pad: the direction from its centre, each axis held within 67.5° of it, so the eight 45° sectors give four directions and four diagonals;
+  // the centre (a quarter of the radius) holds nothing
+  function moveDpad(t, x, y) {
+    const r = t.el.getBoundingClientRect();
+    const dx = x - (r.left + r.width / 2), dy = (r.top + r.height / 2) - y, len = Math.hypot(dx, dy);
+    let bits = 0;
+    if (len > r.width / 8) {
+      const k = 0.3827 * len;   // cos 67.5°
+      if (dx > k) bits |= 1 << 14; else if (dx < -k) bits |= 1 << 12;
+      if (dy > k) bits |= 1 << 13; else if (dy < -k) bits |= 1 << 15;
+    }
+    t.bits = bits;
+  }
+
   function releaseStick(el) {
     const [ax, ay] = sticks[el.id];
     state[ax] = 0; state[ay] = 0;
@@ -277,7 +300,9 @@
 
   pad.addEventListener('touchstart', e => {
     e.preventDefault();
-    if (editing) {   // the editor: a finger on a control picks its piece and drags it
+    if (editing) {   // the editor: a finger on a control picks its piece and drags it; a second finger anywhere pinches it larger or smaller
+      for (const tp of e.changedTouches) editTouches.set(tp.identifier, { x: tp.clientX, y: tp.clientY });
+      if (editTouches.size >= 2 && sel) { drag = null; pinch = { d: spread(), s: (layout[sel.dataset.k] || { s: 1 }).s }; return; }
       const tp = e.changedTouches[0], el = document.elementFromPoint(tp.clientX, tp.clientY), p = el && el.closest('.piece');
       if (!p) return;
       select(p);
@@ -287,9 +312,10 @@
     }
     for (const tp of e.changedTouches) {
       const el = targetAt(tp.clientX, tp.clientY);
-      const t = { el, stick: !!(el && el.classList.contains('stick')) };
+      const t = { el, stick: !!(el && el.classList.contains('stick')), dpad: !!(el && el.classList.contains('dpad')), bits: 0 };
       touches.set(tp.identifier, t);
       if (t.stick) { el.classList.add('on'); moveStick(t, tp.clientX, tp.clientY); }
+      if (t.dpad) moveDpad(t, tp.clientX, tp.clientY);
     }
     recompute();
   }, { passive: false });
@@ -297,6 +323,13 @@
   pad.addEventListener('touchmove', e => {
     e.preventDefault();
     if (editing) {
+      for (const tp of e.changedTouches) if (editTouches.has(tp.identifier)) editTouches.set(tp.identifier, { x: tp.clientX, y: tp.clientY });
+      if (pinch && sel && editTouches.size >= 2) {
+        const l = layout[sel.dataset.k] || (layout[sel.dataset.k] = { x: 0, y: 0, s: 1 });
+        l.s = Math.min(2.5, Math.max(0.4, pinch.s * spread() / pinch.d));
+        applyPiece(sel);
+        return;
+      }
       for (const tp of e.changedTouches) if (drag && tp.identifier === drag.id && sel) {
         const l = layout[sel.dataset.k];
         l.x = Math.max(-1, Math.min(1, drag.lx + (tp.clientX - drag.x) / pad.clientWidth));
@@ -309,6 +342,7 @@
       const t = touches.get(tp.identifier);
       if (!t) continue;
       if (t.stick) moveStick(t, tp.clientX, tp.clientY);
+      else if (t.dpad) moveDpad(t, tp.clientX, tp.clientY);
       else t.el = targetAt(tp.clientX, tp.clientY);
     }
     recompute();
@@ -316,7 +350,11 @@
 
   const end = e => {
     e.preventDefault();
-    if (editing) { drag = null; return; }
+    if (editing) {
+      for (const tp of e.changedTouches) editTouches.delete(tp.identifier);
+      drag = null; if (editTouches.size < 2) pinch = null;
+      return;
+    }
     for (const tp of e.changedTouches) {
       const t = touches.get(tp.identifier);
       if (t && t.stick) releaseStick(t.el);

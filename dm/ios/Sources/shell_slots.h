@@ -3,6 +3,7 @@
 // Each slot also keeps what the launcher lists (shell_players.m): which kind of holder it is and a label. The launcher can swap two players and remove a holder; each kind
 // registers what that means for its holders (shell_slots_handlers), and every change calls the change hook.
 #pragma once
+#include <stdint.h>
 
 enum { SHELL_SLOT_NONE = 0, SHELL_SLOT_CONTROLLER = 1, SHELL_SLOT_PHONE = 2, SHELL_SLOT_KINDS };
 typedef struct { int kind, xbox; char label[64], name[64]; } shell_slot_info;   // xbox: the holder's buttons go by Xbox labels (A bottom); name: its identity (pad_slots.h)
@@ -21,4 +22,8 @@ int shell_slot_swap(int a, int b);   // exchanges the holders of players a + 1 a
 int shell_slot_kick(int p);          // removes the holder of player p + 1 through its kind's kick handler; 0 when the slot is free
 int shell_slot_set_layout(int p, int xbox);   // the button layout of player p + 1's holder, through its kind's layout handler; 0 when the slot is free
 int shell_slot_layout(const void *owner);     // owner's button layout (1 Xbox), 0 when it holds no slot
-void shell_slots_on_change(void (*hook)(void));   // called after every take, free, swap, kick and layout change, on that call's thread, with no lock held
+void shell_slots_on_change(void (*hook)(void));
+// Input from a holder that the app itself looks at (the launcher starts the game on A or +, shell_players.m): each holder reports its buttons after
+// dm_pad_set_player, on its own thread
+void shell_slot_input(int p, uint64_t buttons);
+void shell_slots_on_input(void (*hook)(int p, uint64_t buttons));   // called after every take, free, swap, kick and layout change, on that call's thread, with no lock held
