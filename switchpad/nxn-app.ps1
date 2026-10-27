@@ -180,7 +180,15 @@ $xamlText = @'
         <Button x:Name="Settings" Content="⚙" ToolTip="設定" Padding="13,8"/>
       </StackPanel>
       <StackPanel>
-        <TextBlock Text="Switch Pad" FontSize="30" FontWeight="Bold" ToolTip="點遊戲來選取；把 NSP / XCI 拖到遊戲上加進那款，拖到空白處新增一款"/>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="Switch Pad" FontSize="30" FontWeight="Bold" ToolTip="點遊戲來選取；把 NSP / XCI 拖到遊戲上加進那款，拖到空白處新增一款"/>
+          <Border Background="#1C1C1E" CornerRadius="10" Margin="24,0,0,0" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal">
+              <RadioButton x:Name="TabGames" GroupName="tab" Style="{StaticResource Seg}" Content="遊戲" IsChecked="True"/>
+              <RadioButton x:Name="TabPacks" GroupName="tab" Style="{StaticResource Seg}" Content="合包"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
         <TextBlock x:Name="Subtitle" Foreground="#8E8E93" Margin="0,2,0,0" Visibility="Collapsed"/>
       </StackPanel>
     </DockPanel>
@@ -209,7 +217,7 @@ $xamlText = @'
         <UniformGrid x:Name="Library" Columns="5" VerticalAlignment="Top" Margin="-8,0,4,12"/>
         <TextBlock x:Name="PacksHead" Text="合包" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,4" Visibility="Collapsed"
                    ToolTip="好幾款遊戲合成的一個 App。點一下看裡面有哪些遊戲"/>
-        <UniformGrid x:Name="Packs" Columns="5" VerticalAlignment="Top" Margin="-8,0,4,12"/>
+        <UniformGrid x:Name="Packs" Visibility="Collapsed" Columns="5" VerticalAlignment="Top" Margin="-8,0,4,12"/>
       </StackPanel>
     </ScrollViewer>
 
@@ -285,7 +293,7 @@ if (Test-Path $appIcon) {
     } catch { }
 }
 $ui = @{}
-foreach ($n in 'AcctDot','Account','Login','Refresh','Settings','Subtitle','Banner','BannerText','RenewAll','LibraryView','Library','Notice','NoticeText','NoticeBtn','GamesHead','PacksHead','Packs',
+foreach ($n in 'AcctDot','Account','Login','Refresh','Settings','Subtitle','Banner','BannerText','RenewAll','LibraryView','Library','Notice','NoticeText','NoticeBtn','GamesHead','PacksHead','Packs','TabGames','TabPacks',
                'ProgressView','ProgTitle','ProgTotal','Busy','Jobs','Stop','Back','Start','Options','SelCount',
                'ModeBoth','ModePack','ModeInstall','Separate','Merge','ShellLabel') { $ui[$n] = $win.FindName($n) }
 switch ($cfg.Mode) { 'pack' { $ui.ModePack.IsChecked = $true } 'install' { $ui.ModeInstall.IsChecked = $true } }
@@ -692,8 +700,13 @@ function Build-Packs($inst) {
     $ui.Packs.Children.Clear()
     $mdir = Join-Path $here '合包'
     $ipas = @(Get-ChildItem -LiteralPath $mdir -Filter '*.ipa' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
-    $ui.PacksHead.Visibility = if ($ipas.Count) { 'Visible' } else { 'Collapsed' }
-    $ui.GamesHead.Visibility = $ui.PacksHead.Visibility
+    $ui.TabPacks.Content = if ($ipas.Count) { "合包 $($ipas.Count)" } else { '合包' }
+    if (-not $ipas.Count) {
+        $t = New-Object Windows.Controls.TextBlock
+        $t.Text = '還沒有合包：在「遊戲」勾幾款，選「合成一包」再按開始'
+        $t.Foreground = Brush '#8E8E93'; $t.Margin = '8,40,8,0'; $t.FontSize = 16
+        [void]$ui.Packs.Children.Add($t)
+    }
     $mine = $inst | Where-Object { $_.Dir -eq $mdir } | Select-Object -First 1
     foreach ($ipa in $ipas) {
         $games = @(Read-Pack $ipa)
@@ -716,7 +729,7 @@ function Build-Packs($inst) {
         $cm = New-Object Windows.Controls.ContextMenu
         $cm.Style = $win.FindResource([Windows.Controls.ContextMenu])
         $cm.Resources.Add([Windows.Controls.MenuItem], $win.FindResource([Windows.Controls.MenuItem]))
-        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('📲  安裝到 iPad', 'install'), @('📂  打開資料夾', 'folder'))) {
+        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'))) {
             $mi = New-Object Windows.Controls.MenuItem
             $mi.Header = $it[0]; $mi.Tag = @{ Pack = $p; Action = $it[1] }
             $mi.Add_Click({ param($s, $e) Pack-Action $s.Tag.Pack $s.Tag.Action })
@@ -731,7 +744,60 @@ function Pack-Action($p, $action) {
         'show'    { Show-Pack $p }
         'install' { Start-Run @(@{ Game = $p; Mode = 'install'; Ipa = $p.Ipas[0].FullName }) }
         'folder'  { Start-Process explorer.exe "/select,`"$($p.Ipas[0].FullName)`"" }
+        'rename'  {
+            $n = Ask-Text '合包改名' 'iPad 主畫面上顯示的名稱（也是檔名）。iPad 上要重新安裝才會變。' $p.Name
+            if ($n -and $n -ne $p.Name) { Rename-Pack $p $n }
+        }
     }
+}
+# 合包的名稱就是它的檔名，也是 iPad 主畫面上的名稱（nxn_merge.py --name）
+function Pack-Path($name) {
+    $safe = ($name -replace '[\\/:*?"<>|]', '_').Trim()
+    if (-not $safe) { $safe = '遊戲合包' }
+    $p = Join-Path (Join-Path $here '合包') "$safe.ipa"
+    if (Test-Path -LiteralPath $p) { $p = Join-Path (Join-Path $here '合包') ("$safe-" + (Get-Date -Format 'MMdd-HHmm') + '.ipa') }
+    return $p
+}
+# 改名：用 nxn_merge.py 拿舊的合包當輸入重新寫一份（原樣複製壓縮資料，很快），成功才刪掉舊的
+function Rename-Pack($p, $name) {
+    $mg = Get-MergeScript
+    if (-not $mg) { [void][Windows.MessageBox]::Show('找不到 nxn_merge.py，沒辦法改 iPad 上的名稱。', '改名'); return }
+    $old = $p.Ipas[0].FullName
+    $new = Pack-Path $name
+    $db = $installedDb
+    $call = "Write-Host '==> 合成一包：改名成 $($name -replace "'", "''")'; & $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $new) --name $(Quote $name) $(Quote $old); " +
+            "if (`$LASTEXITCODE) { Write-Host '出錯了：改名失敗'; `$global:LASTEXITCODE = 1; return }; Remove-Item -LiteralPath $(Quote $old); " +
+            # 安裝紀錄指向舊檔名的話跟著改，續期才找得到
+            "if (Test-Path $(Quote $db)) { `$t = Get-Content $(Quote $db) -Raw -Encoding UTF8; `$t.Replace($(Quote ($old -replace '\\', '\\')), $(Quote ($new -replace '\\', '\\'))) | Set-Content $(Quote $db) -Encoding UTF8 }; " +
+            "Write-Host '改好了'"
+    $g = [pscustomobject]@{ Dir = $p.Dir; Name = "改名：$name"; Ipas = @(); Base = $false; BaseFile = ''; Icon = $p.Icon }
+    Start-Run @(@{ Game = $g; Mode = 'merge'; Ipa = ''; Call = $call })
+}
+# 問一行字的小視窗：取消回傳 $null
+function Ask-Text($title, $prompt, $default) {
+    $ax = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="440" SizeToContent="Height" Background="#000000" Foreground="White" ResizeMode="NoResize"
+        FontFamily="Microsoft JhengHei UI" FontSize="14" WindowStartupLocation="CenterOwner">
+  <Window.Resources>__RES__</Window.Resources>
+  <StackPanel Margin="22">
+    <TextBlock x:Name="Prompt" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,10"/>
+    <TextBox x:Name="Text" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="16" CaretBrush="White"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="Cancel" Content="取消" IsCancel="True" Margin="0,0,8,0"/>
+      <Button x:Name="Ok" Content="好" Style="{StaticResource Primary}" IsDefault="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+'@
+    $aw = Load-Window $ax
+    $aw.Owner = $win; $aw.Title = $title
+    $aw.FindName('Prompt').Text = $prompt
+    $tb = $aw.FindName('Text'); $tb.Text = $default
+    $aw.FindName('Ok').Add_Click({ $aw.DialogResult = $true })
+    $aw.Add_ContentRendered({ $tb.Focus(); $tb.SelectAll() })
+    if ($aw.ShowDialog()) { return $tb.Text.Trim() }
+    return $null
 }
 function Show-Pack($p) {
     $px = @'
@@ -743,6 +809,7 @@ function Show-Pack($p) {
     <TextBlock x:Name="Head" DockPanel.Dock="Top" FontSize="22" FontWeight="Bold"/>
     <TextBlock x:Name="Sub" DockPanel.Dock="Top" Foreground="#8E8E93" Margin="0,4,0,14"/>
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="Rename" Content="改名" Margin="0,0,8,0"/>
       <Button x:Name="Folder" Content="打開資料夾" Margin="0,0,8,0"/>
       <Button x:Name="Install" Content="安裝到 iPad" Style="{StaticResource Primary}" Margin="0,0,8,0"/>
       <Button x:Name="Close" Content="關閉" IsCancel="True"/>
@@ -785,6 +852,7 @@ function Show-Pack($p) {
         [void]$list.Children.Add($row)
     }
     $pw.FindName('Folder').Add_Click({ Pack-Action $p 'folder' })
+    $pw.FindName('Rename').Add_Click({ $pw.DialogResult = $false; Pack-Action $p 'rename' })
     $pw.FindName('Install').Add_Click({ $pw.DialogResult = $true })
     $pw.FindName('Close').Add_Click({ $pw.DialogResult = $false })
     if ($pw.ShowDialog()) { Pack-Action $p 'install' }
@@ -891,6 +959,17 @@ function Update-MergeOption {
                         elseif (-not $ms) { '還沒有多遊戲殼：做好後放進 work\multigame 就能用' }
                         else { '找不到 nxn_merge.py：放在 nxn 資料夾或 work\multigame' }
     if (-not $ui.Merge.IsEnabled -and $ui.Merge.IsChecked) { $ui.Separate.IsChecked = $true }
+    Update-ShellLabel
+}
+# 上面的分頁：遊戲 / 合包。合包頁沒有底下的選項，動作都在卡片上
+function Set-Tab {
+    $packs = [bool]$ui.TabPacks.IsChecked
+    $ui.Library.Visibility = if ($packs) { 'Collapsed' } else { 'Visible' }
+    $ui.Packs.Visibility = if ($packs) { 'Visible' } else { 'Collapsed' }
+    if (-not $state.Running -and $ui.ProgressView.Visibility -ne 'Visible') {
+        $ui.Options.Visibility = if ($packs) { 'Hidden' } else { 'Visible' }
+        $ui.Start.Visibility = if ($packs) { 'Collapsed' } else { 'Visible' }
+    }
 }
 
 function Update-Banner($inst) {
@@ -1204,9 +1283,11 @@ function Run-Games($dirs, $mode, $merge) {
         }
         $mdir = Join-Path $here '合包'
         New-Item -ItemType Directory -Force -Path $mdir | Out-Null
-        $mout = Join-Path $mdir ('合包-' + (Get-Date -Format 'yyyyMMdd-HHmm') + '.ipa')
         $names = ($dirs | ForEach-Object { $cards[$_].Tag.Name }) -join '、'
-        $call = "Write-Host '==> 合成一包：$($names -replace "'", "''")'; & $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $mout) --name '遊戲合包' $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
+        $pname = Ask-Text '合成一包' 'iPad 主畫面上顯示的名稱（之後也可以在「合包」裡改）' '遊戲合包'
+        if (-not $pname) { return }
+        $mout = Pack-Path $pname
+        $call = "Write-Host '==> 合成一包：$($names -replace "'", "''")'; & $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $mout) --name $(Quote $pname) $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
                 "if (`$LASTEXITCODE) { Write-Host '出錯了：合包失敗'; `$global:LASTEXITCODE = 1; return }; Write-Host `"合包完成：$($mout -replace "'", "''")`""
         if ($mode -eq 'both') { $call += "; & $(Quote $script) -Ipa $(Quote $mout) -NoPause" }
         $mg2 = [pscustomobject]@{ Dir = $mdir; Name = "合成一包（$($dirs.Count) 款）"; Ipas = @(); Base = $true }
@@ -1228,6 +1309,8 @@ function Run-Games($dirs, $mode, $merge) {
     Start-Run $jobs
 }
 
+$ui.TabGames.Add_Checked({ Set-Tab })
+$ui.TabPacks.Add_Checked({ Set-Tab })
 $ui.Merge.Add_Checked({ Update-ShellLabel })
 $ui.Separate.Add_Checked({ Update-ShellLabel })
 $ui.Start.Add_Click({
@@ -1262,6 +1345,7 @@ $ui.Back.Add_Click({
     $backTimer.Stop()
     $ui.ProgressView.Visibility = 'Collapsed'; $ui.LibraryView.Visibility = 'Visible'
     $ui.Back.Visibility = 'Collapsed'; $ui.Start.Visibility = 'Visible'; $ui.Options.Visibility = 'Visible'
+    Set-Tab
     Build-Library })
 $ui.Refresh.Add_Click({
     # 之前讀不到圖示的再試一次（例如後來才放了 prod.keys）
