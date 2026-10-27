@@ -12,8 +12,9 @@
 //                                               repeat them). Player 1 drives the whole screen, the others only their own row
 //   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
 //                                               about 7 times a second per player: its row lights up
-// Button layout, per device (its name: a controller's model, a phone's id) and kept in NSUserDefaults: Xbox (A, B, X, Y as printed: A at the bottom) or Switch (by
-// position: right A, bottom B). A device that has no choice yet: an Xbox-branded controller gets Xbox, another controller what DM_PAD_BY_LABEL says (the launcher's
+// Button layout, per player and kept in NSUserDefaults for the device (its name: a controller's model, a phone's id), which it gets as it connects: Xbox (A, B, X, Y
+// as printed: A at the bottom) or Switch (by position: right A, bottom B). Two controllers of the same model may play in different layouts; the one changed last is
+// what that model starts with. A device that has no choice yet: an Xbox-branded controller gets Xbox, another controller what DM_PAD_BY_LABEL says (the launcher's
 // old switch, 0 when unset), a phone Switch. A phone's page draws its buttons in its layout (phone_pads.c sends it).
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
@@ -187,7 +188,9 @@ static NSMutableSet<NSString *> *g_removing;       // phones the launcher remove
 static int g_grace_waiting;
 static void post_players(void) {
     shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
-    for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind != SHELL_SLOT_NONE) {   // each device's own layout (a phone that just joined starts at Switch)
+    // a phone's own layout (one that just joined starts at Switch). Not a controller's: it got its layout as it connected, and its name is only its model, so
+    // two controllers of the same model would be switched together
+    for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind == SHELL_SLOT_PHONE) {
         int want = wanted_layout(info[p].kind, info[p].name, info[p].label);
         if (want != info[p].xbox) { shell_slot_set_layout(p, want); return; }   // that change posts again, with the list as it is now
     }
