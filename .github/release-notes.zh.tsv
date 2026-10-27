@@ -25,3 +25,4 @@ Launcher: controller edits rows in place, no menu over the screen	设置画面�
 Launcher: players 2 to 8 pick their own layout or Identify with their own highlight	设置画面：2P 以后的玩家在自己那一列有自己的选取框，用左右选按键配置或震动、按 A 执行（取消按 − 切换）
 Players: two controllers of the same model keep their own button layout	玩家：同型号的两个手柄可以各自切换 Xbox／Switch 配置，不会一起切换
 Packer: pack DLC, take split shader tables for older builds, write the stamp with LF; Boomerang Fu profile	打包器：会把 DLC 一起打包；旧版游戏（例如惊奇 1.0.1）改用这次拆出来的着色器表；Windows 上写库标记一律用 LF；新增 Boomerang Fu 的暂定设定档
+Switch Pad: the Windows pack-and-install app, with first-run setup and updates from the latest release	Switch Pad：Windows 上打包并安装到 iPad 的程序，第一次使用会自动安装所需工具，之后从最新 release 自动更新（程序、壳、打包器）；release 附上 SwitchPad.zip

@@ -1,0 +1,34 @@
+name: Switch Pad
+
+# Puts switchpad/ as SwitchPad.zip on the latest release, where Switch Pad's updater (switchpad/nxn-update.ps1) looks for
+# it. Only the app changes here: the shell, the tools and the packer stay those of that release. A new shell release
+# (shell.yml) packs the same folder, so the newest release always carries the current app.
+
+on:
+  push:
+    branches: [main]
+    paths: ['switchpad/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write           # uploading the release asset
+
+concurrency:
+  group: shell-build        # never at the same time as a shell release being published
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload SwitchPad.zip to the latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          mkdir -p dist
+          (cd switchpad && zip -q -r ../dist/SwitchPad.zip . -x README.md .gitattributes)
+          gh release upload "$TAG" dist/SwitchPad.zip --repo "$GITHUB_REPOSITORY" --clobber
+          echo "SwitchPad.zip ($(git rev-parse --short HEAD)) uploaded to $TAG" >> "$GITHUB_STEP_SUMMARY"
