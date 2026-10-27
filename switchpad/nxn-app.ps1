@@ -204,7 +204,13 @@ $xamlText = @'
 
     <!-- 遊戲庫 -->
     <ScrollViewer x:Name="LibraryView" Grid.Row="2" VerticalScrollBarVisibility="Auto">
-      <UniformGrid x:Name="Library" Columns="5" VerticalAlignment="Top" Margin="-8,0,4,12"/>
+      <StackPanel>
+        <TextBlock x:Name="GamesHead" Text="遊戲" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,4" Visibility="Collapsed"/>
+        <UniformGrid x:Name="Library" Columns="5" VerticalAlignment="Top" Margin="-8,0,4,12"/>
+        <TextBlock x:Name="PacksHead" Text="合包" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,4" Visibility="Collapsed"
+                   ToolTip="好幾款遊戲合成的一個 App。點一下看裡面有哪些遊戲"/>
+        <UniformGrid x:Name="Packs" Columns="5" VerticalAlignment="Top" Margin="-8,0,4,12"/>
+      </StackPanel>
     </ScrollViewer>
 
     <!-- 進度 -->
@@ -279,7 +285,7 @@ if (Test-Path $appIcon) {
     } catch { }
 }
 $ui = @{}
-foreach ($n in 'AcctDot','Account','Login','Refresh','Settings','Subtitle','Banner','BannerText','RenewAll','LibraryView','Library','Notice','NoticeText','NoticeBtn',
+foreach ($n in 'AcctDot','Account','Login','Refresh','Settings','Subtitle','Banner','BannerText','RenewAll','LibraryView','Library','Notice','NoticeText','NoticeBtn','GamesHead','PacksHead','Packs',
                'ProgressView','ProgTitle','ProgTotal','Busy','Jobs','Stop','Back','Start','Options','SelCount',
                'ModeBoth','ModePack','ModeInstall','Separate','Merge','ShellLabel') { $ui[$n] = $win.FindName($n) }
 switch ($cfg.Mode) { 'pack' { $ui.ModePack.IsChecked = $true } 'install' { $ui.ModeInstall.IsChecked = $true } }
@@ -598,9 +604,6 @@ function Build-Library {
     $ui.Library.Children.Clear(); $cards.Clear(); $selected.Clear()
     $inst = @(Get-Installed)
     $dirs = @(Get-ChildItem -LiteralPath $gamesDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
-    # 合成好的包也列出來（只能「只安裝」或續期）
-    $mdir = Join-Path $here '合包'
-    if (Test-Path -LiteralPath $mdir) { $dirs += Get-Item -LiteralPath $mdir }
     foreach ($d in $dirs) {
         $g = Scan-Game $d
         if (-not $g.Base -and -not $g.Ipas.Count) { continue }   # 不是遊戲資料夾
@@ -651,10 +654,140 @@ function Build-Library {
         $t.Foreground = Brush '#8E8E93'; $t.Margin = '8,40,8,0'; $t.FontSize = 16
         [void]$ui.Library.Children.Add($t)
     }
+    Build-Packs $inst
     Update-SelCount
     Update-Banner $inst
     Update-MergeOption
     Update-Notice
+}
+
+# ---------------------------------------------------------------- 合包：nxn\合包 裡每個 IPA 一張卡，點進去看裡面的遊戲
+# 合包裡每款在 Payload/<App>.app/games/<title ID>/：game.json（id、name、version…）和 icon.png
+$packCache = @{}      # IPA 路徑|修改時間 → 讀到的遊戲清單（讀 zip 目錄要一點時間，不要每次重畫都讀）
+function Read-Pack($ipa) {
+    $key = "$($ipa.FullName)|$($ipa.LastWriteTimeUtc.Ticks)"
+    if ($packCache.ContainsKey($key)) { return $packCache[$key] }
+    $games = @()
+    try {
+        $z = [IO.Compression.ZipFile]::OpenRead($ipa.FullName)
+        try {
+            foreach ($e in $z.Entries) {
+                if ($e.FullName -notmatch '^Payload/[^/]+\.app/games/([0-9A-Fa-f]{16})/game\.json$') { continue }
+                $tid = $Matches[1].ToUpper()
+                $sr = New-Object IO.StreamReader($e.Open(), [Text.Encoding]::UTF8)
+                try { $j = $sr.ReadToEnd() | ConvertFrom-Json } finally { $sr.Dispose() }
+                $icon = Join-Path $coverDir "pack-$tid.png"
+                $ie = $z.GetEntry(($e.FullName -replace 'game\.json$', 'icon.png'))
+                if ($ie -and -not (Test-Path -LiteralPath $icon)) { [IO.Compression.ZipFileExtensions]::ExtractToFile($ie, $icon, $true) }
+                $games += [pscustomobject]@{ Tid = $tid; Name = $(if ($j.name) { $j.name } else { $tid }); Version = [string]$j.version
+                                            Icon = $(if (Test-Path -LiteralPath $icon) { $icon } else { '' }) }
+            }
+        } finally { $z.Dispose() }
+    } catch { }
+    $games = @($games | Sort-Object Name)
+    $packCache[$key] = $games
+    return $games
+}
+function Build-Packs($inst) {
+    $ui.Packs.Children.Clear()
+    $mdir = Join-Path $here '合包'
+    $ipas = @(Get-ChildItem -LiteralPath $mdir -Filter '*.ipa' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    $ui.PacksHead.Visibility = if ($ipas.Count) { 'Visible' } else { 'Collapsed' }
+    $ui.GamesHead.Visibility = $ui.PacksHead.Visibility
+    $mine = $inst | Where-Object { $_.Dir -eq $mdir } | Select-Object -First 1
+    foreach ($ipa in $ipas) {
+        $games = @(Read-Pack $ipa)
+        $p = [pscustomobject]@{ Dir = $mdir; Name = $ipa.BaseName; Ipas = @($ipa); Base = $false; BaseFile = ''; Games = $games
+                               Icon = $(if ($games.Count -and $games[0].Icon) { $games[0].Icon } else { $appIcon }) }
+        $card = [Windows.Markup.XamlReader]::Parse($cardXaml)
+        $card.Tag = $p
+        $card.FindName('Title').Text = $p.Name
+        $card.FindName('Detail').Text = if ($games.Count) { "$($games.Count) 款 · $($ipa.LastWriteTime.ToString('MM/dd'))" } else { $ipa.LastWriteTime.ToString('MM/dd') }
+        $card.FindName('Detail').ToolTip = ($games | ForEach-Object { $_.Name }) -join "`n"
+        $st = $card.FindName('State')
+        if ($mine -and $mine.Ipa -eq $ipa.FullName) {
+            $st.Text = if ($mine.Left -le 0) { '已過期' } else { "已安裝 · 剩 $($mine.Left) 天" }
+            $st.Foreground = Brush $(if ($mine.Left -le 2) { '#FF9F0A' } else { '#30D158' })
+        }
+        Paint-Icon $card.FindName('Icon') $card.FindName('Letter') $p (Cover-For $p)
+        $card.Add_MouseEnter({ param($s, $e) $s.Background = Brush '#2C2C2E' })
+        $card.Add_MouseLeave({ param($s, $e) $s.Background = Brush '#1C1C1E' })
+        $card.Add_MouseLeftButtonUp({ param($s, $e) Show-Pack $s.Tag })
+        $cm = New-Object Windows.Controls.ContextMenu
+        $cm.Style = $win.FindResource([Windows.Controls.ContextMenu])
+        $cm.Resources.Add([Windows.Controls.MenuItem], $win.FindResource([Windows.Controls.MenuItem]))
+        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('📲  安裝到 iPad', 'install'), @('📂  打開資料夾', 'folder'))) {
+            $mi = New-Object Windows.Controls.MenuItem
+            $mi.Header = $it[0]; $mi.Tag = @{ Pack = $p; Action = $it[1] }
+            $mi.Add_Click({ param($s, $e) Pack-Action $s.Tag.Pack $s.Tag.Action })
+            [void]$cm.Items.Add($mi)
+        }
+        $card.ContextMenu = $cm
+        [void]$ui.Packs.Children.Add($card)
+    }
+}
+function Pack-Action($p, $action) {
+    switch ($action) {
+        'show'    { Show-Pack $p }
+        'install' { Start-Run @(@{ Game = $p; Mode = 'install'; Ipa = $p.Ipas[0].FullName }) }
+        'folder'  { Start-Process explorer.exe "/select,`"$($p.Ipas[0].FullName)`"" }
+    }
+}
+function Show-Pack($p) {
+    $px = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="520" SizeToContent="Height" MaxHeight="760" Background="#000000" Foreground="White" ResizeMode="NoResize"
+        FontFamily="Microsoft JhengHei UI" FontSize="14" WindowStartupLocation="CenterOwner">
+  <Window.Resources>__RES__</Window.Resources>
+  <DockPanel Margin="22">
+    <TextBlock x:Name="Head" DockPanel.Dock="Top" FontSize="22" FontWeight="Bold"/>
+    <TextBlock x:Name="Sub" DockPanel.Dock="Top" Foreground="#8E8E93" Margin="0,4,0,14"/>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="Folder" Content="打開資料夾" Margin="0,0,8,0"/>
+      <Button x:Name="Install" Content="安裝到 iPad" Style="{StaticResource Primary}" Margin="0,0,8,0"/>
+      <Button x:Name="Close" Content="關閉" IsCancel="True"/>
+    </StackPanel>
+    <Border Background="#1C1C1E" CornerRadius="12" Padding="6">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="List"/>
+      </ScrollViewer>
+    </Border>
+  </DockPanel>
+</Window>
+'@
+    $pw = Load-Window $px
+    $pw.Owner = $win
+    $pw.Title = $p.Name
+    $pw.FindName('Head').Text = $p.Name
+    $ipa = $p.Ipas[0]
+    $pw.FindName('Sub').Text = "$($p.Games.Count) 款遊戲 · $([math]::Round($ipa.Length / 1GB, 2)) GB · $($ipa.LastWriteTime.ToString('yyyy/MM/dd HH:mm'))"
+    $list = $pw.FindName('List')
+    if (-not $p.Games.Count) {
+        $t = New-Object Windows.Controls.TextBlock
+        $t.Text = '讀不到這包裡的遊戲清單（可能不是合包，或是舊格式）'; $t.Foreground = Brush '#8E8E93'; $t.Margin = '10'
+        [void]$list.Children.Add($t)
+    }
+    foreach ($gm in $p.Games) {
+        $row = New-Object Windows.Controls.DockPanel
+        $row.Margin = '8,6'
+        $ic = New-Object Windows.Controls.Border
+        $ic.Width = 48; $ic.Height = 48; $ic.CornerRadius = '11'; $ic.Margin = '0,0,12,0'; $ic.Background = Brush '#2C2C2E'
+        $bmp = if ($gm.Icon) { Load-Bitmap $gm.Icon } else { $null }
+        if ($bmp) { $b = New-Object Windows.Media.ImageBrush $bmp; $b.Stretch = 'UniformToFill'; $ic.Background = $b }
+        [Windows.Controls.DockPanel]::SetDock($ic, 'Left')
+        [void]$row.Children.Add($ic)
+        $sp = New-Object Windows.Controls.StackPanel; $sp.VerticalAlignment = 'Center'
+        $n = New-Object Windows.Controls.TextBlock; $n.Text = $gm.Name; $n.FontSize = 15; $n.FontWeight = 'SemiBold'
+        $v = New-Object Windows.Controls.TextBlock; $v.Foreground = Brush '#8E8E93'; $v.FontSize = 12
+        $v.Text = (@($(if ($gm.Version) { "v$($gm.Version)" }), $gm.Tid) | Where-Object { $_ }) -join ' · '
+        [void]$sp.Children.Add($n); [void]$sp.Children.Add($v)
+        [void]$row.Children.Add($sp)
+        [void]$list.Children.Add($row)
+    }
+    $pw.FindName('Folder').Add_Click({ Pack-Action $p 'folder' })
+    $pw.FindName('Install').Add_Click({ $pw.DialogResult = $true })
+    $pw.FindName('Close').Add_Click({ $pw.DialogResult = $false })
+    if ($pw.ShowDialog()) { Pack-Action $p 'install' }
 }
 
 # ---------------------------------------------------------------- 安裝和更新（nxn-update.ps1 做事；這裡只看缺什麼、問 GitHub 有沒有新版）
@@ -1212,7 +1345,7 @@ $win.Add_Closing({ param($s, $e)
 # 卡片排滿整個寬度：依視窗寬度決定一排幾張，每張一樣寬
 $ui.LibraryView.Add_SizeChanged({ param($s, $e)
     $cols = [math]::Max(1, [math]::Floor(($e.NewSize.Width - 12) / 236))
-    if ($ui.Library.Columns -ne $cols) { $ui.Library.Columns = $cols } })
+    if ($ui.Library.Columns -ne $cols) { $ui.Library.Columns = $cols; $ui.Packs.Columns = $cols } })
 
 Update-ShellLabel
 Build-Library

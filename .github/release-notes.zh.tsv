@@ -29,3 +29,4 @@ Switch Pad: the Windows pack-and-install app, with first-run setup and updates f
 Switch Pad: find an installed Python (PowerShell 5.1 dropped the probe's quotes)	Switch Pad：修正找不到已安装 Python 的问题（PowerShell 5.1 会吃掉传给 Python 的双引号），也会找 py 启动器
 Switch Pad: list merged packages, show the multi-game shell when merging, relative -Out from the app folder	Switch Pad：合成好的包也会列在游戏库（可以只安装、续期）；选「合成一包」时显示用的多游戏壳；合包用记下的 Python；-Out 的相对路径以程序文件夹为准
 Switch Pad: 合成一包 with 只安裝 installs the newest merged package	Switch Pad：选「合成一包」加「只安装」时，直接安装合包文件夹里最新的那包
+Switch Pad: games and merged packages in their own sections; a package opens to the games inside	Switch Pad：游戏库分成「游戏」和「合包」两区；点合包可以看里面有哪些游戏（图标、名称、版本），并直接安装
