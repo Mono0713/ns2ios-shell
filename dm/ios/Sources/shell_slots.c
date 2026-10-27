@@ -12,6 +12,7 @@ static shell_slot_info g_info[DM_PLAYERS];
 static void (*g_moved[SHELL_SLOT_KINDS])(const void *, int, int);
 static void (*g_kick[SHELL_SLOT_KINDS])(const void *);
 static void (*g_layout[SHELL_SLOT_KINDS])(const void *, int);
+static void (*g_identify[SHELL_SLOT_KINDS])(const void *);
 static void (*g_hook)(void);
 static void (*g_input)(int, uint64_t, int32_t, int32_t);
 
@@ -97,6 +98,18 @@ int shell_slot_set_layout(int p, int xbox) {
     if (!o) return 0;
     if (was != (xbox != 0)) { if (l) l(o, xbox != 0); changed(); }
     return 1;
+}
+void shell_slots_identify_handler(int kind, void (*identify)(const void *)) {
+    if (kind <= SHELL_SLOT_NONE || kind >= SHELL_SLOT_KINDS) return;
+    pthread_mutex_lock(&g_mu); g_identify[kind] = identify; pthread_mutex_unlock(&g_mu);
+}
+int shell_slot_identify(int p) {
+    if (p < 0 || p >= DM_PLAYERS) return 0;
+    pthread_mutex_lock(&g_mu);
+    const void *o = g_slots.owner[p]; void (*f)(const void *) = o ? g_identify[g_info[p].kind] : NULL;
+    pthread_mutex_unlock(&g_mu);
+    if (f) f(o);
+    return f != NULL;
 }
 int shell_slot_layout(const void *owner) {
     pthread_mutex_lock(&g_mu);

@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 --- a/dm/ios/Sources/DmGamepad.m
 +++ b/dm/ios/Sources/DmGamepad.m
-@@ -10,7 +10,7 @@
+@@ -10,11 +10,12 @@
  //     then in 3D the right stick for a touch in the right third.
  //   Everything hugs the edges and corners to leave the picture room; controls sit over the picture, one CAShapeLayer each: a press only swaps the fill, a stick only moves its knob, nothing redraws the whole screen.
  //   Touches no control takes (in 3D, those outside the right third) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
@@ -10,7 +10,12 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  //   Shaking the phone shakes the controller (DM_BTN_SHAKE: its six-axis sensor, hle_hid.c), whichever controls are in use; see "Shaking the phone" below.
  #import <UIKit/UIKit.h>
  #import <GameController/GameController.h>
-@@ -22,6 +22,9 @@
+ #import <CoreMotion/CoreMotion.h>
++#import <CoreImage/CoreImage.h>
+ #import <CoreText/CoreText.h>
+ #include <pthread.h>
+ #include "dm.h"
+@@ -22,6 +23,9 @@
  #include "front.h"
  #include "game_profile.h"
  #include "haptics_apple.h"
@@ -20,7 +25,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  
  enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
  enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME };   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
-@@ -39,32 +42,60 @@
+@@ -39,32 +43,60 @@
      pthread_mutex_unlock(&g_mu);
  }
  
@@ -92,7 +97,21 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      }];
  }
  
-@@ -110,8 +141,10 @@
+@@ -96,6 +128,8 @@
+ @interface DmGamepad : UIView
+ @end
+ static __weak DmGamepad *g_view;
++static float g_touch_opacity = 1, g_touch_scale = 1;   // dm_touch_style
++static BOOL shell_zh_hant(void) { NSString *l = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @""; return [l hasPrefix:@"zh-hant"] || [l hasPrefix:@"zh-tw"] || [l hasPrefix:@"zh-hk"] || [l hasPrefix:@"zh-mo"]; }
+ 
+ @implementation DmGamepad {
+     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
+@@ -106,12 +140,15 @@
+     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
+     CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
+     CAShapeLayer *_swap; CATextLayer *_swapLabel; BOOL _swapHeld;
++    CAShapeLayer *_qr; CATextLayer *_qrLabel; UIView *_qrOverlay;   // the phone gamepads' QR code button (below the layout button) and the card it opens
+     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
      unsigned _hapticSticks;
      BOOL _stickShown;                              // the left stick was held at the last refresh
      BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
@@ -105,10 +124,12 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      UITouch *_game[16];                            // touches on the game's touch screen by finger slot
  }
  
-@@ -155,14 +188,19 @@
+@@ -155,14 +192,21 @@
              if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
          }
          _swap = shape(_controls); _swapLabel = label(_swap, @"");
++        _qr = shape(_controls); _qrLabel = label(_qr, @"QR");
++        _controls.opacity = g_touch_opacity;
 +        // First-launch layout from the game profile (DM_PAD_LAYOUT, atoi; the profile writes simple / full / touch and the packer turns it
 +        // into 0 / 1 / 2, the order game.py uses). The game-free shell is compiled against the placeholder profile, which asks for full:
 +        // that is the shell's own default, and a profile that sets no key keeps it (upstream's Mac host would compile game.py's default,
@@ -128,7 +149,25 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
          [self padsChanged];
          motion_start();
      }
-@@ -295,6 +333,7 @@
+@@ -186,7 +230,7 @@
+ // ---- Layout (points; computed inside the safe area) ----
+ - (CGRect)safe { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
+ - (CGRect)corner { UIEdgeInsets i = self.safeAreaInsets; i.left *= K_CORNER_IN; i.right *= K_CORNER_IN; return UIEdgeInsetsInsetRect(self.bounds, i); }   // the rectangle the bottom-corner controls use
+-- (CGFloat)u { return MIN(self.bounds.size.height / 430.0, 1.3); }   // 1 = 430 points tall (iPhone Pro Max landscape)
++- (CGFloat)u { return MIN(self.bounds.size.height / 430.0, 1.3) * g_touch_scale; }   // 1 = 430 points tall (iPhone Pro Max landscape)
+ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
+ - (CGPoint)faceCenter { CGRect s = self.corner; CGFloat u = self.u; return side(s, 1, K_FACE_X * u, CGRectGetMaxY(s) - K_PAD_Y * u); }
+ - (CGFloat)faceGap { return K_FACE_GAP * self.u; }
+@@ -222,6 +266,8 @@
+     return -1;
+ }
+ - (BOOL)inSwap:(CGPoint)p { return dist(p, self.swapCenter) <= K_SWAP_R * self.u * 1.6; }
++- (CGPoint)qrCenter { CGPoint c = self.swapCenter; return CGPointMake(c.x, c.y + 2.6 * K_SWAP_R * self.u); }
++- (BOOL)inQR:(CGPoint)p { return !_qr.hidden && dist(p, self.qrCenter) <= K_SWAP_R * self.u * 1.6; }
+ - (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count)
+     uint64_t m = 0; CGFloat r = self.faceR * 1.25;
+     for (int b = B_A; b <= B_Y; b++) if (dist(p, [self facePos:b]) <= r) m |= 1ull << b;
+@@ -295,11 +341,13 @@
  }
  - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
      BOOL game = NO;
@@ -136,7 +175,13 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      for (UITouch *t in ts) {
          if (_padOff) { game |= [self gameBegin:t]; continue; }
          CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
-@@ -340,7 +379,7 @@
+         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
+         if ([self inSwap:p]) { [_owner setObject:@(C_SWAP) forKey:t]; continue; }
++        if ([self inQR:p]) { [self showQR]; continue; }
+         if (_tap) { game |= [self gameBegin:t]; continue; }
+         // diamond, D-pad, left stick: take the one with the smallest distance / grab radius, if it is <= 1
+         CGFloat best = 1; int kind = C_NONE, idx = 0;
+@@ -340,7 +388,7 @@
      [self recompute];
      if (swap) [self nextLayout];
  }
@@ -145,7 +190,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
  - (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
  
-@@ -376,6 +415,7 @@
+@@ -376,6 +424,7 @@
  
  - (void)layoutSubviews {
      [super layoutSubviews];
@@ -153,7 +198,16 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
      CGFloat u = self.u;
      [CATransaction begin]; [CATransaction setDisableActions:YES];
      _controls.frame = self.layer.bounds;
-@@ -414,32 +454,38 @@
+@@ -394,6 +443,8 @@
+     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
+     for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u, K_ARM_IN * u, arms[i].angle, 6 * u));
+     CGPoint sc = self.swapCenter; setPath(_swap, circlePath(sc, K_SWAP_R * u)); placeLabel(_swapLabel, sc, 12 * u);
++    _qr.hidden = _qrLabel.hidden = !getenv("DM_PHONE_PADS_LIVE");   // only while the phone server runs
++    CGPoint qc = self.qrCenter; setPath(_qr, circlePath(qc, K_SWAP_R * u)); placeLabel(_qrLabel, qc, 10 * u);
+     setPath(_ring, circlePath(self.stickHome, [self stickR:0]));
+     CGFloat k = K_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
+     setPath(_knob, circlePath(CGPointMake(k, k), k));
+@@ -414,37 +465,87 @@
      [CATransaction commit];
  }
  
@@ -174,6 +228,45 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 -    g_pad_rx = axis(g.rightThumbstick.xAxis.value); g_pad_ry = axis(g.rightThumbstick.yAxis.value);
 -    pthread_mutex_unlock(&g_mu);
 -    publish();
++// ---- The launcher's touch-control style and the phone QR code card ----
++- (void)applyStyle { if (!_padOff) _controls.opacity = g_touch_opacity; [self setNeedsLayout]; }
++int phone_pads_url(char *out, size_t cap);
++- (void)showQR {   // a card over the game with the phone gamepads' QR code and address; a tap anywhere closes it
++    if (_qrOverlay) return;
++    char url[96]; if (!phone_pads_url(url, sizeof url)) return;
++    NSString *u = [NSString stringWithUTF8String:url];
++    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[u dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
++    CIImage *ci = f.outputImage; CGImageRef cg = ci ? [[CIContext context] createCGImage:ci fromRect:ci.extent] : NULL;
++    if (!cg) return;
++    BOOL zh = shell_zh_hant();
++    UIView *o = [[UIView alloc] initWithFrame:self.bounds]; o.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
++    o.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
++    UIView *card = [UIView new]; card.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.96]; card.layer.cornerRadius = 20; card.translatesAutoresizingMaskIntoConstraints = NO;
++    UIImageView *img = [[UIImageView alloc] initWithImage:[UIImage imageWithCGImage:cg]]; CGImageRelease(cg);
++    img.layer.magnificationFilter = kCAFilterNearest; img.backgroundColor = UIColor.whiteColor; img.contentMode = UIViewContentModeScaleAspectFit; img.translatesAutoresizingMaskIntoConstraints = NO;
++    img.layer.cornerRadius = 8; img.layer.borderColor = UIColor.whiteColor.CGColor; img.layer.borderWidth = 8; img.clipsToBounds = YES;
++    UILabel *title = [UILabel new]; title.text = zh ? @"用手機掃描加入遊戲" : @"Scan with a phone to join"; title.font = [UIFont boldSystemFontOfSize:20]; title.textColor = UIColor.whiteColor;
++    UILabel *addr = [UILabel new]; addr.text = u; addr.font = [UIFont monospacedSystemFontOfSize:16 weight:UIFontWeightRegular]; addr.textColor = [UIColor colorWithWhite:1 alpha:0.85];
++    UILabel *hint = [UILabel new]; hint.text = zh ? @"點一下任意處關閉" : @"Tap anywhere to close"; hint.font = [UIFont systemFontOfSize:13]; hint.textColor = [UIColor colorWithWhite:1 alpha:0.55];
++    UIStackView *st = [[UIStackView alloc] initWithArrangedSubviews:@[title, img, addr, hint]]; st.axis = UILayoutConstraintAxisVertical; st.alignment = UIStackViewAlignmentCenter; st.spacing = 12;
++    st.translatesAutoresizingMaskIntoConstraints = NO;
++    [card addSubview:st]; [o addSubview:card];
++    CGFloat side = MIN(220, self.bounds.size.height * 0.45);
++    [NSLayoutConstraint activateConstraints:@[
++        [img.widthAnchor constraintEqualToConstant:side], [img.heightAnchor constraintEqualToConstant:side],
++        [st.topAnchor constraintEqualToAnchor:card.topAnchor constant:20], [st.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
++        [st.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:28], [st.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-28],
++        [card.centerXAnchor constraintEqualToAnchor:o.centerXAnchor], [card.centerYAnchor constraintEqualToAnchor:o.centerYAnchor]]];
++    [o addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideQR)]];
++    o.alpha = 0; [self addSubview:o]; _qrOverlay = o;
++    [UIView animateWithDuration:0.2 animations:^{ o.alpha = 1; }];
++    LOG("front end: phone QR code shown (%s)", url);
++}
++- (void)hideQR {
++    UIView *o = _qrOverlay; _qrOverlay = nil;
++    [UIView animateWithDuration:0.2 animations:^{ o.alpha = 0; } completion:^(BOOL done) { (void)done; [o removeFromSuperview]; }];
++}
++
 +// ---- Physical controllers and phones ----
 +// Each controller is a player of its own, from app launch: shell_players.m reads them and takes their players from the shared slot table (shell_slots.h), as phone_pads.c
 +// does for the phones. Here they only hide the touch gamepad while one plays: a tap on the screen shows it again for PEEK_SECONDS after the last touch (the iPad may
@@ -185,7 +278,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 +    if (on == !_padOff) return;
 +    _padOff = !on;
 +    [CATransaction begin]; [CATransaction setAnimationDuration:on ? 0.15 : 0.4];
-+    _controls.opacity = on ? 1 : 0;
++    _controls.opacity = on ? g_touch_opacity : 0;
 +    [CATransaction commit];
 +    if (!on) [self reset];
 +}
@@ -216,7 +309,11 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
  }
  @end
  
-@@ -447,4 +493,5 @@
++void dm_touch_style(float opacity, float scale) {   // the launcher's touch-control opacity and size (Launcher.swift, main thread)
++    g_touch_opacity = fminf(1, fmaxf(0.2f, opacity)); g_touch_scale = fminf(1.3f, fmaxf(0.7f, scale));
++    [g_view applyStyle];
++}
+ UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; return v; }
  void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
      dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
      pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_shake_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish();

@@ -41,7 +41,9 @@ private let zhText: [String: String] = [
     "Motion controls": "體感操作（陀螺儀）",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
-    "Frame rate cap": "幀率上限", "30 fps": "30 fps", "Lower heat and battery use; some games may not follow it.": "降低發熱與耗電；部分遊戲可能不受影響。",
+    "Frame rate cap": "幀率上限", "30 fps runs cooler and saves battery; 60 fps is the most a game runs at.": "30 fps 較省電、機身較不燙；60 fps 為遊戲可達到的最高幀率。",
+    "Touch controls opacity": "觸控按鍵不透明度", "Touch controls size": "觸控按鍵大小",
+    "Identify": "辨識", "Buzzes this player's controller or flashes its phone.": "讓這位玩家的手把震動或手機閃一下。",
     "Phone controllers": "手機手把", "Scan with a phone camera, or open in its browser:": "用手機相機掃描 QR Code，或在瀏覽器輸入：",
     "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "請將 iPad 連上 Wi-Fi（或開啟個人熱點），手機才能加入。",
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
@@ -66,7 +68,7 @@ private let enText: [String: String] = [
     "Motion controls": "Motion controls (gyro)",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "When playing by touch, tilting the iPad drives Player 1's motion. DualSense, DualShock 4 and Switch Pro controllers use their own gyroscope.",
-    "Lower heat and battery use; some games may not follow it.": "Lowers heat and battery use. Some games may ignore it.",
+
     "Scan with a phone camera, or open in its browser:": "Scan with your phone's camera, or open this address in its browser:",
     "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "Connect this iPad to Wi-Fi (or turn on Personal Hotspot) so phones can join.",
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
@@ -173,6 +175,12 @@ private struct PlayerRowView: View {
                 Text("Xbox").tag(true)
             }
             .pickerStyle(.segmented).frame(width: 150)
+            Button { m.send(["op": "identify", "p": p.player]) } label: {
+                Image(systemName: "wave.3.right").font(.title3)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(tr("Identify"))
+            .accessibilityHint(tr("Buzzes this player's controller or flashes its phone."))
             Menu {
                 ForEach(1...8, id: \.self) { n in
                     if n != p.player { Button(moveText(n)) { m.send(["op": "swap", "a": p.player, "b": n]) } }
@@ -403,35 +411,47 @@ private extension LauncherModel {
     }
 }
 
-// Shell settings every game has (not from launcher.json): motion controls (shell_motion.c, read while the game runs) and a frame-rate cap (DM_FPS, read when the game starts).
-// Kept in UserDefaults; an env file's DM_GYRO or DM_FPS is shown and kept
+// Shell settings every game has (not from launcher.json): motion controls (shell_motion.c, read while the game runs), the touch controls' opacity and size (DmGamepad.m,
+// at once) and a frame-rate cap (DM_FPS, read when the game starts). Kept in UserDefaults; an env file's DM_GYRO or DM_FPS is shown and kept
 @_silgen_name("shell_motion_enable") private func shellMotionEnable(_ on: Int32)
+@_silgen_name("dm_touch_style") private func dmTouchStyle(_ opacity: Float, _ scale: Float)
 private final class ShellSettings: ObservableObject {
     private let fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
     @Published var gyro: Bool
-    @Published var fps30: Bool
+    @Published var fps: Int   // 30 or 60: 60 leaves the game its own rate, which is 60 at most
+    @Published var touchOpacity: Double { didSet { style() } }
+    @Published var touchScale: Double { didSet { style() } }
     var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
     var fpsLocked: Bool { fromFile.contains("DM_FPS") }
     init() {
-        let env = ProcessInfo.processInfo.environment
-        gyro = fromFile.contains("DM_GYRO") ? env["DM_GYRO"] != "0" : UserDefaults.standard.object(forKey: "launcher.DM_GYRO") as? Bool ?? true
-        fps30 = fromFile.contains("DM_FPS") ? env["DM_FPS"] == "30" : UserDefaults.standard.bool(forKey: "launcher.DM_FPS30")
+        let env = ProcessInfo.processInfo.environment, d = UserDefaults.standard
+        gyro = fromFile.contains("DM_GYRO") ? env["DM_GYRO"] != "0" : d.object(forKey: "launcher.DM_GYRO") as? Bool ?? true
+        fps = fromFile.contains("DM_FPS") ? (env["DM_FPS"] == "30" ? 30 : 60) : (d.bool(forKey: "launcher.DM_FPS30") ? 30 : 60)
+        touchOpacity = d.object(forKey: "launcher.touchOpacity") as? Double ?? 1
+        touchScale = d.object(forKey: "launcher.touchScale") as? Double ?? 1
+        style()
     }
+    private func style() { dmTouchStyle(Float(touchOpacity), Float(touchScale)) }
     func apply() {
-        if !gyroLocked { UserDefaults.standard.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
-        if !fpsLocked { UserDefaults.standard.set(fps30, forKey: "launcher.DM_FPS30"); if fps30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
-        fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps30 ? "30 fps" : "the game's")\n", stderr)
+        let d = UserDefaults.standard
+        d.set(touchOpacity, forKey: "launcher.touchOpacity"); d.set(touchScale, forKey: "launcher.touchScale")
+        if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
+        if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30"); if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
+        fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps) fps, touch controls \(Int(touchOpacity * 100)) % opaque at \(Int(touchScale * 100)) % size\n", stderr)
     }
 }
-// The two rows, in the Controls and Game sections
+private func noteLabel(_ title: String, _ note: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+        Text(tr(title))
+        Text(tr(note)).font(.footnote).foregroundStyle(.secondary)
+    }
+}
+// The rows: frame rate in the Game section, the rest in Controls
 private struct GyroRow: View {
     @ObservedObject var shell: ShellSettings
     var body: some View {
         Toggle(isOn: $shell.gyro) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(tr("Motion controls"))
-                Text(tr("The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.")).font(.footnote).foregroundStyle(.secondary)
-            }
+            noteLabel("Motion controls", "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.")
         }
         .disabled(shell.gyroLocked)
     }
@@ -439,17 +459,30 @@ private struct GyroRow: View {
 private struct FpsRow: View {
     @ObservedObject var shell: ShellSettings
     var body: some View {
-        Picker(selection: $shell.fps30) {
-            Text(tr("Game default")).tag(false)
-            Text(tr("30 fps")).tag(true)
+        Picker(selection: $shell.fps) {
+            Text("30 fps").tag(30)
+            Text("60 fps").tag(60)
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(tr("Frame rate cap"))
-                Text(tr("Lower heat and battery use; some games may not follow it.")).font(.footnote).foregroundStyle(.secondary)
-            }
+            noteLabel("Frame rate cap", "30 fps runs cooler and saves battery; 60 fps is the most a game runs at.")
         }
         .pickerStyle(.menu)
         .disabled(shell.fpsLocked)
+    }
+}
+private struct TouchStyleRow: View {   // opacity or size of the touch controls, a slider in percent
+    @ObservedObject var shell: ShellSettings
+    let size: Bool
+    var body: some View {
+        let value = size ? $shell.touchScale : $shell.touchOpacity
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(tr(size ? "Touch controls size" : "Touch controls opacity"))
+                Spacer()
+                Text("\(Int((value.wrappedValue * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: value, in: size ? 0.7...1.3 : 0.2...1, step: 0.05)
+                .accessibilityLabel(tr(size ? "Touch controls size" : "Touch controls opacity"))
+        }
     }
 }
 
@@ -495,7 +528,11 @@ private struct LauncherView: View {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
                             ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m).nav("s:" + $0.env) }
                             if section == "Game" { FpsRow(shell: shell).nav("fps") }
-                            if section == "Controls" { GyroRow(shell: shell).nav("gyro") }
+                            if section == "Controls" {
+                                GyroRow(shell: shell).nav("gyro")
+                                TouchStyleRow(shell: shell, size: false).nav("touchOpacity")
+                                TouchStyleRow(shell: shell, size: true).nav("touchScale")
+                            }
                         }
                     }
                     if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsSection() }
@@ -567,8 +604,12 @@ private struct LauncherView: View {
                 let slider = s.kind == "range" || s.kind == "memory"
                 items.append(NavItem(id: "s:" + s.env, activate: { if !slider { m.step(s, 1) } }, adjust: { m.step(s, $0) }))
             }
-            if section == "Game" && !shell.fpsLocked { items.append(NavItem(id: "fps", activate: { shell.fps30.toggle() }, adjust: { _ in shell.fps30.toggle() })) }
-            if section == "Controls" && !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() }, adjust: { _ in shell.gyro.toggle() })) }
+            if section == "Game" && !shell.fpsLocked { items.append(NavItem(id: "fps", activate: { shell.fps = shell.fps == 30 ? 60 : 30 }, adjust: { _ in shell.fps = shell.fps == 30 ? 60 : 30 })) }
+            if section == "Controls" {
+                if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() }, adjust: { _ in shell.gyro.toggle() })) }
+                items.append(NavItem(id: "touchOpacity", adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
+                items.append(NavItem(id: "touchScale", adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) }))
+            }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
         items.append(NavItem(id: "folder", activate: openGameFolder))

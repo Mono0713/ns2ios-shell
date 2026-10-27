@@ -5,7 +5,7 @@
 // The launcher's player list (Launcher.swift) talks to this file through two notifications, so Swift needs no C header:
 //   DMPlayersChanged (posted here, main thread)  userInfo players: [[player, kind, label, name, xbox]] for each held slot (player from 1; kind 1 controller,
 //                                               2 phone), removed: [[index, label]] for the controllers the launcher removed that are still connected
-//   DMPlayersCommand (posted by the launcher)    userInfo op: refresh | swap (a, b: players from 1) | kick (p) | layout (p, xbox 0/1) | add (index into removed)
+//   DMPlayersCommand (posted by the launcher)    userInfo op: refresh | swap (a, b: players from 1) | kick (p) | layout (p, xbox 0/1) | identify (p) | add (index into removed)
 //                                               | launcher (on 0/1: the settings screen is shown)
 //   DMLauncherInput (posted here, main thread)   while the launcher is shown, player 1's controller or phone: userInfo key: a | b | plus | up | down | left | right
 //                                               (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can repeat them)
@@ -17,6 +17,7 @@
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreHaptics/CoreHaptics.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -165,6 +166,17 @@ static void on_kick(const void *owner) {
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];
 }
 static void on_layout(const void *owner, int xbox) { (void)xbox; GCController *c = pad_of(owner); if (c) read_pad(c); }
+static void on_identify(const void *owner) {   // the launcher's "which one is this?": a short rumble of its own (an engine apart from the game's, stopped after it)
+    GCController *c = pad_of(owner); if (!c.haptics) return;
+    CHHapticEngine *e = [c.haptics createEngineWithLocality:GCHapticsLocalityDefault]; NSError *err = nil;
+    if (!e || ![e startAndReturnError:&err]) return;
+    CHHapticEvent *ev = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
+        parameters:@[[[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1]] relativeTime:0 duration:0.4];
+    CHHapticPattern *pat = [[CHHapticPattern alloc] initWithEvents:@[ev] parameters:@[] error:&err];
+    id<CHHapticPatternPlayer> pl = pat ? [e createPlayerWithPattern:pat error:&err] : nil;
+    [pl startAtTime:CHHapticTimeImmediate error:&err];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [e stopWithCompletionHandler:nil]; });
+}
 
 // ---- The launcher's list ----
 // A phone whose Wi-Fi drops for a moment reconnects at once and gets its player back; its row would vanish and come back, and the whole list below it jump. So a list
@@ -226,6 +238,10 @@ static void command(NSDictionary *u) {
         if (p < 0 || p >= DM_PLAYERS || info[p].kind == SHELL_SLOT_NONE) return;
         [NSUserDefaults.standardUserDefaults setBool:[u[@"xbox"] boolValue] forKey:layout_key(info[p].name)];
         shell_slot_set_layout(p, [u[@"xbox"] boolValue]);
+    } else if ([op isEqualToString:@"identify"]) {   // the badge lights up too (the iPad's own touch controls have nothing to buzz)
+        shell_slot_identify(p);
+        [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayerActive" object:nil userInfo:@{@"p": @(p + 1)}];
+        return;
     } else if ([op isEqualToString:@"launcher"]) {
         atomic_store(&g_launcher, [u[@"on"] intValue] != 0);
         return;
@@ -239,6 +255,7 @@ static void command(NSDictionary *u) {
 void shell_players_start(void) {   // main.m, on the main thread, once
     g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set]; g_motion_state = [NSMapTable strongToStrongObjectsMapTable];
     shell_slots_handlers(SHELL_SLOT_CONTROLLER, on_moved, on_kick, on_layout);
+    shell_slots_identify_handler(SHELL_SLOT_CONTROLLER, on_identify);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;

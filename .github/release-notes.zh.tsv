@@ -19,3 +19,4 @@ Launcher: player 1's controller moves through the settings; phone list no longer
 Touch gamepad hides for phones too; a player's badge lights up on input; Xbox colours on the phone	有手柄或手机连着时，iPad 触控按键会隐藏，点一下屏幕才出现几秒；设置画面里玩家按按键时，他的编号头像会亮一下；手机网页的 Xbox 配置按键换成 Xbox 的四种颜色
 Motion controls: real gyro for the iPad and DualSense / Pro controllers; 30 fps cap; launcher copy reworded	体感：iPad 本身（触控游玩时给 1P）和 DualSense／DualShock 4／Switch Pro 手柄的陀螺仪会传给游戏；设置画面新增「帧率上限」（游戏默认／30 fps）；设置画面中英文文案重写
 Launcher: the memory row's Game default stays in place; phones take the next free player	设置画面：内存那一行的「游戏默认」位置固定；手机手柄说明改成按连线顺序取下一个空编号
+Launcher: 30 / 60 fps, touch-control opacity and size, Identify; in-game phone QR code	设置画面：帧率上限改成 30／60 fps；新增触控按键不透明度和大小；每个玩家有「辨识」按钮（手柄震动、手机闪一下）；游戏中点触控按键上的 QR 按钮可叫出手机连线 QR 码

@@ -25,6 +25,9 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 #include <time.h>
 #include <unistd.h>
 #include "dm.h"
@@ -41,7 +44,7 @@ typedef struct {
     size_t n; uint8_t in[IN_CAP];
     int last_seq; uint64_t last_ns; int released;
     char name[64], id[64];       // id: the phone's own (its page's localStorage), the slot table's name for it
-    _Atomic int moved, kicked, relayout;   // set by the launcher (shell_slots.h handlers, main thread), handled on the server thread
+    _Atomic int moved, kicked, relayout, identify;   // set by the launcher (shell_slots.h handlers, main thread), handled on the server thread
 } client;
 static client g_cl[MAX_CLIENTS];   // a client's address is its owner in the slot table; only the server thread touches a client, but for the two flags
 static char g_banned[MAX_CLIENTS][64];   // ids of phones the launcher removed: they stay out until they ask to join again
@@ -155,6 +158,7 @@ static client *client_of(const void *owner) { const client *c = owner; return c 
 static void on_moved(const void *owner, int from, int to) { (void)from; (void)to; client *c = client_of(owner); if (c) atomic_store(&c->moved, 1); }
 static void on_kick(const void *owner) { client *c = client_of(owner); if (c) atomic_store(&c->kicked, 1); }
 static void on_layout(const void *owner, int xbox) { (void)xbox; client *c = client_of(owner); if (c) atomic_store(&c->relayout, 1); }
+static void on_identify(const void *owner) { client *c = client_of(owner); if (c) atomic_store(&c->identify, 1); }
 static void send_assign(client *c, int p) {   // the player and the button layout the page shows
     char msg[64]; snprintf(msg, sizeof msg, "{\"t\":\"assign\",\"player\":%d,\"layout\":\"%s\"}", p + 1, shell_slot_layout(c) ? "xbox" : "switch"); ws_text(c->fd, msg);
 }
@@ -174,6 +178,7 @@ static void launcher_requests(client *c) {
         send_assign(c, p);
     }
     if (atomic_exchange(&c->relayout, 0) && c->player >= 0) send_assign(c, c->player);
+    if (atomic_exchange(&c->identify, 0) && c->player >= 0) ws_text(c->fd, "{\"t\":\"rumble\",\"ms\":400,\"flash\":1}");   // the page vibrates (Android) and flashes
 }
 
 // ---- HTTP and the WebSocket frames ----
@@ -259,6 +264,24 @@ static void *serve(void *arg) {
     }
 }
 
+// The address phones open, as the launcher shows it (Launcher.swift phonePadsURL): this device's IPv4 address on Wi-Fi (en0), or on another interface that is up
+// (a personal hotspot's bridge) when there is no Wi-Fi. 0 while the server is not running or there is no address. For the in-game QR code card (DmGamepad.m)
+int phone_pads_url(char *out, size_t cap) {
+    const char *port = getenv("DM_PHONE_PADS_LIVE"); if (!port) return 0;
+    struct ifaddrs *list = NULL; if (getifaddrs(&list) != 0) return 0;
+    char best[INET_ADDRSTRLEN] = "", other[INET_ADDRSTRLEN] = "";
+    for (struct ifaddrs *i = list; i; i = i->ifa_next) {
+        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || !(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
+        char a[INET_ADDRSTRLEN]; inet_ntop(AF_INET, &((struct sockaddr_in *)i->ifa_addr)->sin_addr, a, sizeof a);
+        if (!strncmp(a, "169.254.", 8)) continue;
+        if (!strcmp(i->ifa_name, "en0")) { if (!best[0]) snprintf(best, sizeof best, "%s", a); }
+        else if (!other[0] && (!strncmp(i->ifa_name, "bridge", 6) || !strncmp(i->ifa_name, "en", 2))) snprintf(other, sizeof other, "%s", a);
+    }
+    freeifaddrs(list);
+    const char *addr = best[0] ? best : other; if (!addr[0]) return 0;
+    return snprintf(out, cap, "http://%s:%s/", addr, port) < (int)cap;
+}
+
 // Called once at app start (main.m), after the env files are read
 void phone_pads_start(void) {
     const char *on = getenv("DM_PHONE_PADS");
@@ -267,6 +290,7 @@ void phone_pads_start(void) {
     if (port <= 0 || port > 65535) port = 8080;
     signal(SIGPIPE, SIG_IGN);
     shell_slots_handlers(SHELL_SLOT_PHONE, on_moved, on_kick, on_layout);
+    shell_slots_identify_handler(SHELL_SLOT_PHONE, on_identify);
     int ls = socket(AF_INET, SOCK_STREAM, 0), one = 1;
     if (ls < 0) { LOG("[RED] phone pads: no socket (errno %d)", errno); return; }
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
