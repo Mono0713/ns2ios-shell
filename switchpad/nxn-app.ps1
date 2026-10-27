@@ -1287,7 +1287,10 @@ function Run-Games($dirs, $mode, $merge) {
         $pname = Ask-Text '合成一包' 'iPad 主畫面上顯示的名稱（之後也可以在「合包」裡改）' '遊戲合包'
         if (-not $pname) { return }
         $mout = Pack-Path $pname
-        $call = "Write-Host '==> 合成一包：$($names -replace "'", "''")'; & $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $mout) --name $(Quote $pname) $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
+        # 每包自己的 bundle ID，兩包才能同時裝在 iPad 上（改名時不給，沿用原本的，存檔才留得住）
+        $md5 = [Security.Cryptography.MD5]::Create()
+        $bid = 'org.nxnative.games.p' + (-join ($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFileNameWithoutExtension($mout))) | Select-Object -First 4 | ForEach-Object { $_.ToString('x2') }))
+        $call = "Write-Host '==> 合成一包：$($names -replace "'", "''")'; & $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $mout) --name $(Quote $pname) --bundle-id $bid $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
                 "if (`$LASTEXITCODE) { Write-Host '出錯了：合包失敗'; `$global:LASTEXITCODE = 1; return }; Write-Host `"合包完成：$($mout -replace "'", "''")`""
         if ($mode -eq 'both') { $call += "; & $(Quote $script) -Ipa $(Quote $mout) -NoPause" }
         $mg2 = [pscustomobject]@{ Dir = $mdir; Name = "合成一包（$($dirs.Count) 款）"; Ipas = @(); Base = $true }
