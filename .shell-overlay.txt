@@ -75,7 +75,7 @@
 ~ dm/host/hle_hid.c            # the six-axis sensors read dm_motion_set_player's motion while it is fresh (lying still otherwise)
 ~ dm/host/tests/t_hid.c        # the real-motion checks
 ~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame
-~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A opens a menu or a slider, B goes back, left to Play, + starts), every player's − switches its own layout, the phone gamepads' address and QR code under Play, Motion controls, touch-control opacity and size, a 30 / 60 fps cap, an Identify button per player; English copy reworded
+~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A edits the highlighted row in place, B goes back, left to Play, + starts), every player's − switches its own layout, the phone gamepads' address and QR code under Play, Motion controls, touch-control opacity and size, a 30 / 60 fps cap, an Identify button per player; English copy reworded
 ~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL)
 ~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout

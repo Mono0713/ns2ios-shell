@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,292 @@
+@@ -3,10 +3,296 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -54,10 +54,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描左側的 QR Code。",
 +    "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
 +        "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
-+    "Player 1's controller: A opens a player's options. Other players: A buzzes your own controller, − (Xbox: ⧉) switches your own button layout.":
-+        "1P 手把：在玩家上按 A 可以設定任何玩家。其他玩家：按 A 讓自己的手把震動，按 −（Xbox 為 ⧉ 鍵）切換自己的按鍵配置。",
-+    "Identify (buzz or flash)": "震動辨識", "Move to %dP": "換到 %dP", "Move to %dP (swap with %@)": "換到 %dP（和 %@ 交換）",
-+    "Switch layout": "Switch 配置", "Xbox layout": "Xbox 配置", "Phone": "手機",
++    "Player 1's controller: A on a player, then left and right pick what to change. Every player: − (Xbox: ⧉) switches your own button layout; players 2 to 8: A buzzes your own controller.":
++        "1P 手把：在玩家那一列按 A，再用左右選要調整的項目。每位玩家按 −（Xbox 為 ⧉ 鍵）切換自己的按鍵配置；2P 以後按 A 讓自己的手把震動。",
 +]
 +// English as shown: settings.tsv's labels and notes (and the strings above, which are the keys) rewritten for the screen; a string not listed is shown as it is
 +private let enText: [String: String] = [
@@ -154,6 +152,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +private struct PlayerRowView: View {
 +    let p: PlayerRow
 +    @ObservedObject var m: PlayersModel
++    @EnvironmentObject var nav: NavModel
 +
 +    private var phone: Bool { p.kind == 2 }
 +    private var title: String { playerTitle(p) }
@@ -177,24 +176,29 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                Text("Xbox").tag(true)
 +            }
 +            .pickerStyle(.segmented).frame(width: 150)
++            .modifier(NavPart(player: p.player, part: 0))
 +            Button { m.send(["op": "identify", "p": p.player]) } label: {
 +                Image(systemName: "wave.3.right").font(.title3)
 +            }
 +            .buttonStyle(.borderless)
 +            .accessibilityLabel(tr("Identify"))
 +            .accessibilityHint(tr("Buzzes this player's controller or flashes its phone."))
++            .modifier(NavPart(player: p.player, part: 1))
 +            Menu {
 +                ForEach(1...8, id: \.self) { n in
 +                    if n != p.player { Button(moveText(n)) { m.send(["op": "swap", "a": p.player, "b": n]) } }
 +                }
-+            } label: {
-+                Label(tr("Move to"), systemImage: "arrow.left.arrow.right")
++            } label: {   // while player 1 picks the number: "Move to 3P"
++                let n = nav.focus == "p\(p.player)" ? nav.moveTo : nil
++                Label(tr("Move to") + (n.map { " \($0)P" } ?? ""), systemImage: "arrow.left.arrow.right")
 +            }
++            .modifier(NavPart(player: p.player, part: 2))
 +            Button(role: .destructive) { m.send(["op": "kick", "p": p.player]) } label: {
 +                Image(systemName: "xmark.circle.fill").font(.title3)
 +            }
 +            .buttonStyle(.borderless)
 +            .accessibilityLabel(tr("Remove"))
++            .modifier(NavPart(player: p.player, part: 3))
 +        }
 +    }
 +}
@@ -224,7 +228,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            Text(tr("Players"))
 +        } footer: {
 +            Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.")
-+                 + " " + tr("Player 1's controller: A opens a player's options. Other players: A buzzes your own controller, − (Xbox: ⧉) switches your own button layout."))
++                 + " " + tr("Player 1's controller: A on a player, then left and right pick what to change. Every player: − (Xbox: ⧉) switches your own button layout; players 2 to 8: A buzzes your own controller."))
 +        }
 +    }
 +}
@@ -294,7 +298,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +300,31 @@
+@@ -18,17 +304,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -328,7 +332,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +334,7 @@
+@@ -38,7 +338,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -337,7 +341,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +347,22 @@
+@@ -51,8 +351,22 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -361,24 +365,21 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,43 +374,232 @@
+@@ -64,43 +378,202 @@
      }
  }
  
 +// Player 1's controller or phone on the launcher (shell_players.m posts DMLauncherInput): up and down move a highlight over the rows, left goes to Play (right comes
-+// back), A uses the highlighted row: a switch flips, a choice or a player opens a menu of its options, a slider takes left and right until A or B. B goes back
-+// (closes the menu, ends the slider, or goes to Play) and + starts the game. Touch works as before
-+private struct NavMenu {
-+    struct Option { let label: String; var current = false; var destructive = false; let run: () -> Void }
-+    let title: String
-+    let options: [Option]
-+    var index: Int
-+}
++// back), A uses the highlighted row in place: a switch flips; a choice or a slider takes left and right until A or B; a player's row lets left and right pick its
++// layout, Identify, Move to (A, then left and right pick the number) or Remove. B goes back one step (or to Play) and + starts the game. No menu covers the
++// screen, so the other players can set their own at the same time (shell_players.m: A buzzes, − switches the layout). Touch works as before
 +private final class NavModel: ObservableObject {
 +    @Published var focus = "play"
-+    @Published var editing = false   // the highlighted slider takes left and right
-+    @Published var menu: NavMenu?
-+    var list = ""                     // the row left for Play, where right goes back to
++    @Published var editing = false   // the highlighted choice or slider takes left and right
++    @Published var part: Int?        // on a player's row: 0 layout, 1 Identify, 2 Move to, 3 Remove
++    @Published var moveTo: Int?      // Move to: the player number picked so far
++    var list = ""                    // the row left for Play, where right goes back to
++    func reset() { editing = false; part = nil; moveTo = nil }
 +}
 +private struct NavHighlight: ViewModifier {
 +    let id: String
@@ -389,53 +390,26 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +}
 +private extension View { func nav(_ id: String) -> some View { modifier(NavHighlight(id: id)) } }
-+private struct NavItem { let id: String; var slider = false; var activate: () -> Void = {}; var adjust: (Int) -> Void = { _ in } }
-+
-+private struct NavMenuView: View {   // the menu A opened, over the launcher; it takes touches too
-+    @ObservedObject var nav: NavModel
-+    var body: some View {
-+        if let menu = nav.menu {
-+            ZStack {
-+                Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { nav.menu = nil }
-+                VStack(alignment: .leading, spacing: 4) {
-+                    Text(menu.title).font(.headline).padding(.horizontal, 12).padding(.bottom, 6)
-+                    ScrollViewReader { proxy in
-+                        ScrollView {
-+                            VStack(spacing: 4) {
-+                                ForEach(menu.options.indices, id: \.self) { i in
-+                                    let o = menu.options[i]
-+                                    Button { nav.menu = nil; o.run() } label: {
-+                                        HStack {
-+                                            Text(o.label).foregroundStyle(o.destructive ? Color.red : Color.primary)
-+                                            Spacer()
-+                                            if o.current { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-+                                        }
-+                                        .padding(.horizontal, 12).padding(.vertical, 10)
-+                                        .background(RoundedRectangle(cornerRadius: 10).fill(i == menu.index ? Color.accentColor.opacity(0.45) : Color.clear))
-+                                        .contentShape(Rectangle())
-+                                    }
-+                                    .buttonStyle(.plain)
-+                                    .id(i)
-+                                }
-+                            }
-+                        }
-+                        .frame(height: min(CGFloat(menu.options.count) * 46, 420))
-+                        .onChange(of: menu.index) { _, i in withAnimation { proxy.scrollTo(i, anchor: .center) } }
-+                    }
-+                }
-+                .padding(16)
-+                .frame(width: 420)
-+                .background(RoundedRectangle(cornerRadius: 18).fill(Color(uiColor: .secondarySystemBackground)))
-+            }
++private struct NavPart: ViewModifier {   // a ring around the player row's control player 1 picked
++    let player, part: Int
++    @EnvironmentObject var nav: NavModel
++    func body(content: Content) -> some View {
++        content.overlay {
++            if nav.focus == "p\(player)" && nav.part == part { RoundedRectangle(cornerRadius: 10).stroke(Color.white, lineWidth: 2.5).padding(-5) }
 +        }
 +    }
 +}
++private struct NavItem { let id: String; var slider = false; var activate: () -> Void = {}; var adjust: (Int) -> Void = { _ in } }
 +
 +private extension LauncherModel {
-+    // One step of a setting from a controller (d -1 or +1): a toggle flips, a slider moves by its step (a choice opens a menu instead)
++    // One step of a setting from a controller (d -1 or +1): a toggle flips, a choice moves through its options (wrapping around), a slider moves by its step
 +    func step(_ s: Setting, _ d: Int) {
 +        let v = values[s.env] ?? s.def
 +        switch s.kind {
++        case "choice":
++            guard let o = s.options, !o.isEmpty else { return }
++            let i = o.firstIndex { $0[0] == v } ?? 0
++            values[s.env] = o[((i + d) % o.count + o.count) % o.count][0]
 +        case "range":
 +            let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
 +            values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, (Double(v) ?? hi) + Double(d) * st)))
@@ -601,7 +575,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,21 +607,128 @@
+@@ -108,21 +581,118 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -609,9 +583,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                }
                  .frame(width: geometry.size.width * 2 / 3)
              }
--        }
-+            .overlay { NavMenuView(nav: nav) }
-+        }
+         }
 +        .environmentObject(nav)
 +        .environmentObject(activity)
          .preferredColorScheme(.dark)
@@ -642,41 +614,27 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +
 +    // ---- Player 1's controller ----
-+    private func choices(_ title: String, _ o: [(String, Bool, () -> Void)]) -> NavMenu {
-+        NavMenu(title: title, options: o.map { NavMenu.Option(label: $0.0, current: $0.1, run: $0.2) }, index: o.firstIndex { $0.1 } ?? 0)
-+    }
-+    private func playerMenu(_ r: PlayerRow) -> NavMenu {   // player 1 sets up any player
-+        var o = [NavMenu.Option(label: tr("Switch layout"), current: !r.xbox, run: { players.send(["op": "layout", "p": r.player, "xbox": 0]) }),
-+                 NavMenu.Option(label: tr("Xbox layout"), current: r.xbox, run: { players.send(["op": "layout", "p": r.player, "xbox": 1]) }),
-+                 NavMenu.Option(label: tr("Identify (buzz or flash)"), run: { players.send(["op": "identify", "p": r.player]) })]
-+        for n in 1...8 where n != r.player {
-+            let who = players.players.first { $0.player == n }.map(playerTitle)
-+            let label = zhHant ? "換到 \(n)P" + (who.map { "（和 \($0) 交換）" } ?? "") : "Move to \(n)P" + (who.map { " (swap with \($0))" } ?? "")
-+            o.append(NavMenu.Option(label: label, run: { players.send(["op": "swap", "a": r.player, "b": n]); nav.focus = "p\(n)" }))   // the highlight goes with it
++    private func playerPart(_ r: PlayerRow, _ part: Int) {   // A on a control of a player's row
++        switch part {
++        case 0: players.send(["op": "layout", "p": r.player, "xbox": r.xbox ? 0 : 1])
++        case 1: players.send(["op": "identify", "p": r.player])
++        case 2: nav.moveTo = r.player % 8 + 1
++        default: nav.reset(); players.send(["op": "kick", "p": r.player])
 +        }
-+        o.append(NavMenu.Option(label: tr("Remove"), destructive: true, run: { players.send(["op": "kick", "p": r.player]) }))
-+        return NavMenu(title: "\(r.player)P · " + playerTitle(r), options: o, index: r.xbox ? 1 : 0)
 +    }
 +    private func navItems() -> [NavItem] {   // the rows in screen order (Play is apart); a setting an env file set is skipped
 +        var items: [NavItem] = []
-+        for r in players.players { items.append(NavItem(id: "p\(r.player)", activate: { nav.menu = playerMenu(r) })) }
++        for r in players.players { items.append(NavItem(id: "p\(r.player)", activate: { nav.part = 0 })) }
 +        for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
 +        for section in m.sections {
 +            for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
 +                switch s.kind {
-+                case "choice":
-+                    items.append(NavItem(id: "s:" + s.env, activate: {
-+                        let v = m.values[s.env] ?? s.def
-+                        nav.menu = choices(tr(s.label), (s.options ?? []).map { o in (tr(o[1]), o[0] == v, { m.values[s.env] = o[0] }) })
-+                    }))
-+                case "range", "memory": items.append(NavItem(id: "s:" + s.env, slider: true, adjust: { m.step(s, $0) }))
++                case "choice", "range", "memory": items.append(NavItem(id: "s:" + s.env, slider: true, adjust: { m.step(s, $0) }))
 +                default: items.append(NavItem(id: "s:" + s.env, activate: { m.step(s, 1) }))
 +                }
 +            }
 +            if section == "Game" && !shell.fpsLocked {
-+                items.append(NavItem(id: "fps", activate: {
-+                    nav.menu = choices(tr("Frame rate cap"), [("30 fps", shell.fps == 30, { shell.fps = 30 }), ("60 fps", shell.fps == 60, { shell.fps = 60 })])
-+                }))
++                items.append(NavItem(id: "fps", slider: true, adjust: { _ in shell.fps = shell.fps == 30 ? 60 : 30 }))
 +            }
 +            if section == "Controls" {
 +                if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() })) }
@@ -689,41 +647,46 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        return items
 +    }
 +    private func navDirection(_ key: String) {
-+        if var menu = nav.menu {
-+            if key == "up" || key == "down" { menu.index = Swift.max(0, Swift.min(menu.options.count - 1, menu.index + (key == "up" ? -1 : 1))); nav.menu = menu }
-+            return
-+        }
 +        let items = navItems()
 +        if nav.focus == "play" {   // right (or down) goes back to the row left for Play
 +            if key == "right" || key == "down" { nav.focus = items.contains { $0.id == nav.list } ? nav.list : items.first?.id ?? "play" }
 +            return
 +        }
-+        guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.editing = false; nav.focus = items.first?.id ?? "play"; return }   // its row went away
-+        switch key {
-+        case "left": if nav.editing { items[i].adjust(-1) } else { nav.list = nav.focus; nav.focus = "play" }
-+        case "right": if nav.editing { items[i].adjust(1) }
-+        case "up": nav.editing = false; nav.focus = items[Swift.max(0, i - 1)].id
-+        default: nav.editing = false; nav.focus = items[Swift.min(items.count - 1, i + 1)].id
++        guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.reset(); nav.focus = items.first?.id ?? "play"; return }   // its row went away
++        let d = key == "left" ? -1 : 1
++        if key == "left" || key == "right" {
++            if let n = nav.moveTo, let r = players.players.first(where: { "p\($0.player)" == nav.focus }) {   // the next number but its own
++                var t = n; repeat { t = (t - 1 + d + 8) % 8 + 1 } while t == r.player
++                nav.moveTo = t
++            } else if let part = nav.part { nav.part = Swift.max(0, Swift.min(3, part + d)) }
++            else if nav.editing { items[i].adjust(d) }
++            else if key == "left" { nav.list = nav.focus; nav.focus = "play" }
++            return
 +        }
++        nav.reset()
++        nav.focus = items[Swift.max(0, Swift.min(items.count - 1, i + (key == "up" ? -1 : 1)))].id
 +    }
 +    private func navInput(_ u: [AnyHashable: Any]?) {
 +        guard let key = u?["key"] as? String else { return }
 +        if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
 +        held?.task.cancel(); held = nil
++        let row = players.players.first { "p\($0.player)" == nav.focus }
 +        switch key {
-+        case "plus": nav.menu = nil; play()
++        case "plus": nav.reset(); play()
 +        case "a":
-+            if let menu = nav.menu { nav.menu = nil; menu.options[menu.index].run(); return }
++            if let n = nav.moveTo, let r = row { nav.reset(); players.send(["op": "swap", "a": r.player, "b": n]); nav.focus = "p\(n)"; return }   // the highlight goes with it
++            if let part = nav.part, let r = row { playerPart(r, part); return }
 +            if nav.editing { nav.editing = false; return }
 +            if nav.focus == "play" { play(); return }
 +            guard let item = navItems().first(where: { $0.id == nav.focus }) else { return }
 +            if item.slider { nav.editing = true } else { item.activate() }
-+        case "b":   // back: out of the menu or the slider, else to Play
-+            if nav.menu != nil { nav.menu = nil }
++        case "b":   // back one step, else to Play
++            if nav.moveTo != nil { nav.moveTo = nil }
++            else if nav.part != nil { nav.part = nil }
 +            else if nav.editing { nav.editing = false }
 +            else if nav.focus != "play" { nav.list = nav.focus; nav.focus = "play" }
-+        default:   // a direction: once, then repeated while held (moving up and down, or a slider)
-+            let repeats = key == "up" || key == "down" || nav.editing
++        default:   // a direction: once, then repeated while held (moving up and down, or a value)
++            let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
 +            navDirection(key)
 +            guard repeats else { return }
 +            held = (key, Task { @MainActor in
@@ -734,7 +697,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
      }
  
      private func appIcon() -> UIImage? {
-@@ -140,12 +746,13 @@
+@@ -140,12 +710,13 @@
      guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
      guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
      let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
