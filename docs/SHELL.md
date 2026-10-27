@@ -130,6 +130,25 @@ git -C up apply --check /tmp/xxx.patch
 All of this happens in CI. On Windows it shows up as nothing but a new shell zip: same command, same flags, same Python
 dependencies.
 
+## Several games in one package
+
+`scripts/nxn_merge.py` merges IPAs that `nxn_pack.py` made into one app with a game picker:
+
+```
+python scripts/nxn_merge.py -o Games.ipa "Boomerang Fu.ipa" "ANIMAL WELL.ipa"
+```
+
+Each game goes to `games/<title ID>/` (its `dm/` tables, `msl/`, `romfs/`, `aoc/`, `game.json`, `icon.png`) and its program to
+`Frameworks/Guest_<title ID>.framework`; the shell's own files stay at the top. Entries are copied as they are compressed, so a
+merge takes about as long as copying the files. On the device `main.m` finds `games/`: with two or more games it shows
+`GamePicker.swift` first and only then sets that game's paths (`DM_GUEST` for `loader.c`, saves in `Documents/save/<title ID>`)
+and starts loading it; with one it starts it at once, and a package without `games/` works as before.
+
+One process runs one game: the host maps the game's program at fixed addresses and cannot take it out again. The launcher's
+Change game goes to the home screen and ends the app, and the next tap on its icon opens the picker. The bundle ID is the same
+for every merge (`org.nxnative.games`, `--bundle-id` to change it), so a merge with one more game installs over the last and keeps
+the saves; an IPA the script made can be given again as input. The shell has to carry `MULTI=1` in `dm/shell_info.txt`.
+
 ## The contract between the shell and the packer
 
 They are built separately, so one thing has to line up: the rewriter (`patch_nso.py`) writes call sites into the game's

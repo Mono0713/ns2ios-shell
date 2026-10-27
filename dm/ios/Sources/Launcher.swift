@@ -8,7 +8,18 @@ import UIKit
 import CoreImage.CIFilterBuiltins
 import os
 
-private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
+// A package of several games (main.m, GamePicker.swift): the chosen game's folder, its game.json standing in for the app's own name and version,
+// and its own UserDefaults suite, so each game keeps its settings
+private let gameRoot: URL? = ProcessInfo.processInfo.environment["DM_SHELL_GAME_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+private let gameInfo: [String: Any] = gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }
+    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+let gameDefaults: UserDefaults = ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard
+private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
+private func info(_ key: String) -> Any? {
+    if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
+    if gameRoot != nil, key == "CFBundleShortVersionString", let v = gameInfo["version"] { return v }
+    return Bundle.main.object(forInfoDictionaryKey: key)
+}
 
 // Traditional Chinese when the device's first language is (zh-Hant, zh-TW, zh-HK, zh-MO); anything else stays English. launcher.json carries settings.tsv's
 // English labels and notes and nacp.py's language names, so they are looked up by their English text; an unknown one is shown as it is
@@ -36,7 +47,8 @@ private let zhText: [String: String] = [
     // the launcher's own
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
-    "Open game folder": "打開遊戲資料夾", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
+    "Open game folder": "打開遊戲資料夾", "Change game": "換遊戲",
+    "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
     "Motion controls": "體感操作（陀螺儀）",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
@@ -450,7 +462,7 @@ private final class ShellSettings: ObservableObject {
     var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
     var fpsLocked: Bool { fromFile.contains("DM_FPS") }
     init() {
-        let env = ProcessInfo.processInfo.environment, d = UserDefaults.standard
+        let env = ProcessInfo.processInfo.environment, d = gameDefaults
         gyro = fromFile.contains("DM_GYRO") ? env["DM_GYRO"] != "0" : d.object(forKey: "launcher.DM_GYRO") as? Bool ?? true
         fps = fromFile.contains("DM_FPS") ? (env["DM_FPS"] == "30" ? 30 : 60) : (d.bool(forKey: "launcher.DM_FPS30") ? 30 : 60)
         touchOpacity = d.object(forKey: "launcher.touchOpacity") as? Double ?? 1
@@ -459,7 +471,7 @@ private final class ShellSettings: ObservableObject {
     }
     private func style() { dmTouchStyle(Float(touchOpacity), Float(touchScale)) }
     func apply() {
-        let d = UserDefaults.standard
+        let d = gameDefaults
         d.set(touchOpacity, forKey: "launcher.touchOpacity"); d.set(touchScale, forKey: "launcher.touchScale")
         if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
         if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30"); if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
@@ -512,6 +524,13 @@ private struct TouchStyleRow: View {   // opacity or size of the touch controls,
     }
 }
 
+// A package of several games runs one game per process (main.m): changing games means starting the app again. Go to the home screen the way
+// the Home gesture does, then end, so the next tap on the icon opens the game picker
+private func changeGame() {
+    fputs("launcher: change game: the app closes\n", stderr)
+    UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
+}
 private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
     if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
        let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -568,6 +587,14 @@ private struct LauncherView: View {
                             .nav("reset")
                     } footer: {
                         Text(tr("Brings back all settings this game was tested with."))
+                    }
+                    if severalGames {
+                        Section {
+                            Button(tr("Change game"), action: changeGame)
+                                .nav("change")
+                        } footer: {
+                            Text(tr("The app closes; tap its icon again to choose another game."))
+                        }
                     }
                     Section {
                         Button(tr("Open game folder"), action: openGameFolder)
@@ -646,6 +673,7 @@ private struct LauncherView: View {
             }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
+        if severalGames { items.append(NavItem(id: "change", activate: changeGame)) }
         items.append(NavItem(id: "folder", activate: openGameFolder))
         return items
     }
@@ -712,6 +740,7 @@ private struct LauncherView: View {
     }
 
     private func appIcon() -> UIImage? {
+        if let r = gameRoot, let i = UIImage(contentsOfFile: r.appendingPathComponent("icon.png").path) { return i }
         if let i = UIImage(named: "AppIcon") { return i }
         guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
               let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
@@ -723,10 +752,10 @@ private struct LauncherView: View {
 @_cdecl("dm_show_launcher")
 public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
     if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
-    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
+    guard let url = (gameRoot ?? Bundle.main.resourceURL)?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = LauncherModel(file.settings), shell = ShellSettings()
+    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
     var host: UIViewController?
     let view = LauncherView(m: model, shell: shell) {
         guard let h = host else { return }
