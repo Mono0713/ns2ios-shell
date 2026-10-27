@@ -102,7 +102,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
      NSMutableArray<NSString *> *from_file = [NSMutableArray array];
      for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
-@@ -45,34 +97,54 @@
+@@ -45,34 +97,59 @@
              NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
              if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
              NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
@@ -136,6 +136,11 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
 +    env_default(@"DM_ROMFS", romfs.fileSystemRepresentation);
 +    env_default(@"DM_SAVE", save.fileSystemRepresentation);
 +    env_default(@"DM_TEMP", temp.fileSystemRepresentation);
++    if (g_game_id) {   // the pipelines this device has built (nvn_mtl.m: pso_user.tsv and pso_archive/ beside it), else next to save/ and shared by every game
++        NSString *pso = [[doc stringByAppendingPathComponent:@"pso"] stringByAppendingPathComponent:g_game_id];
++        [fm createDirectoryAtPath:pso withIntermediateDirectories:YES attributes:nil error:nil];
++        env_default(@"DM_PSO_USER", [pso stringByAppendingPathComponent:@"pso_user.tsv"].fileSystemRepresentation);
++    }
      NSString *dm = [res stringByAppendingPathComponent:@"dm"];
 -    setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
 -    setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
@@ -171,7 +176,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
  }
  static int g_boot_ok;
  
-@@ -83,13 +155,48 @@
+@@ -83,13 +160,48 @@
      fprintf(stderr, "boot: dm_main returned %d\n", rc);
      return NULL;
  }
@@ -222,7 +227,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
  
  @interface App : UIResponder <UIApplicationDelegate>
  @end
-@@ -116,6 +223,19 @@
+@@ -116,6 +228,19 @@
  @end
  
  int main(int argc, char **argv) {

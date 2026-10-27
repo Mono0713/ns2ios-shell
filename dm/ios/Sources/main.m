@@ -120,6 +120,11 @@ static int boot_env(void) {
     env_default(@"DM_ROMFS", romfs.fileSystemRepresentation);
     env_default(@"DM_SAVE", save.fileSystemRepresentation);
     env_default(@"DM_TEMP", temp.fileSystemRepresentation);
+    if (g_game_id) {   // the pipelines this device has built (nvn_mtl.m: pso_user.tsv and pso_archive/ beside it), else next to save/ and shared by every game
+        NSString *pso = [[doc stringByAppendingPathComponent:@"pso"] stringByAppendingPathComponent:g_game_id];
+        [fm createDirectoryAtPath:pso withIntermediateDirectories:YES attributes:nil error:nil];
+        env_default(@"DM_PSO_USER", [pso stringByAppendingPathComponent:@"pso_user.tsv"].fileSystemRepresentation);
+    }
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
     env_default(@"DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation);
     env_default(@"DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation);
