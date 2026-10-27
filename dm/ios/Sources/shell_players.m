@@ -7,9 +7,9 @@
 //                                               2 phone), removed: [[index, label]] for the controllers the launcher removed that are still connected
 //   DMPlayersCommand (posted by the launcher)    userInfo op: refresh | swap (a, b: players from 1) | kick (p) | layout (p, xbox 0/1) | identify (p) | add (index into removed)
 //                                               | launcher (on 0/1: the settings screen is shown)
-//   DMLauncherInput (posted here, main thread)   while the launcher is shown, player 1's controller or phone: userInfo key: a | b | plus | up | down | left | right
-//                                               (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can repeat them)
-//                                               Every player's − (Xbox: View) switches its own button layout, and another player's A buzzes its own controller or phone
+//   DMLauncherInput (posted here, main thread)   while the launcher is shown, each player's controller or phone: userInfo p (player from 1), key: a | b | plus | up |
+//                                               down | left | right (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can
+//                                               repeat them). Player 1 drives the whole screen, the others only their own row
 //   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
 //                                               about 7 times a second per player: its row lights up
 // Button layout, per device (its name: a controller's model, a phone's id) and kept in NSUserDefaults: Xbox (A, B, X, Y as printed: A at the bottom) or Switch (by
@@ -46,10 +46,8 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 
 // ---- Player 1 drives the launcher (shell_slot_input: controllers here, phones on the phone server's thread) ----
 static atomic_int g_launcher;
-static _Atomic uint64_t g_last_nav;   // player 1's buttons, the left stick folded into the D-pad
+static _Atomic uint64_t g_last_nav[DM_PLAYERS];   // each player's buttons, the left stick folded into the D-pad
 static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
-static _Atomic uint64_t g_last_buttons[DM_PLAYERS];  // each player's buttons, for its own presses on the launcher
-static void command(NSDictionary *u);
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
     if (atomic_load(&g_launcher) && (buttons || abs(lx) > t || abs(ly) > t)) {   // any player's input lights its row, so each one sees which player it is
@@ -60,28 +58,18 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
             dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayerActive" object:nil userInfo:u]; });
         }
     }
-    uint64_t was = atomic_exchange(&g_last_buttons[p], buttons), down = buttons & ~was;
-    if (atomic_load(&g_launcher) && (down & (1ull << B_MINUS | (p ? 1ull << B_A : 0)))) {   // each player's own: − switches its button layout; A (not player 1's) buzzes it
-        int minus = (down >> B_MINUS & 1) != 0;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!minus) { command(@{@"op": @"identify", @"p": @(p + 1)}); return; }
-            shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
-            if (info[p].kind != SHELL_SLOT_NONE) command(@{@"op": @"layout", @"p": @(p + 1), @"xbox": @(!info[p].xbox)});
-        });
-    }
-    if (p != 0) return;   // the rest of the settings screen is player 1's only
     if (lx < -t) buttons |= 1ull << B_LEFT;
     if (lx > t) buttons |= 1ull << B_RIGHT;
     if (ly > t) buttons |= 1ull << B_UP;
     if (ly < -t) buttons |= 1ull << B_DOWN;
-    uint64_t old = atomic_exchange(&g_last_nav, buttons), pressed = buttons & ~old, released = old & ~buttons;
+    uint64_t old = atomic_exchange(&g_last_nav[p], buttons), pressed = buttons & ~old, released = old & ~buttons;
     if (!atomic_load(&g_launcher) || !(pressed | released)) return;
     static const struct { int bit, held; const char *key; } keys[] = {
         {B_A, 0, "a"}, {B_B, 0, "b"}, {B_PLUS, 0, "plus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         int on = (pressed >> keys[i].bit & 1) != 0;
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
-        NSDictionary *u = @{@"key": @(keys[i].key), @"on": @(on)};
+        NSDictionary *u = @{@"key": @(keys[i].key), @"on": @(on), @"p": @(p + 1)};
         dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:u]; });
     }
 }

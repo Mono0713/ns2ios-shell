@@ -22,3 +22,4 @@ Launcher: the memory row's Game default stays in place; phones take the next fre
 Launcher: 30 / 60 fps, touch-control opacity and size, Identify; in-game phone QR code	设置画面：帧率上限改成 30／60 fps；新增触控按键不透明度和大小；每个玩家有「辨识」按钮（手柄震动、手机闪一下）；游戏中点触控按键上的 QR 按钮可叫出手机连线 QR 码
 Launcher: A opens menus and sliders, B goes back, left to Play; every player sets its own layout; phone QR under Play	设置画面：手柄操作改成 A 打开选单或拉条、B 返回、往左回到「开始游戏」；1P 可以设置任何玩家，其他玩家按 A 让自己震动、按 − 切换自己的按键配置；手机 QR 码移到左半边「开始游戏」下面；去掉开始游戏下面的说明文字
 Launcher: controller edits rows in place, no menu over the screen	设置画面：手柄改成在那一列上直接调整（左右选配置／震动／换 P／移除），不再弹出大框，其他玩家可同时用自己的手柄调整
+Launcher: players 2 to 8 pick their own layout or Identify with their own highlight	设置画面：2P 以后的玩家在自己那一列有自己的选取框，用左右选按键配置或震动、按 A 执行（取消按 − 切换）

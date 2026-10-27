@@ -52,8 +52,8 @@ private let zhText: [String: String] = [
     "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描左側的 QR Code。",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
         "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
-    "Player 1's controller: A on a player, then left and right pick what to change. Every player: − (Xbox: ⧉) switches your own button layout; players 2 to 8: A buzzes your own controller.":
-        "1P 手把：在玩家那一列按 A，再用左右選要調整的項目。每位玩家按 −（Xbox 為 ⧉ 鍵）切換自己的按鍵配置；2P 以後按 A 讓自己的手把震動。",
+    "Player 1's controller: A on a player, then left and right pick what to change. Players 2 to 8: left and right on your own row pick the layout or Identify, A to use it.":
+        "1P 手把：在玩家那一列按 A，再用左右選要調整的項目。2P 以後：用左右在自己那一列選按鍵配置或震動，按 A 執行。",
 ]
 // English as shown: settings.tsv's labels and notes (and the strings above, which are the keys) rewritten for the screen; a string not listed is shown as it is
 private let enText: [String: String] = [
@@ -226,7 +226,7 @@ private struct PlayersSection: View {
             Text(tr("Players"))
         } footer: {
             Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.")
-                 + " " + tr("Player 1's controller: A on a player, then left and right pick what to change. Every player: − (Xbox: ⧉) switches your own button layout; players 2 to 8: A buzzes your own controller."))
+                 + " " + tr("Player 1's controller: A on a player, then left and right pick what to change. Players 2 to 8: left and right on your own row pick the layout or Identify, A to use it."))
         }
     }
 }
@@ -380,13 +380,14 @@ private struct SettingRow: View {
 
 // Player 1's controller or phone on the launcher (shell_players.m posts DMLauncherInput): up and down move a highlight over the rows, left goes to Play (right comes
 // back), A uses the highlighted row in place: a switch flips; a choice or a slider takes left and right until A or B; a player's row lets left and right pick its
-// layout, Identify, Move to (A, then left and right pick the number) or Remove. B goes back one step (or to Play) and + starts the game. No menu covers the
-// screen, so the other players can set their own at the same time (shell_players.m: A buzzes, − switches the layout). Touch works as before
+// layout, Identify, Move to (A, then left and right pick the number) or Remove. B goes back one step (or to Play) and + starts the game. Each other player has a
+// highlight of its own on its own row at the same time: left and right pick its layout or Identify, A uses it, B hides it. Touch works as before
 private final class NavModel: ObservableObject {
     @Published var focus = "play"
     @Published var editing = false   // the highlighted choice or slider takes left and right
     @Published var part: Int?        // on a player's row: 0 layout, 1 Identify, 2 Move to, 3 Remove
     @Published var moveTo: Int?      // Move to: the player number picked so far
+    @Published var own: [Int: Int] = [:]   // players 2 to 8: the control each one picked on its own row (0 layout, 1 Identify)
     var list = ""                    // the row left for Play, where right goes back to
     func reset() { editing = false; part = nil; moveTo = nil }
 }
@@ -405,6 +406,9 @@ private struct NavPart: ViewModifier {   // a ring around the player row's contr
     func body(content: Content) -> some View {
         content.overlay {
             if nav.focus == "p\(player)" && nav.part == part { RoundedRectangle(cornerRadius: 10).stroke(Color.white, lineWidth: 2.5).padding(-5) }
+            else if player > 1 && nav.own[player] == part {   // the player's own, in its colour
+                RoundedRectangle(cornerRadius: 10).stroke(playerColors[(player - 1) % playerColors.count], lineWidth: 2.5).padding(-5)
+            }
         }
     }
 }
@@ -665,8 +669,20 @@ private struct LauncherView: View {
         nav.reset()
         nav.focus = items[Swift.max(0, Swift.min(items.count - 1, i + (key == "up" ? -1 : 1)))].id
     }
+    private func ownInput(_ p: Int, _ key: String, _ on: Bool) {   // players 2 to 8, on their own row only
+        guard on, let r = players.players.first(where: { $0.player == p }) else { return }
+        switch key {
+        case "left", "right": nav.own[p] = key == "left" ? 0 : 1
+        case "a":
+            guard let part = nav.own[p] else { nav.own[p] = 0; return }   // the first press shows where it is
+            if part == 0 { players.send(["op": "layout", "p": p, "xbox": r.xbox ? 0 : 1]) } else { players.send(["op": "identify", "p": p]) }
+        case "b": nav.own[p] = nil
+        default: break
+        }
+    }
     private func navInput(_ u: [AnyHashable: Any]?) {
         guard let key = u?["key"] as? String else { return }
+        if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
         if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
         held?.task.cancel(); held = nil
         let row = players.players.first { "p\($0.player)" == nav.focus }
