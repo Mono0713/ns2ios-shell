@@ -225,7 +225,10 @@ def main():
         pl = plistlib.loads(sz.read(SA + 'Info.plist'))
         pl['CFBundleIdentifier'] = a.bundle_id
         pl['CFBundleDisplayName'] = a.name
-        pl['CFBundleName'] = a.name
+        # CFBundleName names the App ID that signing registers with Apple, which takes letters, digits and spaces only:
+        # install tools strip the rest, so a Chinese name leaves it empty and Apple refuses it ("No value was provided for
+        # the parameter 'appIdName'"). The home screen shows CFBundleDisplayName, which keeps the name as given.
+        pl['CFBundleName'] = re.sub(r'\s+', ' ', re.sub(r'[^A-Za-z0-9 ]', '', a.name)).strip() or 'NX Games'
         pl['CFBundleShortVersionString'] = pl['CFBundleVersion'] = time.strftime('%Y.%m%d.%H%M')
         pl.pop('DMLanguage', None)   # each game's own, from its game.json (main.m)
         icon = grid_icon([g.icon for g in games])
