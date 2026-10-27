@@ -1,10 +1,12 @@
-// Game picker: the first screen of a package of several games (scripts/nxn_merge.py puts each in <App>/games/<title ID>/ with its game.json and icon.png).
-// A row of game tiles over the chosen game's icon, blurred, as the backdrop. Touch: tap a tile to pick it, tap it again (or Play) to start it.
-// Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput): left and right move, A or + starts. The game last played comes first.
-// Choosing calls main.m's shell_game_choose, which reads that game's files and starts loading it; then the launcher follows as for a package of one game.
-// One process runs one game (main.m), so the launcher's Change game closes the app to come back here.
+// Game picker: the first screen of a package of several games (scripts/nxn_merge.py puts each in <App>/games/<title ID>/ with its game.json and icon).
+// A row of game tiles, the chosen one in the middle, over its icon blurred as the backdrop; the time, Wi-Fi and battery at the top right, as on a console.
+// Touch: swipe the row to move through it, tap a tile to start that game. Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput):
+// left and right move, A or + starts. The game last played comes first.
+// Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
+// Game list button comes back here until the game starts (one process runs one game, main.m).
 import SwiftUI
 import UIKit
+import Network
 
 @_silgen_name("shell_game_choose") private func shellGameChoose(_ gid: UnsafePointer<CChar>)
 
@@ -22,6 +24,11 @@ private struct PickerGame: Identifiable {
     let played: Date?
 }
 
+// The game's icon: dm/icon.jpg is the game's own (256 px, nxn_pack.py), icon.png the app icon made from it (180 px) for packages made before
+private func gameIcon(_ dir: URL) -> UIImage? {
+    UIImage(contentsOfFile: dir.appendingPathComponent("dm/icon.jpg").path) ?? UIImage(contentsOfFile: dir.appendingPathComponent("icon.png").path)
+}
+
 private func loadGames() -> [PickerGame] {
     guard let games = Bundle.main.resourceURL?.appendingPathComponent("games") else { return [] }
     let ids = (try? FileManager.default.contentsOfDirectory(atPath: games.path)) ?? []
@@ -29,8 +36,7 @@ private func loadGames() -> [PickerGame] {
         let dir = games.appendingPathComponent(id)
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("game.json")),
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "",
-                          icon: UIImage(contentsOfFile: dir.appendingPathComponent("icon.png").path),
+        return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "", icon: gameIcon(dir),
                           played: UserDefaults.standard.object(forKey: "picker.played." + id) as? Date)
     }
     // the last played first, then the rest by name
@@ -50,7 +56,74 @@ private final class PickerModel: ObservableObject {
     @Published var starting = false
     var start: (PickerGame) -> Void = { _ in }
     func move(_ d: Int) { if !games.isEmpty, !starting { focus = (focus + d + games.count) % games.count } }
-    func choose() { if !starting, games.indices.contains(focus) { starting = true; start(games[focus]) } }
+    func go(_ i: Int) { if !starting, games.indices.contains(i) { focus = i } }
+    func choose(_ i: Int? = nil) {
+        let i = i ?? focus
+        if !starting, games.indices.contains(i) { focus = i; starting = true; start(games[i]) }
+    }
+}
+
+// The top right: Wi-Fi and battery, as the system's status bar (hidden here) would show them
+private final class StatusModel: ObservableObject {
+    @Published var battery: Float = UIDevice.current.batteryLevel
+    @Published var charging = false
+    @Published var online = true
+    @Published var wifi = true
+    private let monitor = NWPathMonitor()
+    private var observers: [NSObjectProtocol] = []
+    init() {
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        update()
+        for n in [UIDevice.batteryLevelDidChangeNotification, UIDevice.batteryStateDidChangeNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in self?.update() })
+        }
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.online = path.status == .satisfied
+                self?.wifi = path.usesInterfaceType(.wifi)
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "picker.network"))
+    }
+    deinit { monitor.cancel(); observers.forEach(NotificationCenter.default.removeObserver) }
+    private func update() {
+        battery = UIDevice.current.batteryLevel
+        let s = UIDevice.current.batteryState
+        charging = s == .charging || s == .full
+    }
+    var batterySymbol: String {
+        if battery < 0 { return "battery.100percent" }   // unknown (the simulator)
+        if charging { return "battery.100percent.bolt" }
+        switch battery {
+        case 0.88...: return "battery.100percent"
+        case 0.63..<0.88: return "battery.75percent"
+        case 0.38..<0.63: return "battery.50percent"
+        case 0.13..<0.38: return "battery.25percent"
+        default: return "battery.0percent"
+        }
+    }
+}
+
+private struct StatusBar: View {
+    @StateObject private var s = StatusModel()
+    @State private var now = Date()
+    private let clock = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    var body: some View {
+        HStack(spacing: 14) {
+            Text(now, style: .time).monospacedDigit()
+            Image(systemName: !s.online ? "wifi.slash" : s.wifi ? "wifi" : "network")
+                .opacity(s.online ? 1 : 0.5)
+                .accessibilityLabel(s.online ? tr("已連線", "Online") : tr("未連線", "Offline"))
+            HStack(spacing: 5) {
+                if s.battery >= 0 { Text("\(Int((s.battery * 100).rounded()))%").monospacedDigit() }
+                Image(systemName: s.batterySymbol)
+                    .foregroundStyle(s.battery >= 0 && s.battery < 0.2 && !s.charging ? Color.red : Color.white)
+            }
+        }
+        .font(.title3.weight(.medium))
+        .foregroundStyle(.white.opacity(0.85))
+        .onReceive(clock) { now = $0 }
+    }
 }
 
 private struct GameTile: View {
@@ -60,7 +133,7 @@ private struct GameTile: View {
     var body: some View {
         ZStack {
             if let icon = game.icon {
-                Image(uiImage: icon).resizable().scaledToFill()
+                Image(uiImage: icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
             } else {
                 LinearGradient(colors: [Color(white: 0.28), Color(white: 0.14)], startPoint: .top, endPoint: .bottom)
                 Text(game.name).font(.title3.weight(.bold)).foregroundStyle(.white).multilineTextAlignment(.center).padding(12)
@@ -74,48 +147,30 @@ private struct GameTile: View {
                 .shadow(color: focused ? .cyan.opacity(0.8) : .clear, radius: 10)
         }
         .shadow(color: .black.opacity(0.5), radius: focused ? 18 : 8, y: focused ? 10 : 4)
-        .scaleEffect(focused ? 1.08 : 0.92)
-        .opacity(focused ? 1 : 0.7)
-        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: focused)
+        .scaleEffect(focused ? 1 : 0.84)
+        .opacity(focused ? 1 : 0.65)
     }
 }
 
 private struct PickerView: View {
     @ObservedObject var m: PickerModel
     @State private var held: (key: String, task: Task<Void, Never>)?
-    @State private var now = Date()
-    private let clock = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+    @State private var drag: CGFloat = 0   // how far a finger has moved the row
 
     var body: some View {
         GeometryReader { g in
-            let side = min(g.size.height * 0.42, g.size.width / 4.2)
+            let side = min(g.size.height * 0.36, g.size.width / 4.4, 300)
+            let gap = side * 0.14
             let current = m.games.indices.contains(m.focus) ? m.games[m.focus] : nil
             ZStack {
                 backdrop(current)
                 VStack(spacing: 0) {
-                    header.padding(.horizontal, 32).padding(.top, 20)
+                    header.padding(.horizontal, 32).padding(.top, 22)
                     Spacer(minLength: 0)
-                    ScrollViewReader { proxy in
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: side * 0.16) {
-                                ForEach(Array(m.games.enumerated()), id: \.element.id) { i, game in
-                                    GameTile(game: game, focused: i == m.focus, side: side)
-                                        .id(i)
-                                        .onTapGesture { if i == m.focus { m.choose() } else { m.focus = i } }
-                                        .accessibilityLabel(game.name)
-                                        .accessibilityAddTraits(.isButton)
-                                }
-                            }
-                            .padding(.horizontal, max(32, (g.size.width - side) / 2))
-                            .padding(.vertical, side * 0.12)
-                        }
-                        .scrollDisabled(m.games.count < 2)
-                        .onChange(of: m.focus) { _, i in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(i, anchor: .center) } }
-                        .onAppear { proxy.scrollTo(m.focus, anchor: .center) }
-                    }
-                    details(current).padding(.top, 8)
+                    row(width: g.size.width, side: side, gap: gap)
+                    details(current).padding(.top, 22)
                     Spacer(minLength: 0)
-                    footer.padding(.horizontal, 32).padding(.bottom, 18)
+                    footer.padding(.horizontal, 32).padding(.bottom, 22)
                 }
                 if m.starting {
                     Color.black.opacity(0.55).ignoresSafeArea()
@@ -128,10 +183,39 @@ private struct PickerView: View {
         }
         .preferredColorScheme(.dark)
         .statusBarHidden()
-        .onReceive(clock) { now = $0 }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { input($0.userInfo) }
         .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
         .onDisappear { held?.task.cancel() }
+    }
+
+    // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
+    private func row(width: CGFloat, side: CGFloat, gap: CGFloat) -> some View {
+        let pitch = side + gap
+        return HStack(spacing: gap) {
+            ForEach(Array(m.games.enumerated()), id: \.element.id) { i, game in
+                GameTile(game: game, focused: i == m.focus, side: side)
+                    .contentShape(Rectangle())
+                    .onTapGesture { m.choose(i) }
+                    .accessibilityLabel(game.name)
+                    .accessibilityAddTraits(.isButton)
+            }
+        }
+        .fixedSize()
+        .offset(x: (width - side) / 2 - CGFloat(m.focus) * pitch + drag)
+        .frame(width: width, height: side * 1.15, alignment: .leading)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { v in if !m.starting { drag = v.translation.width } }
+                .onEnded { v in
+                    let steps = Int((-v.predictedEndTranslation.width / pitch).rounded())
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                        m.go(Swift.max(0, Swift.min(m.games.count - 1, m.focus + steps)))
+                        drag = 0
+                    }
+                }
+        )
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: m.focus)
     }
 
     private func backdrop(_ game: PickerGame?) -> some View {
@@ -153,7 +237,7 @@ private struct PickerView: View {
             Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
             Text("\(m.games.count)").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
-            Text(now, style: .time).font(.title3.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
+            StatusBar()
         }
         .foregroundStyle(.white)
     }
@@ -167,22 +251,14 @@ private struct PickerView: View {
                     if let p = game.played { Text(tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named))) }
                 }
                 .font(.callout).foregroundStyle(.white.opacity(0.7))
-                playButton(game).padding(.top, 10)
             }
             .padding(.horizontal, 32)
-            .animation(nil, value: game.id)
         }
-    }
-
-    @ViewBuilder private func playButton(_ game: PickerGame) -> some View {
-        let button = Button { m.choose() } label: {
-            Label(tr("開始遊戲", "Play"), systemImage: "play.fill").font(.title3.weight(.semibold)).frame(minWidth: 180)
-        }.controlSize(.large).disabled(m.starting)
-        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
     }
 
     private var footer: some View {
         HStack(spacing: 22) {
+            Text(tr("點遊戲圖示開始", "Tap a game to play")).foregroundStyle(.white.opacity(0.55))
             Spacer()
             hint("A", tr("開始", "Play"))
             hint("◀ ▶", tr("選擇", "Choose"))
@@ -215,7 +291,8 @@ private struct PickerView: View {
     }
 }
 
-// Shows the picker over the root view controller; once a game is chosen and main.m has it set up, the picker goes away and done runs
+// Shows the picker over the root view controller; once a game is chosen and main.m has it set up, the picker goes away and done runs.
+// Shown again when the launcher goes back to the game list (front_ios.m)
 @_cdecl("dm_show_picker")
 public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) {
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()

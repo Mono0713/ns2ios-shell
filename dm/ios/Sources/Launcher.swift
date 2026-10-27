@@ -9,11 +9,13 @@ import CoreImage.CIFilterBuiltins
 import os
 
 // A package of several games (main.m, GamePicker.swift): the chosen game's folder, its game.json standing in for the app's own name and version,
-// and its own UserDefaults suite, so each game keeps its settings
-private let gameRoot: URL? = ProcessInfo.processInfo.environment["DM_SHELL_GAME_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
-private let gameInfo: [String: Any] = gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }
-    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-let gameDefaults: UserDefaults = ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard
+// and its own UserDefaults suite, so each game keeps its settings. Read each time: the launcher can go back to the picker, which may choose another game
+private var gameRoot: URL? { ProcessInfo.processInfo.environment["DM_SHELL_GAME_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
+private var gameInfo: [String: Any] {
+    gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+}
+var gameDefaults: UserDefaults { ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard }
+@_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
 private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 private func info(_ key: String) -> Any? {
     if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
@@ -47,7 +49,7 @@ private let zhText: [String: String] = [
     // the launcher's own
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
-    "Open game folder": "打開遊戲資料夾", "Change game": "換遊戲",
+    "Open game folder": "打開遊戲資料夾", "Game list": "遊戲清單",
     "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
     "Motion controls": "體感操作（陀螺儀）",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
@@ -455,10 +457,10 @@ private extension LauncherModel {
 @_silgen_name("dm_touch_style") private func dmTouchStyle(_ opacity: Float, _ scale: Float)
 private final class ShellSettings: ObservableObject {
     private let fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
-    @Published var gyro: Bool
-    @Published var fps: Int   // 30 or 60: 60 leaves the game its own rate, which is 60 at most
-    @Published var touchOpacity: Double { didSet { style() } }
-    @Published var touchScale: Double { didSet { style() } }
+    @Published var gyro: Bool { didSet { save() } }   // each kept as soon as changed, as LauncherModel's
+    @Published var fps: Int { didSet { save() } }   // 30 or 60: 60 leaves the game its own rate, which is 60 at most
+    @Published var touchOpacity: Double { didSet { style(); save() } }
+    @Published var touchScale: Double { didSet { style(); save() } }
     var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
     var fpsLocked: Bool { fromFile.contains("DM_FPS") }
     init() {
@@ -470,11 +472,16 @@ private final class ShellSettings: ObservableObject {
         style()
     }
     private func style() { dmTouchStyle(Float(touchOpacity), Float(touchScale)) }
-    func apply() {
+    private func save() {
         let d = gameDefaults
         d.set(touchOpacity, forKey: "launcher.touchOpacity"); d.set(touchScale, forKey: "launcher.touchScale")
-        if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
-        if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30"); if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
+        if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO") }
+        if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30") }
+    }
+    func apply() {
+        save()
+        if !gyroLocked { shellMotionEnable(gyro ? 1 : 0) }
+        if !fpsLocked { if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
         fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps) fps, touch controls \(Int(touchOpacity * 100)) % opaque at \(Int(touchScale * 100)) % size\n", stderr)
     }
 }
@@ -524,13 +531,6 @@ private struct TouchStyleRow: View {   // opacity or size of the touch controls,
     }
 }
 
-// A package of several games runs one game per process (main.m): changing games means starting the app again. Go to the home screen the way
-// the Home gesture does, then end, so the next tap on the icon opens the game picker
-private func changeGame() {
-    fputs("launcher: change game: the app closes\n", stderr)
-    UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
-}
 private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
     if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
        let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -540,6 +540,7 @@ private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     @ObservedObject var shell: ShellSettings
     let play: () -> Void
+    let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
     @State private var memory = os_proc_available_memory()
     @StateObject private var players = PlayersModel()
     @StateObject private var nav = NavModel()
@@ -566,6 +567,13 @@ private struct LauncherView: View {
                 }
                 .padding(16)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                .overlay(alignment: .topLeading) {
+                    if let back {
+                        Button(action: back) { Label(tr("Game list"), systemImage: "chevron.left").font(.headline) }
+                            .buttonStyle(.bordered).controlSize(.large).padding(16)
+                            .overlay { if nav.focus == "back" { Capsule().stroke(Color.white, lineWidth: 3).padding(10) } }
+                    }
+                }
                 ScrollViewReader { proxy in
                 List {
                     PlayersSection(m: players)
@@ -587,14 +595,6 @@ private struct LauncherView: View {
                             .nav("reset")
                     } footer: {
                         Text(tr("Brings back all settings this game was tested with."))
-                    }
-                    if severalGames {
-                        Section {
-                            Button(tr("Change game"), action: changeGame)
-                                .nav("change")
-                        } footer: {
-                            Text(tr("The app closes; tap its icon again to choose another game."))
-                        }
                     }
                     Section {
                         Button(tr("Open game folder"), action: openGameFolder)
@@ -673,7 +673,6 @@ private struct LauncherView: View {
             }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
-        if severalGames { items.append(NavItem(id: "change", activate: changeGame)) }
         items.append(NavItem(id: "folder", activate: openGameFolder))
         return items
     }
@@ -728,6 +727,7 @@ private struct LauncherView: View {
             else if nav.part != nil { nav.part = nil }
             else if nav.editing { nav.editing = false }
             else if nav.focus != "play" { nav.list = nav.focus; nav.focus = "play" }
+            else if let back { back() }   // B on Play: back to the game list
         default:   // a direction: once, then repeated while held (moving up and down, or a value)
             let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
             navDirection(key)
@@ -740,6 +740,8 @@ private struct LauncherView: View {
     }
 
     private func appIcon() -> UIImage? {
+        let root = gameRoot ?? Bundle.main.resourceURL
+        if let r = root, let i = UIImage(contentsOfFile: r.appendingPathComponent("dm/icon.jpg").path) { return i }   // the game's own, larger than the app icon (nxn_pack.py)
         if let r = gameRoot, let i = UIImage(contentsOfFile: r.appendingPathComponent("icon.png").path) { return i }
         if let i = UIImage(named: "AppIcon") { return i }
         guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
@@ -757,13 +759,18 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
     var host: UIViewController?
-    let view = LauncherView(m: model, shell: shell) {
+    let view = LauncherView(m: model, shell: shell, play: {
         guard let h = host else { return }
         host = nil
         model.apply()
         shell.apply()
         h.dismiss(animated: false) { done() }
-    }
+    }, back: severalGames ? {
+        guard let h = host else { return }
+        host = nil
+        fputs("launcher: back to the game list\n", stderr)
+        h.dismiss(animated: false) { frontIosBackToPicker() }
+    } : nil)
     let h = UIHostingController(rootView: view)
     h.modalPresentationStyle = .fullScreen
     host = h

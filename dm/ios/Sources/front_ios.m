@@ -18,6 +18,7 @@ static void loading_show(UIView *root);
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 int front_ios_pick_needed(void);   // main.m: a package of several games, none chosen yet
 void dm_show_picker(void *view_controller, void (*done)(void));   // GamePicker.swift: calls done once main.m has the chosen game's files in place
+int shell_game_unchoose(void);   // main.m: forget the chosen game before it loads (0 once it has started loading)
 
 static CAMetalLayer *g_layer;
 static void front_ios_power_watch(void);
@@ -55,6 +56,11 @@ static UILabel *front_ios_fps_label(void);
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
 static void picker_done(void) { [g_root afterPick]; }
+// The launcher's Back to the game list (Launcher.swift), once it has gone away: the picker again, as at launch
+void front_ios_back_to_picker(void) {
+    if (shell_game_unchoose()) dm_show_picker((__bridge void *)g_root, picker_done);
+    else [g_root startGame];   // the game has started loading: it can only be played (not reached from the launcher, which comes before)
+}
 @implementation DmRootVC
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -116,7 +122,7 @@ static void picker_done(void) { [g_root afterPick]; }
         lb.text = @"這款遊戲的檔案不完整，請重新打包。\nThis game's files are missing from the package: pack it again.";
         [self.view addSubview:lb]; return;
     }
-    front_ios_audio_watch();
+    static int audio; if (!audio++) front_ios_audio_watch();   // once, though the launcher can go back to the picker
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
