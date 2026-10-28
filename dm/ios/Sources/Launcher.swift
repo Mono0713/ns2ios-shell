@@ -6,6 +6,7 @@ import SwiftUI
 import Combine
 import UIKit
 import CoreImage.CIFilterBuiltins
+import GameController
 import os
 
 // A package of several games (main.m, GamePicker.swift): the chosen game's folder, its game.json standing in for the app's own name and version,
@@ -19,6 +20,15 @@ var gameDefaults: SettingsStore {   // LauncherSettings.swift; earlier builds ke
     return SettingsStore.named(g ?? "app", from: g.flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard)
 }
 @_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
+
+// The launcher and the game picker move with player 1's controller themselves (DMLauncherInput). Without this, iPadOS also moves its own focus over their
+// buttons with it, and A then pressed whichever button that focus was left on (Open game folder, once tapped) as well as the highlighted row
+func controllerNotForUIKit(_ view: UIView) {
+    if #available(iOS 17.0, *) {
+        let i = GCEventInteraction(); i.handledEventTypes = .gamepad
+        view.addInteraction(i)
+    }
+}
 private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 private func info(_ key: String) -> Any? {
     if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
@@ -683,6 +693,12 @@ private struct LauncherView: View {
         let items = navItems()
         if nav.focus == "play" {   // right (or down) goes back to the row left for Play
             if key == "right" || key == "down" { nav.focus = items.contains { $0.id == nav.list } ? nav.list : items.first?.id ?? "play" }
+            else if key == "up", back != nil { nav.focus = "back" }   // the Game list button above
+            return
+        }
+        if nav.focus == "back" {   // down to Play, right to the rows
+            if key == "down" { nav.focus = "play" }
+            else if key == "right" { nav.focus = items.contains { $0.id == nav.list } ? nav.list : items.first?.id ?? "play" }
             return
         }
         guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.reset(); nav.focus = items.first?.id ?? "play"; return }   // its row went away
@@ -723,13 +739,14 @@ private struct LauncherView: View {
             if let part = nav.part, let r = row { playerPart(r, part); return }
             if nav.editing { nav.editing = false; return }
             if nav.focus == "play" { play(); return }
+            if nav.focus == "back" { back?(); return }
             guard let item = navItems().first(where: { $0.id == nav.focus }) else { return }
             if item.slider { nav.editing = true } else { item.activate() }
         case "b":   // back one step, else to Play
             if nav.moveTo != nil { nav.moveTo = nil }
             else if nav.part != nil { nav.part = nil }
             else if nav.editing { nav.editing = false }
-            else if nav.focus != "play" { nav.list = nav.focus; nav.focus = "play" }
+            else if nav.focus != "play" && nav.focus != "back" { nav.list = nav.focus; nav.focus = "play" }
             else if let back { back() }   // B on Play: back to the game list
         default:   // a direction: once, then repeated while held (moving up and down, or a value)
             let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
@@ -775,6 +792,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         h.dismiss(animated: true) { frontIosBackToPicker() }
     } : nil)
     let h = UIHostingController(rootView: view)
+    controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
     host = h

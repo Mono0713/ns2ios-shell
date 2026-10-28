@@ -289,6 +289,7 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = PickerModel()
     let h = UIHostingController(rootView: PickerView(m: model))
+    controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
     model.start = { [weak h] game in
