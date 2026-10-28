@@ -43,11 +43,12 @@ private func loadGames() -> [PickerGame] {
 }
 
 private final class PickerModel: ObservableObject {
-    let games = loadGames()
+    let games: [PickerGame]
     @Published var focus: Int
     init() {
-        let last = games.indices.filter { games[$0].played != nil }.max { games[$0].played! < games[$1].played! }
-        focus = last ?? 0
+        let g = loadGames()
+        games = g
+        focus = g.indices.filter { g[$0].played != nil }.max { g[$0].played! < g[$1].played! } ?? 0
     }
     @Published var starting = false
     var start: (PickerGame) -> Void = { _ in }
