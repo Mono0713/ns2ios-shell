@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,323 @@
+@@ -3,10 +3,325 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -285,7 +285,9 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    let f = CIFilter.qrCodeGenerator()
 +    f.message = Data(text.utf8)
 +    f.correctionLevel = "M"
-+    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
++    // black on clear rather than black on white: the white around it comes from the view, so the code and its margin are one colour
++    let fc = CIFilter.falseColor(); fc.inputImage = f.outputImage; fc.color0 = CIColor(red: 0, green: 0, blue: 0); fc.color1 = CIColor(red: 1, green: 1, blue: 1, alpha: 0)
++    guard let out = fc.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
 +    return UIImage(cgImage: cg)
 +}
 +
@@ -326,7 +328,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +331,31 @@
+@@ -18,17 +333,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -360,7 +362,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +365,7 @@
+@@ -38,7 +367,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -369,7 +371,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +378,22 @@
+@@ -51,8 +380,22 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -393,7 +395,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,43 +405,219 @@
+@@ -64,43 +407,219 @@
      }
  }
  
@@ -620,7 +622,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,24 +625,144 @@
+@@ -108,24 +627,144 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -768,7 +770,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +774,29 @@
+@@ -137,21 +776,29 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }

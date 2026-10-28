@@ -210,6 +210,13 @@ private struct PadsTile: View {   // the QR code itself, a green dot for each pl
     }
 }
 
+// The controllers removed on the card (or in the launcher) take the free places in order, so each can be added back from where it shows
+private func removedAt(_ i: Int, _ players: PlayersModel) -> RemovedPad? {
+    let free = (0..<8).filter { k in !players.players.contains { $0.player == k + 1 } }
+    guard let k = free.firstIndex(of: i), players.removed.indices.contains(k) else { return nil }
+    return players.removed[k]
+}
+
 // The players card: the QR code and address on the left, the eight places on the right (two columns of four, so it keeps its size)
 private struct PadsCard: View {
     @ObservedObject var m: PickerModel
@@ -254,7 +261,7 @@ private struct PadsCard: View {
         }
         .padding(30)
         .frame(maxWidth: 980)
-        .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(Color(red: 0.106, green: 0.125, blue: 0.157).opacity(0.96)))
+        .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(Color(red: 0.106, green: 0.125, blue: 0.157)))
         .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(Color.white.opacity(0.12)))
         .foregroundStyle(.white)
     }
@@ -262,6 +269,7 @@ private struct PadsCard: View {
     @ViewBuilder private func place(_ i: Int) -> some View {
         let n = i + 1, color = playerColors[i % playerColors.count]
         let row = players.players.first { $0.player == n }
+        let back = removedAt(i, players)   // a controller removed here, offered in a free place so it can be added back
         let lit = activity.lit.contains(n), sel = m.sel == i
         HStack(spacing: 8) {
             Text("P\(n)").font(.headline.weight(.heavy)).frame(width: 40, height: 32)
@@ -280,6 +288,13 @@ private struct PadsCard: View {
                     Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 30, height: 30).background(Circle().fill(Color.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("移除", "Remove"))
+            } else if let r = back {
+                Image(systemName: controllerIcon(r.label)).font(.title3).frame(width: 28).foregroundStyle(.white.opacity(0.5))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(padName(PlayerRow(player: 0, kind: 1, label: r.label, name: "", xbox: false))).font(.headline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                    Text(tr("已移除，按 A 或點這裡加回", "Removed: A or tap to add back")).font(.caption).foregroundStyle(.white.opacity(0.5)).lineLimit(1).minimumScaleFactor(0.8)
+                }
+                Spacer(minLength: 0)
             } else {
                 Text(tr("空位", "Free")).font(.headline.weight(.regular)).foregroundStyle(.white.opacity(0.4)).padding(.leading, 36)
                 Spacer(minLength: 0)
@@ -299,7 +314,10 @@ private struct PadsCard: View {
         }
         .animation(.easeOut(duration: 0.12), value: lit)
         .contentShape(Rectangle())
-        .onTapGesture { m.sel = i; if row != nil { players.send(["op": "identify", "p": n]) } }   // tap: that controller or phone buzzes
+        .onTapGesture {   // tap: that controller or phone buzzes; a removed one is added back
+            m.sel = i
+            if row != nil { players.send(["op": "identify", "p": n]) } else if let r = back { players.send(["op": "add", "index": r.index]) }
+        }
     }
     private func hint(_ key: String, _ text: String) -> some View {
         HStack(spacing: 6) {
@@ -458,7 +476,9 @@ private struct PickerView: View {
         case "down": if m.sel % 4 < 3 { m.sel += 1 }
         case "left": if m.sel >= 4 { m.sel -= 4 }
         case "right": if m.sel < 4 { m.sel += 4 }
-        case "a": if let r = row { players.send(["op": "identify", "p": r.player]) }
+        case "a":
+            if let r = row { players.send(["op": "identify", "p": r.player]) }
+            else if let r = removedAt(m.sel, players) { players.send(["op": "add", "index": r.index]) }
         case "minus": if let r = row { players.send(["op": "layout", "p": r.player, "xbox": r.xbox ? 0 : 1]) }
         case "x": if let r = row { players.send(["op": "kick", "p": r.player]) }
         case "b", "y": m.padsOpen = false

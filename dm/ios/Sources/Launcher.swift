@@ -282,7 +282,9 @@ func qrImage(_ text: String) -> UIImage? {
     let f = CIFilter.qrCodeGenerator()
     f.message = Data(text.utf8)
     f.correctionLevel = "M"
-    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+    // black on clear rather than black on white: the white around it comes from the view, so the code and its margin are one colour
+    let fc = CIFilter.falseColor(); fc.inputImage = f.outputImage; fc.color0 = CIColor(red: 0, green: 0, blue: 0); fc.color1 = CIColor(red: 1, green: 1, blue: 1, alpha: 0)
+    guard let out = fc.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
     return UIImage(cgImage: cg)
 }
 
