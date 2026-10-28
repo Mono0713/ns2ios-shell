@@ -66,6 +66,7 @@
 ~ dm/tools/nx_extract/Program.cs      # wraps the stacked storage in AlignedReadStorage
 
 ~ dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
+~ dm/gfx/tools/dmsh_build.py    # atomic_json retries the rename on Windows, as dmsh_mtlcache does (a scanner holding the fresh file)
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
 ~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host; shell_players_start and phone_pads_start at launch; a package of several games (games/<title ID>/): the picker first, then that game's files, saves in save/<title ID>, its program loaded only when it starts so the launcher can go back to the picker
 ~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only; physical controllers moved to shell_players.m (the pad hides while a controller or phone plays and shows for a few seconds after a tap); the iPad's motion for player 1; the launcher's opacity and size; a QR button that shows the phone gamepads' address in game; the touch layout kept per game
