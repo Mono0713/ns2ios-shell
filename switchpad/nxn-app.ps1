@@ -1385,7 +1385,7 @@ function New-Job($g, $mode, $ipa, $out = '', $shellPath = '') {
     $a = @()
     switch ($mode) {
         'install' { $a += @('-Ipa', (Quote $ipa)) }
-        { $_ -like 'merge*' -or $_ -eq 'setup' } { }
+        { $_ -in 'merge', 'merge+install', 'setup' } { }   # 這幾種只跑 Call；mergepart 是一般打包，要走下面
         default {
             $a += @('-GameDir', (Quote $g.Dir))
             if ($mode -in 'pack', 'mergepart') { $a += '-PackOnly' }
