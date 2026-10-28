@@ -34,9 +34,11 @@
 #ifdef DM_SHELL
 // The shell serves any game, so the B library's translation chain version cannot be a compile-time constant: it is the name of the one
 // library directory under msl/ (b-<version>), which the packer writes there. Falls back to the compiled-in value (diagnostics only).
+// msl/ is DM_MSL_DIR when set: a package of several games has one per game (games/<title ID>/msl, main.m), none at the top of the bundle
 static const char *shell_chain(void) {
     static char v[34]; if (v[0]) return v;
-    NSString *msl = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
+    const char *e = getenv("DM_MSL_DIR");
+    NSString *msl = e && *e ? @(e) : [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
     for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[])
         if ([d hasPrefix:@"b-"] && d.length > 2 && d.length < 34) { snprintf(v, sizeof v, "%s", d.UTF8String + 2); return v; }
     return DMSH_CHAIN;
