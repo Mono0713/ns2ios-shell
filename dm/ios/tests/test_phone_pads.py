@@ -143,6 +143,14 @@ class PhonePadsTests(unittest.TestCase):
         for ph in [a, b, b2, ninth] + more: ph.close()
         self.assertEqual(self.host()['mask'], 0)
 
+    def test_silent_page_is_dropped(self):   # a page left in a background tab keeps its socket open but sends nothing: after 15 s its player is freed
+        g = Phone(self.port)
+        self.assertEqual(g.hello('phone-gone')['t'], 'assign')
+        self.assertEqual(self.host()['mask'], 0b1)
+        time.sleep(15.6)
+        self.assertEqual(self.host()['mask'], 0)
+        g.close()
+
 
 class PhonePadsWithControllersTests(PhonePadsTests):
     """Two physical controllers hold players 1 and 2: phones take the players after them, and the mask the host gets keeps the controllers'"""
@@ -150,6 +158,7 @@ class PhonePadsWithControllersTests(PhonePadsTests):
     test_players = None
     test_page_is_served = None
     test_embedded_page_is_current = None
+    test_silent_page_is_dropped = None
 
     def test_phones_after_controllers(self):   # and the launcher's swap, layout and remove
         self.assertEqual(self.host()['mask'], 0b11)
@@ -173,6 +182,10 @@ class PhonePadsWithControllersTests(PhonePadsTests):
         self.launcher('layout 0 1')
         self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'xbox'})
         self.assertEqual(self.host()['slots'][0], [2, 1])
+        # the phone's own layout switch: answered with an assign in that layout, and the slot table has it
+        a.frame(1, json.dumps({'t': 'layout', 'xbox': 0}).encode())
+        self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'switch'})
+        self.assertEqual(self.host()['slots'][0], [2, 0])
         # a removed phone is released, told so, and stays out when it reconnects until it asks to join again
         a.state(3, 1 << 0)
         self.launcher('kick 0')

@@ -217,6 +217,7 @@ HLE_FORCE("_ZN2nn2oe18GetDesiredLanguageEv", "system language query; value from 
     const char *e = getenv("DM_LANG");
     char code[8] = {0};
     strncpy(code, e && *e ? e : "en-US", sizeof code - 1);
+    static int once; if (!once++) LOG("oe::GetDesiredLanguage: %s", code);   // whether the game asks at all: one that keeps its own language setting may not
     uint64_t v; memcpy(&v, code, 8);
     return v;
 }
