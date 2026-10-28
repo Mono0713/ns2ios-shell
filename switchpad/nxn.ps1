@@ -65,13 +65,26 @@ if (-not $Python) {
         $probe = 'import sys, lz4.block, capstone, fontTools; print(sys.executable)'
         $cands = @('python') + @(Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe", "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue |
                                  Sort-Object FullName -Descending | ForEach-Object { $_.FullName })
+        # py 啟動器知道所有裝好的版本（包括不在 PATH、不在預設位置的）
+        $ErrorActionPreference = 'Continue'
+        try { $cands += @(& py -0p 2>$null | ForEach-Object { if ("$_" -match '([A-Za-z]:\\.+\.exe)\s*$') { $Matches[1] } }) } catch { }
+        $ErrorActionPreference = 'Stop'
         foreach ($c in $cands) {
             $ErrorActionPreference = 'Continue'
             try { $v = (& $c -c $probe 2>$null | Out-String).Trim() } catch { $v = '' }
             $ErrorActionPreference = 'Stop'
             if ($v -and (Test-Path -LiteralPath $v)) { $Python = $v; Set-Content -LiteralPath $saved -Value $v -Encoding UTF8; break }
         }
-        if (-not $Python) { $Python = 'python' }
+        if (-not $Python) {
+            # 都沒有：裝到 PATH 上那個（跟 nxn-update.ps1 裝的套件一樣）
+            $Python = 'python'
+            Write-Host '找不到裝好打包套件的 Python，先安裝套件（lz4、capstone、fonttools、pillow）…'
+            $ErrorActionPreference = 'Continue'
+            & $Python -m pip install --disable-pip-version-check --quiet lz4 capstone fonttools pillow "backports.zstd; python_version < '3.14'" 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -and $_ -ne 'System.Management.Automation.RemoteException' } | ForEach-Object { Write-Host $_ }
+            $ErrorActionPreference = 'Stop'
+            try { $v = (& $Python -c $probe 2>$null | Out-String).Trim() } catch { $v = '' }
+            if ($v -and (Test-Path -LiteralPath $v)) { $Python = $v; Set-Content -LiteralPath $saved -Value $v -Encoding UTF8 }
+        }
     }
 }
 $plume = Join-Path $here '工具\plumesign.exe'
