@@ -41,7 +41,7 @@
 
 enum { MAX_CLIENTS = 24, IN_CAP = 4096 };
 #define SILENT_NS 1000000000ull   // quiet this long: nothing held down
-#define GONE_NS 8000000000ull     // quiet this long: the page is gone (a tab left in the background keeps its socket open), its player is freed
+#define GONE_NS 15000000000ull    // quiet this long: the page is gone (a tab left in the background keeps its socket open), its player is freed
 typedef struct {
     int fd, ws, player;          // ws: the connection has switched to WebSocket; player: slot index, -1 before the hello
     uint32_t ip;                 // the phone's address (network order): one phone, one player

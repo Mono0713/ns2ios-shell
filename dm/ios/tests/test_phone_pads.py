@@ -143,11 +143,11 @@ class PhonePadsTests(unittest.TestCase):
         for ph in [a, b, b2, ninth] + more: ph.close()
         self.assertEqual(self.host()['mask'], 0)
 
-    def test_silent_page_is_dropped(self):   # a page left in a background tab keeps its socket open but sends nothing: after 8 s its player is freed
+    def test_silent_page_is_dropped(self):   # a page left in a background tab keeps its socket open but sends nothing: after 15 s its player is freed
         g = Phone(self.port)
         self.assertEqual(g.hello('phone-gone')['t'], 'assign')
         self.assertEqual(self.host()['mask'], 0b1)
-        time.sleep(8.6)
+        time.sleep(15.6)
         self.assertEqual(self.host()['mask'], 0)
         g.close()
 
