@@ -185,6 +185,24 @@ try {
         try {
             $env:PYTHONUTF8 = '1'
             $code = RunExe $pyExe (@($packer, $shellZip, $GameDir, '-k', $Keys, '--tools', $nx.DirectoryName) + $outArg)
+            # 上游沒有這款的設定檔（迴旋鏢當初也是）：用 make_provisional.py 從遊戲檔猜一份暫定的，再打包一次
+            if ($code) {
+                $nsps = @(Get-ChildItem -LiteralPath $GameDir -File | Where-Object { $_.Extension -match '^\.(nsp|xci)$' })
+                $baseFile = $nsps | Where-Object { $_.Name -match '\[(01[0-9A-Fa-f]{11}000)\]' } | Sort-Object Length -Descending | Select-Object -First 1
+                $tid = if ($baseFile -and $baseFile.Name -match '\[(01[0-9A-Fa-f]{11}000)\]') { $Matches[1].ToUpper() } else { '' }
+                $prov = Join-Path $here 'make_provisional.py'
+                if ($tid -and (Test-Path $prov) -and -not (Test-Path (Join-Path $srcDir "dm\games\$tid\game.tsv"))) {
+                    $updRe = '\[' + $tid.Substring(0, 13) + '800\]'
+                    $upd = $nsps | Where-Object { $_.Name -match $updRe } |
+                        Sort-Object { if ($_.Name -match '\[v(\d+)\]') { [long]$Matches[1] } else { 0 } } -Descending | Select-Object -First 1
+                    $ver = if ($upd -and $upd.Name -match '\[v(\d+)\]') { "v$($Matches[1])" } else { 'v0' }
+                    Step "上游沒有 $tid 的設定檔，自己做一份暫定的（實驗性，遊戲不一定能跑）"
+                    $code = RunExe $pyExe @($prov, $srcDir, $nx.DirectoryName, $Keys, $baseFile.FullName, $(if ($upd) { $upd.FullName } else { '-' }), $ver)
+                    if ($code) { throw "做不出暫定設定檔（結束碼 $code）" }
+                    Step "用暫定設定檔重新打包 $(Split-Path $GameDir -Leaf)"
+                    $code = RunExe $pyExe (@($packer, $shellZip, $GameDir, '-k', $Keys, '--tools', $nx.DirectoryName) + $outArg)
+                }
+            }
         } finally { Pop-Location }
         if ($code) { throw "打包失敗（結束碼 $code），記錄在 $GameDir 裡的 *_pack\logs。" }
 
