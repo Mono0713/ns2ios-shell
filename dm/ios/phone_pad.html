@@ -89,6 +89,7 @@
 <div id="top">
   <button class="tb" id="fs" aria-label="Full screen">⛶</button>
   <div id="status"><div id="player">--</div><div id="conn"></div></div>
+  <button class="tb" id="face" aria-label="Button layout">Switch</button>
   <button class="tb" id="edit" data-t="layout">Layout</button>
 </div>
 <div id="bar">
@@ -154,6 +155,8 @@
       backoff = Math.min(backoff * 2, 4000);
     };
   }
+  // The button layout from the phone itself: the iPad keeps it for this phone and answers with an assign, which redraws the buttons
+  $('#face').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
   $('#rejoin').addEventListener('click', () => { join = true; if (ws && ws.readyState === 1) hello(); });
 
   function send() {
@@ -195,6 +198,7 @@
   const places = { top: ['calc(4dvw + 13dvh)', '30dvh'], bottom: ['calc(4dvw + 13dvh)', '56dvh'], left: ['calc(4dvw + 26dvh)', '43dvh'], right: ['4dvw', '43dvh'] };
   const faces = { switch: { 0: 'right', 1: 'bottom', 2: 'top', 3: 'left' }, xbox: { 0: 'bottom', 1: 'right', 2: 'left', 3: 'top' } };
   function faceLayout(xbox) {
+    $('#face').textContent = xbox ? 'Xbox' : 'Switch';
     if (document.body.classList.contains('xbox') === xbox) return;
     document.body.classList.toggle('xbox', xbox);
     const f = faces[xbox ? 'xbox' : 'switch'];
