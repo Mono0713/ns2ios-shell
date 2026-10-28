@@ -24,11 +24,17 @@ static char *g_argv[16]; static int g_argc;   // 2 fixed + the Guest library's m
 
 // A package of several games (scripts/nxn_merge.py): each game in <App>/games/<title ID>/ with its own dm/, msl/, romfs/, aoc/, pso/ and game.json
 // (name, version, language), its program in Frameworks/Guest_<title ID>.framework. The game picker (GamePicker.swift) chooses one, and only then does
-// boot_env read that game's files and start loading it: one process runs one game, because the host maps the game's program at fixed addresses
-// and cannot take it out again. A package of one game keeps everything at the top of the bundle, as before, and starts it at once.
+// boot_env read that game's files. Its program is loaded only when the game starts (boot_preload), so the launcher can still go back to the picker:
+// one process runs one game, because the host maps the game's program at fixed addresses and cannot take it out again. A package of one game keeps
+// everything at the top of the bundle, as before, and starts loading it at once.
 static NSString *g_game_root;    // the chosen game's folder; the bundle itself for a package of one game
 static NSString *g_game_id;      // its title ID in a package of several games; nil otherwise
 static int g_pick;               // several games and none chosen yet: front_ios.m shows the picker first
+static NSMutableArray<NSString *> *g_env_set;   // the variables boot_env set for the chosen game, taken back when the launcher returns to the picker
+static void env_default(NSString *k, const char *v) {   // setenv(k, v, 0), remembering what it set
+    if (getenv(k.UTF8String)) return;
+    setenv(k.UTF8String, v, 1); [g_env_set addObject:k];
+}
 static NSArray<NSString *> *shell_game_ids(void) {
     NSString *games = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"];
     NSMutableArray<NSString *> *ids = [NSMutableArray array];
@@ -43,11 +49,25 @@ static NSDictionary *game_info(void) {   // the chosen game's game.json
     return [j isKindOfClass:NSDictionary.class] ? j : nil;
 }
 
+// Where the game's big data lives when the installer keeps it out of the bundle (re-signing then does not resend it): Documents/<name>
+// for a package of one game, Documents/games/<title ID>/<name> for a package of several. Copied there once over house_arrest; the shell
+// says it reads them with DMDataInDocuments in Info.plist and DOCDATA=1 in dm/shell_info.txt.
+static NSString *doc_data(NSString *name) {
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    if (g_game_id) doc = [[doc stringByAppendingPathComponent:@"games"] stringByAppendingPathComponent:g_game_id];
+    return [doc stringByAppendingPathComponent:name];
+}
+static BOOL nonempty_dir(NSString *d) { return ([NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil] ?: @[]).count > 0; }
+// msl/: the copy in Documents when there is one, else the bundle's
+static NSString *msl_locate(void) {
+    NSString *d = doc_data(@"msl");
+    return nonempty_dir(d) ? d : [g_game_root stringByAppendingPathComponent:@"msl"];
+}
+
 static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *own = [g_game_root stringByAppendingPathComponent:@"romfs"];
-    for (NSString *d in g_game_id ? @[own] : @[[doc stringByAppendingPathComponent:@"romfs"], own]) {   // Documents/romfs could only be one of several games' files: a package of several reads its own
+    for (NSString *d in @[doc_data(@"romfs"), own]) {   // a package of several reads only its own games/<title ID>/romfs in Documents
 #ifdef DM_SHELL
         // One shell serves any game, so it cannot know a single game's romfs_marker: the first existing, non-empty candidate wins.
         // The packer writes the game's own tree there; if it is the wrong game, the host reports it when reading the files.
@@ -78,7 +98,7 @@ static int boot_env(void) {
     if (g_game_id) { save = [save stringByAppendingPathComponent:g_game_id]; temp = [temp stringByAppendingPathComponent:g_game_id]; }
     for (NSString *d in @[save, temp]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
-    for (NSString *d in @[@"romfs", @"temp"]) {
+    for (NSString *d in @[@"romfs", @"msl", @"games", @"temp"]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d] isDirectory:YES]; NSError *e = nil;
         if ([fm fileExistsAtPath:u.path] && ![u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e]) fprintf(stderr, "boot: %s could not be excluded from backup: %s\n", d.UTF8String, e.localizedDescription.UTF8String);
     }
@@ -91,7 +111,7 @@ static int boot_env(void) {
             NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
             if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
             NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
-            if (!getenv(k.UTF8String)) { setenv(k.UTF8String, v.UTF8String, 0); if ([ef hasPrefix:doc]) [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
+            if (!getenv(k.UTF8String)) { env_default(k, v.UTF8String); if ([ef hasPrefix:doc]) [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
         }
     }
     setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what Documents/env.txt set (Launcher.swift); the bundle's dm/env.txt only gives the package's defaults (its memory layout), which a launcher choice replaces
@@ -99,7 +119,7 @@ static int boot_env(void) {
     // Game language (nn::oe::GetDesiredLanguage, hle_oe.c): the one the IPA was packed with (the NSP script's LANGUAGE / --language → DMLanguage in Info.plist), unless an env file sets DM_LANG
     // (or the launcher, which replaces this default before the game starts)
     NSString *lang = g_game_id ? game_info()[@"language"] : [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
-    if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
+    if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) env_default(@"DM_LANG", lang.UTF8String);
     fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
     // How much memory iOS will let this process keep. With com.apple.developer.kernel.increased-memory-limit in the package's
     // signature it is several GB (6-8 on a 12 GB phone); without it, about 3,375 MB, which the bigger games fill exactly to the
@@ -109,20 +129,35 @@ static int boot_env(void) {
               av < (5ull << 30) ? "no increased-memory-limit entitlement: the bigger games will be killed for memory"
                                 : "entitlement in effect"); }
     NSString *romfs = romfs_locate();
-    if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
+    if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs, Documents/romfs or Documents/games/<title ID>/romfs)\n"); return 0; }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
-    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
-    setenv("DM_SAVE", save.fileSystemRepresentation, 0);
-    setenv("DM_TEMP", temp.fileSystemRepresentation, 0);
+    env_default(@"DM_ROMFS", romfs.fileSystemRepresentation);
+    env_default(@"DM_SAVE", save.fileSystemRepresentation);
+    env_default(@"DM_TEMP", temp.fileSystemRepresentation);
+    if (g_game_id) {   // the pipelines this device has built (nvn_mtl.m: pso_user.tsv and pso_archive/ beside it), else next to save/ and shared by every game
+        NSString *pso = [[doc stringByAppendingPathComponent:@"pso"] stringByAppendingPathComponent:g_game_id];
+        [fm createDirectoryAtPath:pso withIntermediateDirectories:YES attributes:nil error:nil];
+        env_default(@"DM_PSO_USER", [pso stringByAppendingPathComponent:@"pso_user.tsv"].fileSystemRepresentation);
+    }
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
-    setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
-    setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
-    setenv("DM_FONT_DIR", [[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
+    env_default(@"DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation);
+    NSString *msl = msl_locate();
+    fprintf(stderr, "boot: shaders %s\n", msl.fileSystemRepresentation);
+    env_default(@"DM_MSL_DIR", msl.fileSystemRepresentation);
+    env_default(@"DM_FONT_DIR", [[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"font"].fileSystemRepresentation);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
     NSString *aoc = [res stringByAppendingPathComponent:@"aoc"];   // add-on content: build_ipa.sh puts the RomFS extracted from the player's DLC NSPs at <App>/aoc/<index>/
-    if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
+    if ([fm fileExistsAtPath:aoc]) env_default(@"DM_AOC_DIR", aoc.fileSystemRepresentation);
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
-    if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
+    if ([fm fileExistsAtPath:pso]) env_default(@"DM_PSO_BUNDLE", pso.fileSystemRepresentation);
     chdir(doc.fileSystemRepresentation);
+    return 1;
+}
+// The game's program: the host maps it at fixed addresses for good. A package of one game starts this at launch, in parallel with UIKit startup and the
+// launcher; a package of several once the launcher starts the game (front_ios_boot), so until then the launcher can go back to the picker
+static int g_preloaded;
+static void boot_preload(void) {
+    if (g_preloaded++) return;
+    NSString *dm = [g_game_root stringByAppendingPathComponent:@"dm"];
     g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
 #ifdef DM_SHELL
     // A shell has no module list compiled in (DM_GAME_MODULES is only main.c's fallback when argv gives none), so the names are taken
@@ -130,8 +165,7 @@ static int boot_env(void) {
     { const char *mods[12]; int nm = dm_shell_modules(mods, 12);
       for (int k = 0; k < nm && g_argc < 16; k++) { g_argv[g_argc++] = strdup(mods[k]); fprintf(stderr, "boot: module '%s' (from the Guest library)\n", mods[k]); } }
 #endif
-    dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup (and the launcher: the settings it sets are read when the game starts)
-    return 1;
+    dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background (the launcher's settings are read when the game starts)
 }
 static int g_boot_ok;
 
@@ -149,6 +183,7 @@ static void boot_start(void) {
 }
 void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal view exist
     static int once; if (once++ || !g_boot_ok) return;
+    boot_preload();   // already running unless this package has several games
     void front_ios_audio_session(void); front_ios_audio_session();   // set a short I/O buffer before the game opens audio output (front_ios.m)
 #ifdef DM_SHELL
     // Shaders can be in the package as source when the computer that packed it had no Apple shader compiler: compile them all once
@@ -161,18 +196,30 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 int front_ios_boot_ok(void) { return g_boot_ok; }
 int front_ios_pick_needed(void) { return g_pick; }   // front_ios.m: show the game picker before the launcher
 
+static void pads_start(void) { static int once; if (!once++) phone_pads_start(); }   // once: the picker's start and a game's are the same server
+
 // The picker's choice (GamePicker.swift, on the main thread): that game's files, its Guest library, then the same start as a package of one game
 static void choose(NSString *gid) {
     NSString *games = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"];
-    g_game_id = gid; g_game_root = [games stringByAppendingPathComponent:gid]; g_pick = 0;
+    g_game_id = gid; g_game_root = [games stringByAppendingPathComponent:gid]; g_pick = 0; g_env_set = [NSMutableArray array];
     setenv("DM_SHELL_GAME", gid.UTF8String, 1);   // the launcher and the touch controls keep their settings per game (Launcher.swift, DmGamepad.m)
     setenv("DM_SHELL_GAME_ROOT", g_game_root.fileSystemRepresentation, 1);
     NSString *fw = [NSString stringWithFormat:@"Frameworks/Guest_%@.framework/Guest", gid];
     setenv("DM_GUEST", [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:fw] fileSystemRepresentation], 1);   // loader.c
     @autoreleasepool { g_boot_ok = boot_env(); }
-    if (g_boot_ok) phone_pads_start();
+    if (g_boot_ok) pads_start();
 }
 void shell_game_choose(const char *gid) { choose(@(gid)); }
+// The launcher's Back to the game list (Launcher.swift through front_ios.m): nothing of the game is loaded yet, so forget it and pick again.
+// 0 once the game has started loading
+int shell_game_unchoose(void) {
+    if (g_preloaded || !g_game_id) return 0;
+    for (NSString *k in g_env_set) unsetenv(k.UTF8String);
+    for (NSString *k in @[@"DM_SHELL_GAME", @"DM_SHELL_GAME_ROOT", @"DM_GUEST", @"DM_ENV_FILE_KEYS"]) unsetenv(k.UTF8String);
+    fprintf(stderr, "boot: back to the game picker from %s\n", g_game_id.UTF8String);
+    g_env_set = nil; g_game_id = nil; g_game_root = NSBundle.mainBundle.resourcePath; g_boot_ok = 0; g_pick = 1;
+    return 1;
+}
 
 @interface App : UIResponder <UIApplicationDelegate>
 @end
@@ -207,10 +254,12 @@ int main(int argc, char **argv) {
         if (ids.count > 1) { g_pick = 1; fprintf(stderr, "boot: %lu games in this package: %s\n", (unsigned long)ids.count, [ids componentsJoinedByString:@" "].UTF8String); }
     }
     shell_players_start();   // from launch, so the launcher (and the game picker) list the controllers and they take the first players ahead of phones that join later
+    if (g_pick) pads_start();   // the picker shows the phones' QR code and who has joined, before any game is chosen
     if (!g_pick) {
         NSArray<NSString *> *ids = shell_game_ids();
         if (ids.count == 1) choose(ids[0]);   // a package of several games that holds one
-        else { @autoreleasepool { g_boot_ok = boot_env(); } if (g_boot_ok) phone_pads_start(); }   // before the launcher, so phones can join while the settings are shown
+        else { @autoreleasepool { g_boot_ok = boot_env(); } if (g_boot_ok) pads_start(); }
+        if (g_boot_ok) boot_preload();   // before the launcher, so phones can join while the settings are shown
     }
     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(App.class)); }
 }

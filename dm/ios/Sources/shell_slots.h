@@ -23,6 +23,10 @@ int shell_slot_swap(int a, int b);   // exchanges the holders of players a + 1 a
 int shell_slot_kick(int p);          // removes the holder of player p + 1 through its kind's kick handler; 0 when the slot is free
 int shell_slot_set_layout(int p, int xbox);   // the button layout of player p + 1's holder, through its kind's layout handler; 0 when the slot is free
 int shell_slot_layout(const void *owner);     // owner's button layout (1 Xbox), 0 when it holds no slot
+// The holder itself asks for a layout (a phone's page has its own switch): goes through the hook when one is set (shell_players.m keeps the choice for that device,
+// as the launcher's does), else straight to shell_slot_set_layout. On the holder's thread
+void shell_slot_request_layout(int p, int xbox);
+void shell_slots_on_layout_request(void (*hook)(int p, int xbox));
 // identify: the launcher's "which one is this?" for owner's player: its holder buzzes (a controller's rumble, a phone's vibration and flash). On the caller's thread (main)
 void shell_slots_identify_handler(int kind, void (*identify)(const void *owner));
 int shell_slot_identify(int p);   // 0 when the slot is free or its kind has no handler

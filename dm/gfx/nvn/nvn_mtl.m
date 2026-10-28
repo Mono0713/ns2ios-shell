@@ -34,9 +34,11 @@
 #ifdef DM_SHELL
 // The shell serves any game, so the B library's translation chain version cannot be a compile-time constant: it is the name of the one
 // library directory under msl/ (b-<version>), which the packer writes there. Falls back to the compiled-in value (diagnostics only).
+// msl/ is DM_MSL_DIR when set: a package of several games has one per game (games/<title ID>/msl, main.m), none at the top of the bundle
 static const char *shell_chain(void) {
     static char v[34]; if (v[0]) return v;
-    NSString *msl = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
+    const char *e = getenv("DM_MSL_DIR");
+    NSString *msl = e && *e ? @(e) : [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
     for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[])
         if ([d hasPrefix:@"b-"] && d.length > 2 && d.length < 34) { snprintf(v, sizeof v, "%s", d.UTF8String + 2); return v; }
     return DMSH_CHAIN;
@@ -3287,7 +3289,9 @@ static void shmap_load(void) {
         if (c.count == 2 && [c[0] isEqual:@"game"]) st_game = c[1]; else if (c.count == 2 && [c[0] isEqual:@"inputs"]) st_inputs = c[1];
     }
     if (!st_inputs) MLOG("[RED] shader library %s has no stamp (inputs.tsv): no full dmsh_build.py run made it as it is, so c1_full.tsv and cb_extent.tsv are not taken", g_msl_dir.UTF8String);
-    else if (st_game && ![st_game isEqual:@DM_GAME_ID]) MLOG("[RED] shader library %s was built for game %s, not " DM_GAME_ID, g_msl_dir.UTF8String, st_game.UTF8String);
+    // The shell is built for no game (its id is all zeros): it compares with the game a package of several chose (DM_SHELL_GAME), and a package of one game has only that game's library
+    else if (st_game && ![st_game isEqual:@DM_GAME_ID] && (strcmp(DM_GAME_ID, "0000000000000000") || (getenv("DM_SHELL_GAME") && ![st_game isEqual:@(getenv("DM_SHELL_GAME"))])))
+        MLOG("[RED] shader library %s was built for game %s, not %s", g_msl_dir.UTF8String, st_game.UTF8String, strcmp(DM_GAME_ID, "0000000000000000") ? DM_GAME_ID : getenv("DM_SHELL_GAME"));
     else MLOG("shader library stamp: game %s, inputs %s", st_game.UTF8String, st_inputs.UTF8String);
     NSString *cp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"c1_full.tsv"];   // Same directory as the mapping table (Mac: dm/games/<id>; iOS: dm/ inside the App, copied along by build_ipa.sh)
     NSString *ct = cp ? [NSString stringWithContentsOfFile:cp encoding:NSUTF8StringEncoding error:nil] : nil;
