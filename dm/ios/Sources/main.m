@@ -196,6 +196,8 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 int front_ios_boot_ok(void) { return g_boot_ok; }
 int front_ios_pick_needed(void) { return g_pick; }   // front_ios.m: show the game picker before the launcher
 
+static void pads_start(void) { static int once; if (!once++) phone_pads_start(); }   // once: the picker's start and a game's are the same server
+
 // The picker's choice (GamePicker.swift, on the main thread): that game's files, its Guest library, then the same start as a package of one game
 static void choose(NSString *gid) {
     NSString *games = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"];
@@ -205,7 +207,7 @@ static void choose(NSString *gid) {
     NSString *fw = [NSString stringWithFormat:@"Frameworks/Guest_%@.framework/Guest", gid];
     setenv("DM_GUEST", [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:fw] fileSystemRepresentation], 1);   // loader.c
     @autoreleasepool { g_boot_ok = boot_env(); }
-    static int pads; if (g_boot_ok && !pads++) phone_pads_start();
+    if (g_boot_ok) pads_start();
 }
 void shell_game_choose(const char *gid) { choose(@(gid)); }
 // The launcher's Back to the game list (Launcher.swift through front_ios.m): nothing of the game is loaded yet, so forget it and pick again.
@@ -252,10 +254,11 @@ int main(int argc, char **argv) {
         if (ids.count > 1) { g_pick = 1; fprintf(stderr, "boot: %lu games in this package: %s\n", (unsigned long)ids.count, [ids componentsJoinedByString:@" "].UTF8String); }
     }
     shell_players_start();   // from launch, so the launcher (and the game picker) list the controllers and they take the first players ahead of phones that join later
+    if (g_pick) pads_start();   // the picker shows the phones' QR code and who has joined, before any game is chosen
     if (!g_pick) {
         NSArray<NSString *> *ids = shell_game_ids();
         if (ids.count == 1) choose(ids[0]);   // a package of several games that holds one
-        else { @autoreleasepool { g_boot_ok = boot_env(); } if (g_boot_ok) phone_pads_start(); }
+        else { @autoreleasepool { g_boot_ok = boot_env(); } if (g_boot_ok) pads_start(); }
         if (g_boot_ok) boot_preload();   // before the launcher, so phones can join while the settings are shown
     }
     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(App.class)); }

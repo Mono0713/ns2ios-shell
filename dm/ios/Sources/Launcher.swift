@@ -108,9 +108,9 @@ private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : enText[s] ?? 
 
 // Players (shell_players.m): who plays which player, from the physical controllers and the phones, at the top of the launcher. The list comes from the
 // DMPlayersChanged notification and the changes go back as DMPlayersCommand (swap, kick, layout, add), so this file needs no C header
-private struct PlayerRow: Identifiable, Equatable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
+struct PlayerRow: Identifiable, Equatable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
 private struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; var id: Int { index } }
-private final class PlayersModel: ObservableObject {
+final class PlayersModel: ObservableObject {
     @Published var players: [PlayerRow] = []
     @Published var removed: [RemovedPad] = []
     private var token: NSObjectProtocol?
@@ -138,7 +138,7 @@ private final class PlayersModel: ObservableObject {
 
 // Which players just pressed something (shell_players.m posts DMPlayerActive): their badge lights up for a moment, so each one sees which row is theirs.
 // Apart from PlayersModel, so a press redraws only the badges
-private final class ActivityModel: ObservableObject {
+final class ActivityModel: ObservableObject {
     @Published var lit: Set<Int> = []
     private var token: NSObjectProtocol?
     private var generation: [Int: Int] = [:]
@@ -166,8 +166,8 @@ private struct PlayerBadge: View {
     }
 }
 
-private let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
-private func controllerIcon(_ label: String) -> String {
+let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
+func controllerIcon(_ label: String) -> String {
     let l = label.lowercased()
     return l.contains("xbox") ? "logo.xbox" : l.contains("dualsense") || l.contains("dualshock") ? "logo.playstation" : "gamecontroller.fill"
 }
@@ -260,7 +260,7 @@ private struct PlayersSection: View {
 
 // Phone controllers (phone_pads.c): the address phones open, and a QR code of it. DM_PHONE_PADS_LIVE is the port the server listens on (unset when it is off or could not start);
 // the address is this device's IPv4 address on Wi-Fi (en0), or on another interface that is up (a personal hotspot's bridge) when there is no Wi-Fi
-private func phonePadsURL() -> String? {
+func phonePadsURL() -> String? {
     guard let port = ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] else { return nil }
     var list: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&list) == 0, let first = list else { return nil }
@@ -278,7 +278,7 @@ private func phonePadsURL() -> String? {
     return "http://\(addr):\(port)/"
 }
 
-private func qrImage(_ text: String) -> UIImage? {
+func qrImage(_ text: String) -> UIImage? {
     let f = CIFilter.qrCodeGenerator()
     f.message = Data(text.utf8)
     f.correctionLevel = "M"
@@ -727,7 +727,7 @@ private struct LauncherView: View {
         }
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
-        guard let key = u?["key"] as? String else { return }
+        guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
         if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
         if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
         held?.task.cancel(); held = nil

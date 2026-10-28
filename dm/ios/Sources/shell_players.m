@@ -66,7 +66,7 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     uint64_t old = atomic_exchange(&g_last_nav[p], buttons), pressed = buttons & ~old, released = old & ~buttons;
     if (!atomic_load(&g_launcher) || !(pressed | released)) return;
     static const struct { int bit, held; const char *key; } keys[] = {
-        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_PLUS, 0, "plus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
+        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_X, 0, "x"}, {B_Y, 0, "y"}, {B_PLUS, 0, "plus"}, {B_MINUS, 0, "minus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         int on = (pressed >> keys[i].bit & 1) != 0;
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
