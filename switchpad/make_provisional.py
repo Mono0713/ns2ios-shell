@@ -56,6 +56,25 @@ for i, l in enumerate(rows):
     if k == 'app_pool' and int(v.strip(), 16) > POOL_CAP:
         rows[i] = 'app_pool\t0x%X' % POOL_CAP
         print('app_pool %s -> 0x%X (provisional cap)' % (v.strip(), POOL_CAP))
+# Used memory (mem_used): the game sizes its heap as pool - used memory, and the host refuses a heap that does not fit
+# beside the modules (hle_svc.c SetHeapSize). Upstream sets mem_used after the rewrite (build_ipa_from_nsp.py
+# refine_after_rewrite); the packer here only does that for a derived profile, so a provisional profile whose modules
+# pass the default 64 MB got a 0.03 GB heap and an abort at the first allocation (Tricky Towers, Unity, SDK 4.5: 76 MB
+# of modules; Cuphead upstream likewise). The rewritten modules are not there yet, so this estimates them from the
+# originals: each module's image with bss (a far module's patch area sits 32 MB before its base instead, and its bss is
+# counted apart), plus room for the patch area, rounded up to 16 MB as the packer's own fill_mem_used does.
+if not any(l.partition('\t')[0] == 'mem_used' for l in rows):
+    est = 0
+    for name, m in F['mods'].items():
+        if name == 'rtld':
+            continue
+        img = sum(m['sizes']) + (0x2000000 if m['far'] else m['bss'])
+        est += img + max(0x400000, img // 10)
+    if est > 0x4000000:
+        used = (est + 0xFFFFFF) & ~0xFFFFFF
+        rows.append('# modules of about %d MB with their patch areas: more than the default 64 MB of used memory' % (est >> 20))
+        rows.append('mem_used\t0x%X' % used)
+        print('mem_used 0x%X (modules of about %d MB)' % (used, est >> 20))
 gt.write_text('\n'.join(rows) + '\n', encoding='utf-8')
 print('profile installed:', dest)
 print((dest / 'game.tsv').read_text(encoding='utf-8'))
