@@ -26,6 +26,12 @@ Launcher: players 2 to 8 pick their own layout or Identify with their own highli
 Players: two controllers of the same model keep their own button layout	玩家：同型号的两个手柄可以各自切换 Xbox／Switch 配置，不会一起切换
 Packer: pack DLC, take split shader tables for older builds, write the stamp with LF; Boomerang Fu profile	打包器：会把 DLC 一起打包；旧版游戏（例如惊奇 1.0.1）改用这次拆出来的着色器表；Windows 上写库标记一律用 LF；新增 Boomerang Fu 的暂定设定档
 Switch Pad: the Windows pack-and-install app, with first-run setup and updates from the latest release	Switch Pad：Windows 上打包并安装到 iPad 的程序，第一次使用会自动安装所需工具，之后从最新 release 自动更新（程序、壳、打包器）；release 附上 SwitchPad.zip
+Switch Pad: find an installed Python (PowerShell 5.1 dropped the probe's quotes)	Switch Pad：修正找不到已安装 Python 的问题（PowerShell 5.1 会吃掉传给 Python 的双引号），也会找 py 启动器
+Switch Pad: list merged packages, show the multi-game shell when merging, relative -Out from the app folder	Switch Pad：合成好的包也会列在游戏库（可以只安装、续期）；选「合成一包」时显示用的多游戏壳；合包用记下的 Python；-Out 的相对路径以程序文件夹为准
+Switch Pad: 合成一包 with 只安裝 installs the newest merged package	Switch Pad：选「合成一包」加「只安装」时，直接安装合包文件夹里最新的那包
+Switch Pad: games and merged packages in their own sections; a package opens to the games inside	Switch Pad：游戏库分成「游戏」和「合包」两区；点合包可以看里面有哪些游戏（图标、名称、版本），并直接安装
+Switch Pad: 遊戲 / 合包 tabs; name a package when merging, rename it later	Switch Pad：上方分成「游戏」「合包」两个分页；合成一包时可以取名，之后也能在合包里改名（iPad 上的名称跟着改，要重新安装才会变）
+Switch Pad: each new merged package gets its own bundle ID	Switch Pad：每个新合包有自己的 bundle ID，几个合包可以同时装在 iPad 上；改名时沿用原本的，存档不会掉
 Game picker: several games in one package start from a picker; the launcher goes back to it, keeps settings at once, and the game language follows the device	合包：选游戏画面（滑动切换、点图标开始、时间／Wi-Fi／电量）；设置画面可回到游戏清单、设置一改就保存、游戏语言默认跟随系统（繁中→简中→英文）；修正合包里 NVN 游戏没有着色器的红画面
 Shell: romfs and msl from Documents; phones: one player per phone, layout switch on the phone	壳：游戏文件和着色器可放在 Documents（重签不用重传）；手机手把：同一支手机只占一个玩家、15 秒没反应就移除，手机画面上可自己切换 Xbox／Switch 配置
 Game picker: the phones' QR code as the first tile, and a players card	合包选单：第一格就是手机的 QR code（绿点＝已连接数），打开后是 8 格玩家清单：按键会亮、点一下震动、切换 Xbox／Switch 配置、移除
