@@ -106,7 +106,7 @@ $styles = @'
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="b" Property="Background" Value="#0A84FF"/></Trigger>
-            <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="#636366"/></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="b" Property="Opacity" Value="0.35"/></Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
@@ -115,7 +115,7 @@ $styles = @'
   <Style TargetType="Separator">
     <Setter Property="Template">
       <Setter.Value>
-        <ControlTemplate TargetType="Separator"><Border Height="1" Background="#3A3A3C" Margin="6,4"/></ControlTemplate>
+        <ControlTemplate TargetType="Separator"><Border Height="1" Background="#3A3A3C" Margin="4,5"/></ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
@@ -194,18 +194,11 @@ $xamlText = @'
     </DockPanel>
 
     <StackPanel Grid.Row="1">
-      <!-- 安裝、更新、找不到 prod.keys -->
+      <!-- 第一次安裝、找不到 prod.keys（更新和續期是標題列的小按鈕） -->
       <Border x:Name="Notice" Background="#1C1C1E" CornerRadius="14" Padding="16,12" Margin="0,0,0,14" Visibility="Collapsed">
         <DockPanel>
           <Button x:Name="NoticeBtn" DockPanel.Dock="Right" Background="#0A84FF" FontWeight="SemiBold"/>
           <TextBlock x:Name="NoticeText" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
-        </DockPanel>
-      </Border>
-      <!-- 到期提醒 -->
-      <Border x:Name="Banner" Background="#1C1C1E" CornerRadius="14" Padding="16,12" Margin="0,0,0,14" Visibility="Collapsed">
-        <DockPanel>
-          <Button x:Name="RenewAll" DockPanel.Dock="Right" Content="全部續期" Background="#0A84FF" FontWeight="SemiBold"/>
-          <TextBlock x:Name="BannerText" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
         </DockPanel>
       </Border>
     </StackPanel>
@@ -240,6 +233,7 @@ $xamlText = @'
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
           <Button x:Name="Stop" Content="停止" Margin="0,0,10,0" Visibility="Collapsed"/>
           <Button x:Name="Back" Content="返回遊戲庫" Margin="0,0,10,0" Visibility="Collapsed"/>
+          <Button x:Name="RenewBtn" Margin="0,0,10,0" Visibility="Collapsed"/>
           <Button x:Name="Start" Content="開始" Style="{StaticResource Primary}"/>
         </StackPanel>
         <StackPanel x:Name="Options" Orientation="Horizontal" VerticalAlignment="Center">
@@ -293,7 +287,7 @@ if (Test-Path $appIcon) {
     } catch { }
 }
 $ui = @{}
-foreach ($n in 'AcctDot','Account','Login','Refresh','Settings','Subtitle','Banner','BannerText','RenewAll','LibraryView','Library','Notice','NoticeText','NoticeBtn','GamesHead','PacksHead','Packs','TabGames','TabPacks',
+foreach ($n in 'AcctDot','Account','Login','Refresh','Settings','Subtitle','RenewBtn','LibraryView','Library','Notice','NoticeText','NoticeBtn','GamesHead','PacksHead','Packs','TabGames','TabPacks',
                'ProgressView','ProgTitle','ProgTotal','Busy','Jobs','Stop','Back','Start','Options','SelCount',
                'ModeBoth','ModePack','ModeInstall','Separate','Merge','ShellLabel') { $ui[$n] = $win.FindName($n) }
 switch ($cfg.Mode) { 'pack' { $ui.ModePack.IsChecked = $true } 'install' { $ui.ModeInstall.IsChecked = $true } }
@@ -553,9 +547,21 @@ function Update-SelCount {
 
 # ---------------------------------------------------------------- 右鍵選單
 function Open-Folder($p) { New-Item -ItemType Directory -Force -Path $p | Out-Null; Start-Process explorer.exe "`"$p`"" }
+# 選單文字「圖示  文字」：圖示放固定寬度的欄，文字才會對齊
+function Menu-Header($text) {
+    $icon, $label = $text -split '  ', 2
+    $sp = New-Object Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
+    $i = New-Object Windows.Controls.TextBlock; $i.Text = $icon.Trim(); $i.Width = 28; $i.TextAlignment = 'Center'
+    $i.FontFamily = 'Segoe UI Emoji'; $i.Margin = '0,0,8,0'
+    $t = New-Object Windows.Controls.TextBlock; $t.Text = $label
+    [void]$sp.Children.Add($i); [void]$sp.Children.Add($t)
+    $sp
+}
+# ContextMenu 裡的分隔線會用系統的選單樣式（左邊縮排），要自己指定
+function New-Sep { $sp = New-Object Windows.Controls.Separator; $sp.Style = $win.FindResource([Windows.Controls.Separator]); $sp }
 function Menu-Item($cm, $text, $tag, $action, $enabled = $true) {
     $mi = New-Object Windows.Controls.MenuItem
-    $mi.Header = $text; $mi.Tag = @{ Dir = $tag; Action = $action }; $mi.IsEnabled = $enabled
+    $mi.Header = Menu-Header $text; $mi.Tag = @{ Dir = $tag; Action = $action }; $mi.IsEnabled = $enabled
     $mi.Add_Click({ param($s, $e) Card-Action $s.Tag.Action $s.Tag.Dir })
     [void]$cm.Items.Add($mi)
 }
@@ -569,18 +575,40 @@ function New-CardMenu($g) {
     Menu-Item $cm '📂  遊戲資料夾' $g.Dir 'folder'
     Menu-Item $cm '💾  存檔資料夾' $g.Dir 'save'
     Menu-Item $cm '📄  最近的記錄' $g.Dir 'log' $hasLog
-    [void]$cm.Items.Add((New-Object Windows.Controls.Separator))
+    [void]$cm.Items.Add((New-Sep))
     Menu-Item $cm '▶  打包並安裝' $g.Dir 'both' $g.Base
     Menu-Item $cm '📦  只打包' $g.Dir 'pack' $g.Base
     Menu-Item $cm '📲  只安裝' $g.Dir 'install' ($g.Ipas.Count -gt 0)
-    [void]$cm.Items.Add((New-Object Windows.Controls.Separator))
+    [void]$cm.Items.Add((New-Sep))
     Menu-Item $cm '🖼  換圖示…' $g.Dir 'cover'
-    Menu-Item $cm '↺  用遊戲原本的圖示' $g.Dir 'uncover' ([bool](Get-ChildItem -LiteralPath $g.Dir -Filter 'cover.*' -File -ErrorAction SilentlyContinue))
+    Menu-Item $cm '🔄  用遊戲原本的圖示' $g.Dir 'uncover' ([bool](Get-ChildItem -LiteralPath $g.Dir -Filter 'cover.*' -File -ErrorAction SilentlyContinue))
+    [void]$cm.Items.Add((New-Sep))
+    Menu-Item $cm '🗑  刪除…' $g.Dir 'delete' (-not $state.Running)
     return $cm
 }
 function Latest-Log($g) {
     $key = ($g.Name -replace '[^\w.-]', '_')
     Get-ChildItem -Path $logDir -Filter "*-$key.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+# 刪除都是丟到資源回收筒，按錯還救得回來
+function Recycle($path, $isDir) {
+    try {
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        if ($isDir) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($path, 'OnlyErrorDialogs', 'SendToRecycleBin') }
+        else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($path, 'OnlyErrorDialogs', 'SendToRecycleBin') }
+        return $true
+    } catch [OperationCanceledException] { return $false }
+    catch { [void][Windows.MessageBox]::Show($win, "刪不掉：$($_.Exception.Message)", '刪除'); return $false }
+}
+# 從安裝紀錄拿掉符合的項目（續期才不會去找已經刪掉的 IPA）
+function Forget-Installed($match) {
+    if (-not (Test-Path $installedDb)) { return }
+    try {
+        $j = Get-Content $installedDb -Raw -Encoding UTF8 | ConvertFrom-Json
+        $map = [ordered]@{}
+        foreach ($pr in $j.PSObject.Properties) { if (-not (& $match $pr.Name $pr.Value)) { $map[$pr.Name] = $pr.Value } }
+        $map | ConvertTo-Json -Depth 3 | Set-Content $installedDb -Encoding UTF8
+    } catch { }
 }
 function Card-Action($action, $dir) {
     $card = $cards[$dir]; if (-not $card) { return }
@@ -602,6 +630,11 @@ function Card-Action($action, $dir) {
         'uncover' {
             foreach ($old in Get-ChildItem -LiteralPath $g.Dir -Filter 'cover.*' -File -ErrorAction SilentlyContinue) { Remove-Item -LiteralPath $old.FullName -ErrorAction SilentlyContinue }
             Build-Library
+        }
+        'delete' {
+            $ok = [Windows.MessageBox]::Show($win, "把「$($g.Name)」整個資料夾（遊戲檔和打包好的 IPA）移到資源回收筒？`n`n要救回可以從資源回收筒還原。iPad 上已經裝好的不會被刪。", '刪除遊戲', 'YesNo', 'Warning')
+            if ($ok -ne 'Yes') { return }
+            if (Recycle $g.Dir $true) { Forget-Installed { param($k, $v) $k -eq $g.Dir }; Build-Library }
         }
         default  { Run-Games @($dir) $action $false }
     }
@@ -696,29 +729,43 @@ function Read-Pack($ipa) {
     $packCache[$key] = $games
     return $games
 }
+# 合包在 iPad 上的圖示（nxn_merge.py 把幾款的圖示拼成一張），跟著檔案的修改時間快取
+function Pack-Icon($ipa) {
+    $md5 = [Security.Cryptography.MD5]::Create()
+    $h = -join ($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($ipa.FullName)|$($ipa.LastWriteTimeUtc.Ticks)"))[0..5] | ForEach-Object { $_.ToString('x2') })
+    $out = Join-Path $coverDir "packapp-$h.png"
+    if (Test-Path -LiteralPath $out) { return $out }
+    try {
+        $z = [IO.Compression.ZipFile]::OpenRead($ipa.FullName)
+        try {
+            $e = $z.Entries | Where-Object { $_.FullName -match '^Payload/[^/]+\.app/AppIcon60x60@3x\.png$' } | Select-Object -First 1
+            if ($e) { [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $out, $true); return $out }
+        } finally { $z.Dispose() }
+    } catch { }
+    return ''
+}
 function Build-Packs($inst) {
     $ui.Packs.Children.Clear()
     $mdir = Join-Path $here '合包'
     $ipas = @(Get-ChildItem -LiteralPath $mdir -Filter '*.ipa' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
-    $ui.TabPacks.Content = if ($ipas.Count) { "合包 $($ipas.Count)" } else { '合包' }
-    if (-not $ipas.Count) {
+        if (-not $ipas.Count) {
         $t = New-Object Windows.Controls.TextBlock
         $t.Text = '還沒有合包：在「遊戲」勾幾款，選「合成一包」再按開始'
         $t.Foreground = Brush '#8E8E93'; $t.Margin = '8,40,8,0'; $t.FontSize = 16
         [void]$ui.Packs.Children.Add($t)
     }
-    $mine = $inst | Where-Object { $_.Dir -eq $mdir } | Select-Object -First 1
     foreach ($ipa in $ipas) {
+        $mine = $inst | Where-Object { $_.Ipa -eq $ipa.FullName } | Select-Object -First 1
         $games = @(Read-Pack $ipa)
         $p = [pscustomobject]@{ Dir = $mdir; Name = $ipa.BaseName; Ipas = @($ipa); Base = $false; BaseFile = ''; Games = $games
-                               Icon = $(if ($games.Count -and $games[0].Icon) { $games[0].Icon } else { $appIcon }) }
+                               Icon = $(if ($pi = Pack-Icon $ipa) { $pi } elseif ($games.Count -and $games[0].Icon) { $games[0].Icon } else { $appIcon }) }
         $card = [Windows.Markup.XamlReader]::Parse($cardXaml)
         $card.Tag = $p
         $card.FindName('Title').Text = $p.Name
         $card.FindName('Detail').Text = if ($games.Count) { "$($games.Count) 款 · $($ipa.LastWriteTime.ToString('MM/dd'))" } else { $ipa.LastWriteTime.ToString('MM/dd') }
         $card.FindName('Detail').ToolTip = ($games | ForEach-Object { $_.Name }) -join "`n"
         $st = $card.FindName('State')
-        if ($mine -and $mine.Ipa -eq $ipa.FullName) {
+        if ($mine) {
             $st.Text = if ($mine.Left -le 0) { '已過期' } else { "已安裝 · 剩 $($mine.Left) 天" }
             $st.Foreground = Brush $(if ($mine.Left -le 2) { '#FF9F0A' } else { '#30D158' })
         }
@@ -729,9 +776,9 @@ function Build-Packs($inst) {
         $cm = New-Object Windows.Controls.ContextMenu
         $cm.Style = $win.FindResource([Windows.Controls.ContextMenu])
         $cm.Resources.Add([Windows.Controls.MenuItem], $win.FindResource([Windows.Controls.MenuItem]))
-        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'))) {
+        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'), @('🗑  刪除…', 'delete'))) {
             $mi = New-Object Windows.Controls.MenuItem
-            $mi.Header = $it[0]; $mi.Tag = @{ Pack = $p; Action = $it[1] }
+            $mi.Header = Menu-Header $it[0]; $mi.Tag = @{ Pack = $p; Action = $it[1] }
             $mi.Add_Click({ param($s, $e) Pack-Action $s.Tag.Pack $s.Tag.Action })
             [void]$cm.Items.Add($mi)
         }
@@ -744,6 +791,13 @@ function Pack-Action($p, $action) {
         'show'    { Show-Pack $p }
         'install' { Start-Run @(@{ Game = $p; Mode = 'install'; Ipa = $p.Ipas[0].FullName }) }
         'folder'  { Start-Process explorer.exe "/select,`"$($p.Ipas[0].FullName)`"" }
+        'delete'  {
+            if ($state.Running) { return }
+            $f = $p.Ipas[0].FullName
+            $ok = [Windows.MessageBox]::Show($win, "把合包「$($p.Name)」移到資源回收筒？`n`n裡面的遊戲在「遊戲」分頁的資料夾還在，不受影響。iPad 上已經裝好的不會被刪。", '刪除合包', 'YesNo', 'Warning')
+            if ($ok -ne 'Yes') { return }
+            if (Recycle $f $false) { Forget-Installed { param($k, $v) $v.ipa -eq $f }; Build-Library }
+        }
         'rename'  {
             $n = Ask-Text '合包改名' 'iPad 主畫面上顯示的名稱（也是檔名）。iPad 上要重新安裝才會變。' $p.Name
             if ($n -and $n -ne $p.Name) { Rename-Pack $p $n }
@@ -892,12 +946,14 @@ function Update-Notice {
         $ui.NoticeText.Text = '找不到 prod.keys，把它拖進這個視窗'
         $ui.NoticeText.ToolTip = '打包要用你自己 Switch 的 prod.keys。拖進來會複製一份到 work 資料夾，只留在這台電腦。'
         $ui.NoticeBtn.Content = '選擇檔案…'; $ui.NoticeBtn.Tag = 'keys'
-    } elseif ($upd = Update-Available) {
-        $ui.NoticeText.Text = "有新版本：$upd"
-        $ui.NoticeText.ToolTip = "GitHub 上最新的是 $($latest.tag_name)"
-        $ui.NoticeBtn.Content = '更新'; $ui.NoticeBtn.Tag = 'setup'
-    } else { $ui.Notice.Visibility = 'Collapsed'; return }
+    } else { $ui.Notice.Visibility = 'Collapsed'; Update-UpdateBtn; return }
     $ui.Notice.Visibility = 'Visible'
+}
+# 程式更新放在設定裡；有新版時齒輪變藍色提醒
+function Update-UpdateBtn {
+    $upd = Update-Available
+    $ui.Settings.Foreground = Brush $(if ($upd) { '#0A84FF' } else { '#FFFFFF' })
+    $ui.Settings.ToolTip = if ($upd) { "設定（有新版本：$upd）" } else { '設定' }
 }
 # 背景問 GitHub（不卡住畫面）；問不到就算了，下次開再問
 $checkTask = $null
@@ -972,13 +1028,17 @@ function Set-Tab {
     }
 }
 
+# 續期：標題列的小按鈕，顯示最快幾天到期；3 天內變橘色。滑鼠移上去列出每一個
 function Update-Banner($inst) {
-    $soon = @($inst | Where-Object { $_.Left -le 3 -and (Test-Path -LiteralPath $_.Ipa) } | Sort-Object Left)
-    if (-not $soon.Count) { $ui.Banner.Visibility = 'Collapsed'; return }
-    $txt = ($soon | ForEach-Object { $n = Split-Path $_.Dir -Leaf; if ($_.Left -le 0) { "$n 已過期" } else { "$n 剩 $($_.Left) 天" } }) -join '、'
-    $ui.BannerText.Text = "⏰ $txt"
-    $ui.BannerText.ToolTip = '免費 Apple ID 簽的 App 7 天後就打不開，按「全部續期」重簽就好'
-    $ui.Banner.Visibility = 'Visible'
+    $live = @($inst | Where-Object { Test-Path -LiteralPath $_.Ipa } | Sort-Object Left)
+    if (-not $live.Count) { $ui.RenewBtn.Visibility = 'Collapsed'; return }
+    $name = { param($x) if ($x.Dir -like '*.ipa') { [IO.Path]::GetFileNameWithoutExtension($x.Ipa) } else { Split-Path $x.Dir -Leaf } }
+    $min = $live[0].Left
+    $ui.RenewBtn.Content = '重簽'
+    $ui.RenewBtn.Foreground = Brush $(if ($min -le 3) { '#FF9F0A' } else { '#EBEBF5' })
+    $ui.RenewBtn.ToolTip = (($live | ForEach-Object { "$(& $name $_)：$(if ($_.Left -le 0) { '已過期' } else { "剩 $($_.Left) 天" })" }) -join "`n") +
+                           "`n`n免費 Apple ID 簽的 App 7 天後就打不開，按這裡把上面全部重簽一次（時間大約是各自重簽加起來，大的遊戲比較久）"
+    $ui.RenewBtn.Visibility = 'Visible'
 }
 
 # ---------------------------------------------------------------- 丟新檔：用 Windows 自己的複製（有進度視窗、不會卡住這裡），原檔不動
@@ -1029,10 +1089,88 @@ function Update-Account {
         else { $ui.Account.Text = '還沒登入 Apple ID'; $ui.AcctDot.Fill = Brush '#FF453A'; $ui.Login.Content = '登入 Apple ID' }
     } catch { $ui.Account.Text = '無法確認 Apple ID' }
 }
-$loginProc = $null
-$ui.Login.Add_Click({
-    # 密碼和雙重驗證碼要互動輸入，所以開一個看得到的命令列視窗
-    $script:loginProc = Start-Process powershell.exe -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script`"", '-Login') })
+# 在 app 裡登入：plumesign 在背景跑，密碼和雙重驗證碼從它的標準輸入餵進去（不放在命令列上），輸出寫進檔案再輪詢
+function Show-Login {
+    $lx = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="420" SizeToContent="Height" Background="#000000" Foreground="White" ResizeMode="NoResize"
+        FontFamily="Microsoft JhengHei UI" FontSize="14" WindowStartupLocation="CenterOwner" Title="Apple ID">
+  <Window.Resources>__RES__</Window.Resources>
+  <StackPanel Margin="22">
+    <TextBlock Text="登入 Apple ID" FontSize="22" FontWeight="Bold" Margin="0,0,0,14"/>
+    <TextBlock x:Name="UserLbl" Text="Apple ID" Foreground="#8E8E93" Margin="0,0,0,4"/>
+    <TextBox x:Name="User" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="16" CaretBrush="White"/>
+    <TextBlock x:Name="PassLbl" Text="密碼" Foreground="#8E8E93" Margin="0,12,0,4"/>
+    <PasswordBox x:Name="Pass" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="16" CaretBrush="White"/>
+    <TextBlock x:Name="CodeLbl" Text="驗證碼（看 iPad 或 iPhone 上跳出的 6 位數）" Foreground="#8E8E93" Margin="0,12,0,4" Visibility="Collapsed"/>
+    <TextBox x:Name="Code" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="20" CaretBrush="White" Visibility="Collapsed"/>
+    <TextBlock x:Name="Status" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,12,0,0"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="Cancel" Content="取消" IsCancel="True" Margin="0,0,8,0"/>
+      <Button x:Name="Ok" Content="登入" Style="{StaticResource Primary}" IsDefault="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+'@
+    $lw = Load-Window $lx
+    $lw.Owner = $win
+    $f = @{}; foreach ($n in 'User','Pass','UserLbl','PassLbl','CodeLbl','Code','Status','Ok','Cancel') { $f[$n] = $lw.FindName($n) }
+    $st = @{ Proc = $null; Log = Join-Path $work 'login.log'; Asked = $false; Done = $false }
+    $send = { param($line)
+        $b = [Text.Encoding]::UTF8.GetBytes($line + "`n")
+        $st.Proc.StandardInput.BaseStream.Write($b, 0, $b.Length); $st.Proc.StandardInput.BaseStream.Flush() }
+    $lt = New-Object Windows.Threading.DispatcherTimer
+    $lt.Interval = [TimeSpan]::FromMilliseconds(400)
+    $lt.Add_Tick({
+        $txt = ''
+        try { $fs = New-Object IO.FileStream($st.Log, 'Open', 'Read', 'ReadWrite'); $sr = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8); $txt = $sr.ReadToEnd(); $sr.Dispose() } catch { }
+        if (-not $st.Asked -and $txt -match '(?i)enter (the )?(2fa )?code') {
+            $st.Asked = $true
+            $f.CodeLbl.Visibility = 'Visible'; $f.Code.Visibility = 'Visible'; $f.Code.Text = ''
+            $f.Ok.Content = '送出'; $f.Ok.IsEnabled = $true
+            $f.Status.Text = ''
+            $f.Code.Focus() | Out-Null
+        }
+        if ($st.Proc.HasExited) {
+            $lt.Stop()
+            if ($st.Proc.ExitCode -eq 0) { $st.Done = $true; $lw.DialogResult = $true; return }
+            $last = @($txt -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 3
+            $f.Status.Text = "登入失敗：$(($last -join ' ').Trim())"
+            $f.Status.Foreground = Brush '#FF453A'
+            $f.User.IsEnabled = $true; $f.Pass.IsEnabled = $true
+            $f.CodeLbl.Visibility = 'Collapsed'; $f.Code.Visibility = 'Collapsed'
+            $f.Ok.Content = '登入'; $f.Ok.IsEnabled = $true; $st.Proc = $null; $st.Asked = $false
+        }
+    })
+    $f.Ok.Add_Click({
+        if ($st.Proc -and $st.Asked) {
+            $c = $f.Code.Text.Trim()
+            if (-not $c) { return }
+            & $send $c
+            $f.Ok.IsEnabled = $false; $f.Status.Foreground = Brush '#8E8E93'; $f.Status.Text = '確認驗證碼…'
+            return
+        }
+        $u = $f.User.Text.Trim(); $pw = $f.Pass.Password
+        if (-not $u -or -not $pw) { $f.Status.Text = '請輸入 Apple ID 和密碼'; return }
+        Remove-Item -LiteralPath $st.Log -ErrorAction SilentlyContinue
+        $psi = New-Object Diagnostics.ProcessStartInfo 'cmd.exe'
+        $psi.Arguments = "/d /c `"`"$plume`" account login --username `"$($u -replace '"', '')`" > `"$($st.Log)`" 2>&1`""
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.RedirectStandardInput = $true
+        $psi.EnvironmentVariables['RUST_LOG'] = 'info'
+        $st.Proc = [Diagnostics.Process]::Start($psi)
+        # plumesign 先問密碼（沒給 --password 時從標準輸入讀一行）
+        & $send $pw
+        $f.User.IsEnabled = $false; $f.Pass.IsEnabled = $false; $f.Ok.IsEnabled = $false
+        $f.Status.Foreground = Brush '#8E8E93'; $f.Status.Text = '登入中…'
+        $lt.Start()
+    })
+    $lw.Add_Closed({ $lt.Stop(); if ($st.Proc -and -not $st.Proc.HasExited) { try { $st.Proc.Kill() } catch { } }
+                     Remove-Item -LiteralPath $st.Log -ErrorAction SilentlyContinue })
+    $lw.Add_ContentRendered({ $f.User.Focus() | Out-Null })
+    [void]$lw.ShowDialog()
+    if ($st.Done) { Update-Account }
+}
+$ui.Login.Add_Click({ Show-Login })
 $win.Add_ContentRendered({ Update-Account; Check-Updates })
 
 # ---------------------------------------------------------------- 執行：一次一款，每款一個進度列
@@ -1146,7 +1284,7 @@ function Start-Run($jobs) {
         if ($j.Call) { $nj.Call = $j.Call; $nj.NeedAllOk = $true }
         $state.Queue.Enqueue($nj)
     }
-    $ui.LibraryView.Visibility = 'Collapsed'; $ui.ProgressView.Visibility = 'Visible'; $ui.Banner.Visibility = 'Collapsed'
+    $ui.LibraryView.Visibility = 'Collapsed'; $ui.ProgressView.Visibility = 'Visible'; $ui.RenewBtn.Visibility = 'Collapsed'
     $ui.Options.Visibility = 'Hidden'; $ui.Start.Visibility = 'Collapsed'; $ui.Back.Visibility = 'Collapsed'; $ui.Stop.Visibility = 'Visible'
     $ui.Login.IsEnabled = $false; $ui.Settings.IsEnabled = $false; $ui.Refresh.IsEnabled = $false
     $ui.Busy.Visibility = 'Visible'; $ui.ProgTitle.Text = '執行中'
@@ -1322,8 +1460,8 @@ $ui.Start.Add_Click({
     $cfg.Mode = $mode; Save-Settings
     Run-Games @($selected) $mode ([bool]$ui.Merge.IsChecked) })
 
-$ui.RenewAll.Add_Click({
-    $list = @(Get-Installed | Where-Object { Test-Path -LiteralPath $_.Ipa })
+$ui.RenewBtn.Add_Click({
+    $list = @(Get-Installed | Where-Object { Test-Path -LiteralPath $_.Ipa } | Sort-Object Ipa -Unique)
     if (-not $list.Count) { return }
     $jobs = @()
     foreach ($x in $list) {
@@ -1382,6 +1520,13 @@ $ui.Settings.Add_Click({
         <CheckBox x:Name="Overwrite" Content="打包時蓋掉資料夾裡原本的 IPA" Foreground="White" Margin="0,12,0,0"/>
       </StackPanel>
     </Border>
+    <TextBlock Text="Switch Pad" Foreground="#8E8E93" Margin="4,16,0,6"/>
+    <Border Background="#1C1C1E" CornerRadius="12" Padding="14">
+      <DockPanel>
+        <Button x:Name="UpdateApp" DockPanel.Dock="Right" Content="更新" Style="{StaticResource Primary}"/>
+        <TextBlock x:Name="UpdateText" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
+      </DockPanel>
+    </Border>
     <TextBlock Text="資料夾" Foreground="#8E8E93" Margin="4,16,0,6"/>
     <Border Background="#1C1C1E" CornerRadius="12" Padding="14">
       <WrapPanel>
@@ -1410,6 +1555,12 @@ $ui.Settings.Add_Click({
     $sw.FindName('OpenLogs').Add_Click({ Start-Process explorer.exe "`"$logDir`"" })
     if (-not (Test-Path (Join-Path $here 'nxn-gui.ps1'))) { $sw.FindName('OldGui').Visibility = 'Collapsed' }
     $sw.FindName('OldGui').Add_Click({ Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$(Join-Path $here 'nxn-gui.ps1')`"") })
+    $upd = Update-Available
+    $sw.FindName('UpdateText').Text = if ($upd) { "有新版本：$upd" } elseif ($latest) { "已是最新（$($latest.tag_name)）" } else { '還沒問到 GitHub 上的版本' }
+    $ub = $sw.FindName('UpdateApp')
+    if (-not $upd) { $ub.Content = '重新安裝'; $ub.Style = $sw.FindResource([Windows.Controls.Button]) }
+    $ub.IsEnabled = -not $state.Running
+    $ub.Add_Click({ $sw.DialogResult = $false; Run-Setup })
     $sw.FindName('Done').Add_Click({ $sw.DialogResult = $true })
     if ($sw.ShowDialog()) {
         if ($combo.SelectedItem) { $cfg.Shell = $combo.SelectedItem.Tag }
@@ -1420,7 +1571,6 @@ $ui.Settings.Add_Click({
     }
 })
 
-$win.Add_Activated({ if ($script:loginProc -and $script:loginProc.HasExited) { $script:loginProc = $null; Update-Account } })
 $win.Add_Closing({ param($s, $e)
     if ($state.Proc -and -not $state.Proc.HasExited) {
         $r = [Windows.MessageBox]::Show('還有工作在跑，關掉會停止它。確定要關？', '還在執行', 'YesNo')

@@ -32,6 +32,12 @@ Switch Pad: 合成一包 with 只安裝 installs the newest merged package	Switc
 Switch Pad: games and merged packages in their own sections; a package opens to the games inside	Switch Pad：游戏库分成「游戏」和「合包」两区；点合包可以看里面有哪些游戏（图标、名称、版本），并直接安装
 Switch Pad: 遊戲 / 合包 tabs; name a package when merging, rename it later	Switch Pad：上方分成「游戏」「合包」两个分页；合成一包时可以取名，之后也能在合包里改名（iPad 上的名称跟着改，要重新安装才会变）
 Switch Pad: each new merged package gets its own bundle ID	Switch Pad：每个新合包有自己的 bundle ID，几个合包可以同时装在 iPad 上；改名时沿用原本的，存档不会掉
+Switch Pad: install runs in the background; the plumesign window opens only when it needs an answer	Switch Pad：安装在后台进行，只有 plumesign 需要回答问题时才开窗口
+Switch Pad: log in to the Apple ID inside the app (password and 2FA code in a dialog); install never opens a console window	Switch Pad：在程序里登录 Apple ID（密码和双重验证码在对话框输入）；安装不再打开命令行窗口
+Switch Pad: the 全部續期 bar is always there once something is installed; each merged package keeps its own expiry	Switch Pad：装过东西后「全部续期」栏一直显示；每个合包各自记录到期日
+Switch Pad: update and renew are small buttons in the title bar; right-click a game or a merged package to delete it (to the Recycle Bin)	Switch Pad：更新和续期改成标题栏的小按钮；右键游戏或合包可以删除（移到回收站）
+Switch Pad: renew-all in the bottom bar, app update in Settings, no count on the 合包 tab, tidier right-click menus	Switch Pad：全部重签放在底部栏，程序更新放进设置，合包分页不显示数字，右键菜单对齐
+Switch Pad: a merged package shows the same tiled icon as on the iPad; the renew button just says 重簽	Switch Pad：合包显示和 iPad 上一样的拼贴图标；重签按钮只写「重签」
 Game picker: several games in one package start from a picker; the launcher goes back to it, keeps settings at once, and the game language follows the device	合包：选游戏画面（滑动切换、点图标开始、时间／Wi-Fi／电量）；设置画面可回到游戏清单、设置一改就保存、游戏语言默认跟随系统（繁中→简中→英文）；修正合包里 NVN 游戏没有着色器的红画面
 Shell: romfs and msl from Documents; phones: one player per phone, layout switch on the phone	壳：游戏文件和着色器可放在 Documents（重签不用重传）；手机手把：同一支手机只占一个玩家、15 秒没反应就移除，手机画面上可自己切换 Xbox／Switch 配置
 Game picker: the phones' QR code as the first tile, and a players card	合包选单：第一格就是手机的 QR code（绿点＝已连接数），打开后是 8 格玩家清单：按键会亮、点一下震动、切换 Xbox／Switch 配置、移除

@@ -212,9 +212,9 @@ try {
             }
         } finally { $tcp.Close() }
     }
-    $muxId = $null
-    try {
-        $devs = @(Get-MuxDevices)
+    function Find-Device {
+        try { $devs = @(Get-MuxDevices) }
+        catch { throw "問不到 Apple 行動裝置服務（$($_.Exception.Message)）。請安裝 Apple Devices 或 iTunes。" }
         $norm = { param($x) ($x -replace '-', '').ToUpper() }
         if ($Udid) { $pick = @($devs | Where-Object { (& $norm $_.Serial) -eq (& $norm $Udid) }) }
         else {
@@ -223,33 +223,35 @@ try {
             if (-not $pick) { $pick = $devs }
             $pick = @($pick | Group-Object Serial | ForEach-Object { $_.Group[0] })
         }
-        if ($pick.Count -eq 1) { $muxId = $pick[0].Id; Write-Host "裝置：$($pick[0].Serial)（連線編號 $muxId）" }
-        elseif ($pick.Count -gt 1) { Write-Host "接著 $($pick.Count) 台 Apple 裝置，請在 plumesign 視窗選一台" }
-        else { Write-Host '找不到接著的 iPad（要用 USB 接著、解鎖），交給 plumesign 自己找' }
-    } catch {
-        Write-Host "問不到 Apple 行動裝置服務（$($_.Exception.Message)），交給 plumesign 自己選裝置"
+        if (-not $pick) { throw '找不到 iPad：請用 USB 接上並解鎖，第一次要在 iPad 上按「信任」。' }
+        if ($pick.Count -gt 1) { Warn "接著 $($pick.Count) 台 Apple 裝置，裝到第一台（$($pick[0].Serial)）；要指定請在設定填 UDID" }
+        $pick[0]
+    }
+    # plumesign 只有在沒給 --udid（選裝置）或帳號有好幾個團隊時才會問問題，其他時候可以直接在背景跑，記錄寫進這裡
+    function Run-Sign($argv) {
+        $ErrorActionPreference = 'Continue'
+        $lines = New-Object Collections.Generic.List[string]
+        & $plume @argv 2>&1 | ForEach-Object {
+            $l = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+            if ($l.Trim()) { Write-Host $l; $lines.Add($l) }
+        }
+        $c = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        $script:signOut = $lines -join "`n"
+        return $c
     }
     $signArgs = @('sign', '--package', $Ipa, '--apple-id', '--register-and-install')
-    # plumesign 會在中途問問題（選裝置、要不要重設憑證），需要真的終端機；輸出被接管時會出現 "not a terminal"。
-    # 所以另開一個命令列視窗跑它，失敗時停住讓你看訊息。
-    function Q($x) { "'" + ($x -replace "'", "''") + "'" }
-    function Run-Sign($argv, $pause) {
-        $onFail = if ($pause) { "Write-Host ''; Read-Host '安裝失敗，看完上面的訊息後按 Enter 關閉' | Out-Null" } else { "Start-Sleep 3" }
-        $inner = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; & $(Q $plume) $(($argv | ForEach-Object { Q $_ }) -join ' '); " +
-                 "`$c = `$LASTEXITCODE; if (`$c) { $onFail }; exit `$c"
-        $proc = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"$inner`"" -Wait -PassThru
-        return $proc.ExitCode
+    $dev = Find-Device
+    Write-Host "裝置：$($dev.Serial)（連線編號 $($dev.Id)）"
+    $code = Run-Sign ($signArgs + @('--udid', $dev.Id))
+    if ($code -and $script:signOut -match '(?i)device.{0,20}not found') {
+        # 編號在拔插後會變，重新問一次再試
+        $dev = Find-Device
+        Warn "裝置編號變了，改用 $($dev.Id) 再試一次"
+        $code = Run-Sign ($signArgs + @('--udid', $dev.Id))
     }
-    Write-Host '（plumesign 會在另一個命令列視窗執行，如果它問問題請在那個視窗回答）'
-    if ($muxId) {
-        $code = Run-Sign ($signArgs + @('--udid', $muxId)) $false
-        if ($code) {
-            # 編號在拔插後會變，萬一剛好對不上就不指定、讓它自己問一次
-            Warn "指定裝置失敗（結束碼 $code），改成讓 plumesign 自己問要裝到哪台"
-            $code = Run-Sign $signArgs $true
-        }
-    } else {
-        $code = Run-Sign $signArgs $true
+    if ($code -and $script:signOut -match '(?i)no account selected|please login|unauthori[sz]ed|re-?authenticat') {
+        throw "Apple ID 要重新登入：按右上角的「登入 Apple ID」，登入後再按一次安裝。IPA 本身是好的：$Ipa"
     }
     if ($code) {
         throw @"
@@ -257,6 +259,7 @@ try {
 常見原因：
   - iPad 沒解鎖，或還沒按「信任這台電腦」
   - 免費 Apple ID 的憑證 7 天就過期、同時最多 3 個 App，先在 iPad 上刪掉一個舊的
+  - 上面的記錄有 plumesign 的原始訊息
   - 還是不行就用 工具\Impactor-windows-x86_64-portable.exe 手動拖這個 IPA 進去
 "@
     }
@@ -268,7 +271,9 @@ try {
         if (Test-Path $db) {
             (Get-Content $db -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $map[$_.Name] = $_.Value }
         }
-        $map[(Split-Path $Ipa -Parent)] = [ordered]@{ ipa = $Ipa; time = (Get-Date).ToString('s') }
+        # 合包資料夾裡每包是不同的 App，用 IPA 本身當鍵；遊戲資料夾只記最新一次
+        $key = if ((Split-Path (Split-Path $Ipa -Parent) -Leaf) -eq '合包') { $Ipa } else { Split-Path $Ipa -Parent }
+        $map[$key] = [ordered]@{ ipa = $Ipa; time = (Get-Date).ToString('s') }
         $map | ConvertTo-Json -Depth 3 | Set-Content $db -Encoding UTF8
     } catch { Warn "記錄安裝紀錄失敗：$($_.Exception.Message)" }
 
