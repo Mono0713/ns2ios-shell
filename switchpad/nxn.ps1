@@ -37,6 +37,8 @@ function RunExe($exe, $arglist) {
         # stderr 的空行在 PowerShell 5.1 會變成 "System.Management.Automation.RemoteException"
         $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
         if ($line -eq 'System.Management.Automation.RemoteException') { $line = '' }
+        # 打包器找不到設定檔時說的 title ID（檔名裡不一定有）
+        if ($line -match 'no game profile for title ID (0[0-9A-Fa-f]{15})') { $script:noProfile = $Matches[1].ToUpper() }
         Write-Host $line
     }
     $code = $LASTEXITCODE
@@ -190,14 +192,19 @@ try {
                 $nsps = @(Get-ChildItem -LiteralPath $GameDir -File | Where-Object { $_.Extension -match '^\.(nsp|xci)$' })
                 $baseFile = $nsps | Where-Object { $_.Name -match '\[(01[0-9A-Fa-f]{11}000)\]' } | Sort-Object Length -Descending | Select-Object -First 1
                 $tid = if ($baseFile -and $baseFile.Name -match '\[(01[0-9A-Fa-f]{11}000)\]') { $Matches[1].ToUpper() } else { '' }
+                if ($script:noProfile) {
+                    # 檔名裡沒有 title ID（例如「Tricky Towers.nsp」）：用打包器說的，本體取最大的那個檔
+                    $tid = $script:noProfile
+                    if (-not $baseFile) { $baseFile = $nsps | Where-Object { $_.Name -notmatch '\[0[0-9A-Fa-f]{12}(800|[0-9A-Fa-f]{2}[1-9A-Fa-f])\]' } | Sort-Object Length -Descending | Select-Object -First 1 }
+                }
                 $prov = Join-Path $here 'make_provisional.py'
-                if ($tid -and (Test-Path $prov) -and -not (Test-Path (Join-Path $srcDir "dm\games\$tid\game.tsv"))) {
+                if ($tid -and $baseFile -and (Test-Path $prov) -and -not (Test-Path (Join-Path $srcDir "dm\games\$tid\game.tsv"))) {
                     $updRe = '\[' + $tid.Substring(0, 13) + '800\]'
                     $upd = $nsps | Where-Object { $_.Name -match $updRe } |
                         Sort-Object { if ($_.Name -match '\[v(\d+)\]') { [long]$Matches[1] } else { 0 } } -Descending | Select-Object -First 1
                     $ver = if ($upd -and $upd.Name -match '\[v(\d+)\]') { "v$($Matches[1])" } else { 'v0' }
                     Step "上游沒有 $tid 的設定檔，自己做一份暫定的（實驗性，遊戲不一定能跑）"
-                    $code = RunExe $pyExe @($prov, $srcDir, $nx.DirectoryName, $Keys, $baseFile.FullName, $(if ($upd) { $upd.FullName } else { '-' }), $ver)
+                    $code = RunExe $pyExe @($prov, $srcDir, $nx.DirectoryName, $Keys, $baseFile.FullName, $(if ($upd) { $upd.FullName } else { '-' }), $ver, $tid)
                     if ($code) { throw "做不出暫定設定檔（結束碼 $code）" }
                     Step "用暫定設定檔重新打包 $(Split-Path $GameDir -Leaf)"
                     $code = RunExe $pyExe (@($packer, $shellZip, $GameDir, '-k', $Keys, '--tools', $nx.DirectoryName) + $outArg)

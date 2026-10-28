@@ -2,7 +2,7 @@
 profile (survey with nx_extract --manifest, then dm/games/profile_guess.py), and put it into the packer's dm/games.
 The Mac-only heap check is skipped. Experimental: the game may not run.
 
-Usage: python make_provisional.py <src dir> <tools dir> <prod.keys> <base.nsp> <update.nsp|-> <version e.g. v1376256>
+Usage: python make_provisional.py <src dir> <tools dir> <prod.keys> <base.nsp> <update.nsp|-> <version e.g. v1376256> [title ID]
 """
 import re
 import shutil
@@ -29,7 +29,8 @@ if r.returncode:
     sys.exit('nx_extract failed')
 F = pg.facts_of(ex / 'ExeFS', ex / 'romfs_manifest.tsv')
 dv = re.search(r'display version (\S+)', r.stdout)
-app = int(Path(base).name.split('[')[1].split(']')[0], 16)
+# the title ID: given (Switch Pad passes the one the packer asked for), else from the file name's [0100…]
+app = int(sys.argv[7], 16) if len(sys.argv) > 7 else int(Path(base).name.split('[')[1].split(']')[0], 16)
 f = {'F': F, 'name': nacp.name(ex / 'control.nacp'), 'version': ver, 'display': dv.group(1) if dv else '?',
      'survey': 'Windows, make_provisional.py'}
 pdir = work / 'profile' / ('%016X' % app)
