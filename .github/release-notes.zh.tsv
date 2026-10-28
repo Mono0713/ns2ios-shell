@@ -45,3 +45,4 @@ Provisional profiles set the used memory their modules need, so a game with more
 Game picker: several games in one package start from a picker; the launcher goes back to it, keeps settings at once, and the game language follows the device	合包：选游戏画面（滑动切换、点图标开始、时间／Wi-Fi／电量）；设置画面可回到游戏清单、设置一改就保存、游戏语言默认跟随系统（繁中→简中→英文）；修正合包里 NVN 游戏没有着色器的红画面
 Shell: romfs and msl from Documents; phones: one player per phone, layout switch on the phone	壳：游戏文件和着色器可放在 Documents（重签不用重传）；手机手把：同一支手机只占一个玩家、15 秒没反应就移除，手机画面上可自己切换 Xbox／Switch 配置
 Game picker: the phones' QR code as the first tile, and a players card	合包选单：第一格就是手机的 QR code（绿点＝已连接数），打开后是 8 格玩家清单：按键会亮、点一下震动、切换 Xbox／Switch 配置、移除
+Say plainly in Chinese why an NSP cannot be unpacked for want of a key, and what to do, instead of a stack trace	解包因为缺金钥失败时（prod.keys 太旧、NSP 没有票证或是个人化票证），直接用中文说明原因和该怎么做，不再显示一大串错误堆叠
