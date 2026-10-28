@@ -49,11 +49,25 @@ static NSDictionary *game_info(void) {   // the chosen game's game.json
     return [j isKindOfClass:NSDictionary.class] ? j : nil;
 }
 
+// Where the game's big data lives when the installer keeps it out of the bundle (re-signing then does not resend it): Documents/<name>
+// for a package of one game, Documents/games/<title ID>/<name> for a package of several. Copied there once over house_arrest; the shell
+// says it reads them with DMDataInDocuments in Info.plist and DOCDATA=1 in dm/shell_info.txt.
+static NSString *doc_data(NSString *name) {
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    if (g_game_id) doc = [[doc stringByAppendingPathComponent:@"games"] stringByAppendingPathComponent:g_game_id];
+    return [doc stringByAppendingPathComponent:name];
+}
+static BOOL nonempty_dir(NSString *d) { return ([NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil] ?: @[]).count > 0; }
+// msl/: the copy in Documents when there is one, else the bundle's
+static NSString *msl_locate(void) {
+    NSString *d = doc_data(@"msl");
+    return nonempty_dir(d) ? d : [g_game_root stringByAppendingPathComponent:@"msl"];
+}
+
 static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *own = [g_game_root stringByAppendingPathComponent:@"romfs"];
-    for (NSString *d in g_game_id ? @[own] : @[[doc stringByAppendingPathComponent:@"romfs"], own]) {   // Documents/romfs could only be one of several games' files: a package of several reads its own
+    for (NSString *d in @[doc_data(@"romfs"), own]) {   // a package of several reads only its own games/<title ID>/romfs in Documents
 #ifdef DM_SHELL
         // One shell serves any game, so it cannot know a single game's romfs_marker: the first existing, non-empty candidate wins.
         // The packer writes the game's own tree there; if it is the wrong game, the host reports it when reading the files.
@@ -84,7 +98,7 @@ static int boot_env(void) {
     if (g_game_id) { save = [save stringByAppendingPathComponent:g_game_id]; temp = [temp stringByAppendingPathComponent:g_game_id]; }
     for (NSString *d in @[save, temp]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
-    for (NSString *d in @[@"romfs", @"temp"]) {
+    for (NSString *d in @[@"romfs", @"msl", @"games", @"temp"]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d] isDirectory:YES]; NSError *e = nil;
         if ([fm fileExistsAtPath:u.path] && ![u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e]) fprintf(stderr, "boot: %s could not be excluded from backup: %s\n", d.UTF8String, e.localizedDescription.UTF8String);
     }
@@ -115,7 +129,7 @@ static int boot_env(void) {
               av < (5ull << 30) ? "no increased-memory-limit entitlement: the bigger games will be killed for memory"
                                 : "entitlement in effect"); }
     NSString *romfs = romfs_locate();
-    if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
+    if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs, Documents/romfs or Documents/games/<title ID>/romfs)\n"); return 0; }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
     env_default(@"DM_ROMFS", romfs.fileSystemRepresentation);
     env_default(@"DM_SAVE", save.fileSystemRepresentation);
@@ -127,7 +141,9 @@ static int boot_env(void) {
     }
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
     env_default(@"DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation);
-    env_default(@"DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation);
+    NSString *msl = msl_locate();
+    fprintf(stderr, "boot: shaders %s\n", msl.fileSystemRepresentation);
+    env_default(@"DM_MSL_DIR", msl.fileSystemRepresentation);
     env_default(@"DM_FONT_DIR", [[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"font"].fileSystemRepresentation);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
     NSString *aoc = [res stringByAppendingPathComponent:@"aoc"];   // add-on content: build_ipa.sh puts the RomFS extracted from the player's DLC NSPs at <App>/aoc/<index>/
     if ([fm fileExistsAtPath:aoc]) env_default(@"DM_AOC_DIR", aoc.fileSystemRepresentation);

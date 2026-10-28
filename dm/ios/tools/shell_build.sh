@@ -109,10 +109,11 @@ esac
 GUEST=0; grep -q 'dm_shell_modules' ../host/loader.c && GUEST=1
 ENV=0; grep -q 'env.txt' Sources/main.m && ENV=1
 MULTI=0; grep -q 'shell_game_choose' Sources/main.m && grep -q 'DM_GUEST' ../host/loader.c && MULTI=1   # scripts/nxn_merge.py: a package of several games with the picker
+DOCDATA=0; grep -q 'msl_locate' Sources/main.m && DOCDATA=1   # romfs/ and msl/ may be installed into Documents (games/<title ID>/ for several) instead of the bundle
 [ "$GUEST" = 1 ] || die "host/loader.c has no dm_shell_modules: this tree is not the shell route"
 [ "$ENV" = 1 ] || die "Sources/main.m does not read dm/env.txt: the packer's memory layout would be ignored"
-printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\nMULTI=%s\n' \
-  "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" "$MULTI" \
+printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\nMULTI=%s\nDOCDATA=%s\n' \
+  "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" "$MULTI" "$DOCDATA" \
   > "$A/dm/shell_info.txt"
 t "shell understands gates: $GATES"
 

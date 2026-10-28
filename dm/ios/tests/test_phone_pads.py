@@ -143,6 +143,14 @@ class PhonePadsTests(unittest.TestCase):
         for ph in [a, b, b2, ninth] + more: ph.close()
         self.assertEqual(self.host()['mask'], 0)
 
+    def test_silent_page_is_dropped(self):   # a page left in a background tab keeps its socket open but sends nothing: after 8 s its player is freed
+        g = Phone(self.port)
+        self.assertEqual(g.hello('phone-gone')['t'], 'assign')
+        self.assertEqual(self.host()['mask'], 0b1)
+        time.sleep(8.6)
+        self.assertEqual(self.host()['mask'], 0)
+        g.close()
+
 
 class PhonePadsWithControllersTests(PhonePadsTests):
     """Two physical controllers hold players 1 and 2: phones take the players after them, and the mask the host gets keeps the controllers'"""
@@ -150,6 +158,7 @@ class PhonePadsWithControllersTests(PhonePadsTests):
     test_players = None
     test_page_is_served = None
     test_embedded_page_is_current = None
+    test_silent_page_is_dropped = None
 
     def test_phones_after_controllers(self):   # and the launcher's swap, layout and remove
         self.assertEqual(self.host()['mask'], 0b11)

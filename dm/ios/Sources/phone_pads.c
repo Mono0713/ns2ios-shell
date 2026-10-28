@@ -38,9 +38,12 @@
 #include <dns_sd.h>
 #endif
 
-enum { MAX_CLIENTS = 24, IN_CAP = 4096, SILENT_NS = 1000000000 };
+enum { MAX_CLIENTS = 24, IN_CAP = 4096 };
+#define SILENT_NS 1000000000ull   // quiet this long: nothing held down
+#define GONE_NS 8000000000ull     // quiet this long: the page is gone (a tab left in the background keeps its socket open), its player is freed
 typedef struct {
     int fd, ws, player;          // ws: the connection has switched to WebSocket; player: slot index, -1 before the hello
+    uint32_t ip;                 // the phone's address (network order): one phone, one player
     size_t n; uint8_t in[IN_CAP];
     int last_seq; uint64_t last_ns; int released;
     char name[64], id[64];       // id: the phone's own (its page's localStorage), the slot table's name for it
@@ -134,6 +137,13 @@ static void on_hello(client *c, const char *json) {
     if (c->player >= 0) { release(c); shell_slot_free(c); c->player = -1; }
     // The same phone still connected on an older socket (a page that reloaded before the old connection timed out): close that one, so this one takes its player
     for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) drop(&g_cl[i]);
+    // The same phone from another page with its own storage, so another id (Safari and the Home Screen copy, or a second browser): that is still one phone, the old page goes.
+    // Not for loopback, which is the server test's several phones on one machine
+    if (c->ip && c->ip != htonl(INADDR_LOOPBACK))
+        for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && g_cl[i].ip == c->ip) {
+            LOG("phone pads: '%s' joined again from the same phone: the old page's player %d goes", name, shell_slot_of(&g_cl[i]) + 1);
+            drop(&g_cl[i]);
+        }
     int p = shell_slot_take(c, id, SHELL_SLOT_PHONE, name);   // a phone that held a player before has its id on that slot and gets it back while it is free
     snprintf(c->name, sizeof c->name, "%s", name); snprintf(c->id, sizeof c->id, "%s", id);
     if (p < 0) { ws_text(c->fd, "{\"t\":\"full\"}"); LOG("phone pads: '%s' connected: all %d players are taken, not used", name, DM_PLAYERS); return; }
@@ -246,7 +256,8 @@ static void *serve(void *arg) {
         for (int k = 0; r > 0 && k < n; k++) {
             if (!(pf[k].revents & (POLLIN | POLLHUP | POLLERR))) continue;
             if (map[k] < 0) {
-                int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
+                struct sockaddr_in from = {0}; socklen_t fl = sizeof from;
+                int fd = accept(ls, (struct sockaddr *)&from, &fl); if (fd < 0) continue;
                 int slot = -1; for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd < 0) { slot = i; break; }
                 if (slot < 0) { close(fd); continue; }
 #ifdef SO_NOSIGPIPE
@@ -254,6 +265,7 @@ static void *serve(void *arg) {
 #endif
                 fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
                 memset(&g_cl[slot], 0, sizeof g_cl[slot]); g_cl[slot].fd = fd; g_cl[slot].player = -1;
+                g_cl[slot].ip = from.sin_family == AF_INET ? from.sin_addr.s_addr : 0;
                 continue;
             }
             if (!on_readable(&g_cl[map[k]])) drop(&g_cl[map[k]]);
@@ -261,6 +273,10 @@ static void *serve(void *arg) {
         for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0) launcher_requests(&g_cl[i]);
         uint64_t t = now_ns();   // a phone that went quiet (screen locked, out of range) leaves nothing pressed
         for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0 && g_cl[i].player >= 0 && t - g_cl[i].last_ns > SILENT_NS) release(&g_cl[i]);
+        for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0 && g_cl[i].player >= 0 && t - g_cl[i].last_ns > GONE_NS) {
+            LOG("phone pads: '%s' silent for %llu s: its page is gone", g_cl[i].name, GONE_NS / 1000000000ull);
+            drop(&g_cl[i]);   // the phone gets the player back if it comes back while it is free (its id stays on the slot)
+        }
     }
 }
 
