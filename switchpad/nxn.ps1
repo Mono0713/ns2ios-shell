@@ -271,7 +271,9 @@ try {
         if (Test-Path $db) {
             (Get-Content $db -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $map[$_.Name] = $_.Value }
         }
-        $map[(Split-Path $Ipa -Parent)] = [ordered]@{ ipa = $Ipa; time = (Get-Date).ToString('s') }
+        # 合包資料夾裡每包是不同的 App，用 IPA 本身當鍵；遊戲資料夾只記最新一次
+        $key = if ((Split-Path (Split-Path $Ipa -Parent) -Leaf) -eq '合包') { $Ipa } else { Split-Path $Ipa -Parent }
+        $map[$key] = [ordered]@{ ipa = $Ipa; time = (Get-Date).ToString('s') }
         $map | ConvertTo-Json -Depth 3 | Set-Content $db -Encoding UTF8
     } catch { Warn "記錄安裝紀錄失敗：$($_.Exception.Message)" }
 

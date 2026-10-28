@@ -34,3 +34,4 @@ Switch Pad: 遊戲 / 合包 tabs; name a package when merging, rename it later	S
 Switch Pad: each new merged package gets its own bundle ID	Switch Pad：每个新合包有自己的 bundle ID，几个合包可以同时装在 iPad 上；改名时沿用原本的，存档不会掉
 Switch Pad: install runs in the background; the plumesign window opens only when it needs an answer	Switch Pad：安装在后台进行，只有 plumesign 需要回答问题时才开窗口
 Switch Pad: log in to the Apple ID inside the app (password and 2FA code in a dialog); install never opens a console window	Switch Pad：在程序里登录 Apple ID（密码和双重验证码在对话框输入）；安装不再打开命令行窗口
+Switch Pad: the 全部續期 bar is always there once something is installed; each merged package keeps its own expiry	Switch Pad：装过东西后「全部续期」栏一直显示；每个合包各自记录到期日

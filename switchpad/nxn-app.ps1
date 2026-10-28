@@ -707,8 +707,8 @@ function Build-Packs($inst) {
         $t.Foreground = Brush '#8E8E93'; $t.Margin = '8,40,8,0'; $t.FontSize = 16
         [void]$ui.Packs.Children.Add($t)
     }
-    $mine = $inst | Where-Object { $_.Dir -eq $mdir } | Select-Object -First 1
     foreach ($ipa in $ipas) {
+        $mine = $inst | Where-Object { $_.Ipa -eq $ipa.FullName } | Select-Object -First 1
         $games = @(Read-Pack $ipa)
         $p = [pscustomobject]@{ Dir = $mdir; Name = $ipa.BaseName; Ipas = @($ipa); Base = $false; BaseFile = ''; Games = $games
                                Icon = $(if ($games.Count -and $games[0].Icon) { $games[0].Icon } else { $appIcon }) }
@@ -718,7 +718,7 @@ function Build-Packs($inst) {
         $card.FindName('Detail').Text = if ($games.Count) { "$($games.Count) 款 · $($ipa.LastWriteTime.ToString('MM/dd'))" } else { $ipa.LastWriteTime.ToString('MM/dd') }
         $card.FindName('Detail').ToolTip = ($games | ForEach-Object { $_.Name }) -join "`n"
         $st = $card.FindName('State')
-        if ($mine -and $mine.Ipa -eq $ipa.FullName) {
+        if ($mine) {
             $st.Text = if ($mine.Left -le 0) { '已過期' } else { "已安裝 · 剩 $($mine.Left) 天" }
             $st.Foreground = Brush $(if ($mine.Left -le 2) { '#FF9F0A' } else { '#30D158' })
         }
@@ -972,12 +972,21 @@ function Set-Tab {
     }
 }
 
+# 續期列：有裝過東西就一直在，快到期（3 天內）才變橘色並列出是哪幾個
 function Update-Banner($inst) {
-    $soon = @($inst | Where-Object { $_.Left -le 3 -and (Test-Path -LiteralPath $_.Ipa) } | Sort-Object Left)
-    if (-not $soon.Count) { $ui.Banner.Visibility = 'Collapsed'; return }
-    $txt = ($soon | ForEach-Object { $n = Split-Path $_.Dir -Leaf; if ($_.Left -le 0) { "$n 已過期" } else { "$n 剩 $($_.Left) 天" } }) -join '、'
-    $ui.BannerText.Text = "⏰ $txt"
-    $ui.BannerText.ToolTip = '免費 Apple ID 簽的 App 7 天後就打不開，按「全部續期」重簽就好'
+    $live = @($inst | Where-Object { Test-Path -LiteralPath $_.Ipa } | Sort-Object Left)
+    if (-not $live.Count) { $ui.Banner.Visibility = 'Collapsed'; return }
+    $soon = @($live | Where-Object { $_.Left -le 3 })
+    $name = { param($x) if ((Split-Path $x.Dir -Leaf) -eq '合包' -or $x.Dir -like '*.ipa') { [IO.Path]::GetFileNameWithoutExtension($x.Ipa) } else { Split-Path $x.Dir -Leaf } }
+    if ($soon.Count) {
+        $ui.BannerText.Text = '⏰ ' + (($soon | ForEach-Object { $n = & $name $_; if ($_.Left -le 0) { "$n 已過期" } else { "$n 剩 $($_.Left) 天" } }) -join '、')
+        $ui.BannerText.Foreground = Brush '#FF9F0A'
+    } else {
+        $ui.BannerText.Text = "已安裝 $($live.Count) 個 · 最快 $($live[0].Left) 天後到期"
+        $ui.BannerText.Foreground = Brush '#8E8E93'
+    }
+    $ui.BannerText.ToolTip = (($live | ForEach-Object { "$(& $name $_)：$(if ($_.Left -le 0) { '已過期' } else { "剩 $($_.Left) 天" })" }) -join "`n") +
+                             "`n`n免費 Apple ID 簽的 App 7 天後就打不開，按「全部續期」把上面全部重簽一次"
     $ui.Banner.Visibility = 'Visible'
 }
 
@@ -1401,7 +1410,7 @@ $ui.Start.Add_Click({
     Run-Games @($selected) $mode ([bool]$ui.Merge.IsChecked) })
 
 $ui.RenewAll.Add_Click({
-    $list = @(Get-Installed | Where-Object { Test-Path -LiteralPath $_.Ipa })
+    $list = @(Get-Installed | Where-Object { Test-Path -LiteralPath $_.Ipa } | Sort-Object Ipa -Unique)
     if (-not $list.Count) { return }
     $jobs = @()
     foreach ($x in $list) {
