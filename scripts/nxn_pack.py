@@ -1364,9 +1364,12 @@ def main():
     patched = work / 'build' / 'patched'
     step_rewrite(game / 'ExeFS', mods, patched, work, a.force)
     # After the rewrite, not before: only the rewritten modules' bytes reach GetInfo's UsedMemorySize.
-    # Only for a derived profile: a game the profile was brought up on has its mem_used settled by the profile author,
-    # and second-guessing it would resize the heap of titles that already work.
-    filled = fill_mem_used(patched, mods, gdir, rows) if derived_dir is not None else None
+    # Only for a derived or a provisional profile: a game the profile was brought up on has its mem_used settled by the
+    # profile author, and second-guessing it would resize the heap of titles that already work. A provisional profile
+    # (switchpad/make_provisional.py) is a guess nobody settled, as upstream's build_ipa_from_nsp.py sets it after the
+    # rewrite too (Tricky Towers: 76 MB of modules, a 0.03 GB heap and an abort at the first allocation without it).
+    provisional = (gdir / 'game.tsv').read_text(encoding='utf-8').startswith('# Provisional game profile')
+    filled = fill_mem_used(patched, mods, gdir, rows) if derived_dir is not None or provisional else None
     if filled:
         value, total = filled
         rows = load_rows(gdir)
