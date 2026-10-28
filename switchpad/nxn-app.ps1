@@ -373,7 +373,11 @@ try {
 } catch { }
 $win = Load-Window $xamlText
 if (Test-Path $appIcon) {
-    $win.Icon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri]$appIcon)
+    # 讀進記憶體再用：BitmapFrame::Create(Uri) 會一直鎖住檔案，更新時就蓋不過去（"另一個處理程序正在使用檔案 ...\SwitchPad.ico"）
+    try {
+        $fs = [IO.File]::OpenRead($appIcon)
+        try { $win.Icon = [Windows.Media.Imaging.BitmapFrame]::Create($fs, 'None', 'OnLoad') } finally { $fs.Dispose() }
+    } catch { }
     # 桌面捷徑指向 Switch Pad.exe；舊版建的是 PowerShell 開 nxn-app.ps1 的捷徑，換掉
     try {
         $exe = Join-Path $base 'Switch Pad.exe'

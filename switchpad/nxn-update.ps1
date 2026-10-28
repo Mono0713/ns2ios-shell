@@ -188,7 +188,13 @@ try {
         # 程式檔放在這個資料夾（程式\），圖示放到 工具\；遊戲、work、工具 裡的其他東西不碰
         foreach ($f in Get-ChildItem $from -File) {
             $dst = if ($f.Extension -eq '.ico') { Join-Path $toolDir $f.Name } else { Join-Path $here $f.Name }
-            Copy-Item -LiteralPath $f.FullName -Destination $dst -Force
+            # 沒變的檔案不用蓋（舊版 Switch Pad 開著時會鎖住自己的圖示）；圖示蓋不過去也不算失敗，下次再換
+            if ((Test-Path -LiteralPath $dst) -and (Get-FileHash -LiteralPath $dst).Hash -eq (Get-FileHash -LiteralPath $f.FullName).Hash) { continue }
+            try { Copy-Item -LiteralPath $f.FullName -Destination $dst -Force -ErrorAction Stop }
+            catch {
+                if ($f.Extension -ne '.ico') { throw }
+                Write-Host "圖示 $($f.Name) 正在使用中，先不換（不影響使用）"
+            }
         }
         Remove-Item -Recurse -Force $anew
         Set-Content $verFile $appA.updated_at
