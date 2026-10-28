@@ -45,5 +45,16 @@ for n in ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv'):
     t = dest / n
     if t.is_file() and len([l for l in t.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]) <= 1:
         t.unlink()
+# The guessed app pool can be far bigger than what runs on an iPad: PICO PARK 2's guess (3.2 GB) closed the app right
+# after the shaders, and both it and Boomerang Fu run with 1 GB. Start there; the launcher's memory pool slider can raise it.
+POOL_CAP = 0x40000000
+gt = dest / 'game.tsv'
+rows = gt.read_text(encoding='utf-8').splitlines()
+for i, l in enumerate(rows):
+    k, _, v = l.partition('\t')
+    if k == 'app_pool' and int(v.strip(), 16) > POOL_CAP:
+        rows[i] = 'app_pool\t0x%X' % POOL_CAP
+        print('app_pool %s -> 0x%X (provisional cap)' % (v.strip(), POOL_CAP))
+gt.write_text('\n'.join(rows) + '\n', encoding='utf-8')
 print('profile installed:', dest)
 print((dest / 'game.tsv').read_text(encoding='utf-8'))
