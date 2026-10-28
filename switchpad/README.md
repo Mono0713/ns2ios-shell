@@ -8,7 +8,8 @@ and the packer up to date from this repository's latest release.
 
 1. Download `SwitchPad.zip` from the [latest release](https://github.com/Mono0713/ns2ios-shell/releases/latest) and unzip it
    anywhere (for example the Desktop).
-2. Double-click `Switch Pad.cmd`. The first time, press **安裝** (Install) at the top: it installs Python 3.12 with
+2. Double-click `Switch Pad.cmd`. On first start it tidies the folder: everything of its own goes into `程式\` and a
+   `Switch Pad.exe` with the icon appears next to `遊戲\` and `合包\`; from then on, open that. The first time, press **安裝** (Install) at the top: it installs Python 3.12 with
    winget when there is none, the Python packages, the shell, the packer and its tools, and `plumesign` (the command-line
    [Impactor](https://github.com/khcrysalis/Impactor)). It also puts a `Switch Pad` shortcut with an icon on the Desktop.
 3. Give it your `prod.keys`: it looks in Ryujinx's and the yuzu-family emulators' folders by itself; otherwise drag the
@@ -25,14 +26,18 @@ from the Microsoft Store (or iTunes).
 
 | File | What it does |
 |---|---|
-| `Switch Pad.cmd` | Starts the app |
+| `Switch Pad.exe` | Made on first start (compiled locally from a few lines in `nxn-app.ps1`); starts `程式\nxn-app.ps1` |
+| `Switch Pad.cmd` | Starts the app before `Switch Pad.exe` exists |
 | `nxn-app.ps1` | The window: library, queue, progress, settings, update check |
 | `nxn.ps1` | One game: pack with `scripts/nxn_pack.py`, then sign and install with `plumesign`; also runs alone (`.\nxn.ps1 -?`) |
 | `nxn-update.ps1` | Install and update: Python, packages, shell, tools, packer source, `plumesign`, and Switch Pad itself |
 | `fix_empty_romfs.py` | Gives an IPA whose game has no RomFS (ANIMAL WELL) a placeholder, so the shell finds its files |
 | `make_provisional.py` | Writes a provisional profile for a game with none, on Windows (experimental) |
 
-Everything it downloads or writes stays beside it: `work\` (shell, packer, tools, logs, settings) and `遊戲\` (games).
+Everything it downloads or writes stays beside it. The top folder holds only what you use: `Switch Pad.exe`, `遊戲\`
+(games) and `合包\` (merged packages). The scripts, `work\` (shell, packer, tools, logs, settings) and `工具\` (plumesign)
+are in `程式\`. An older install with all of these at the top is moved there the next time the app starts (skipped while
+another Switch Pad is running).
 No game files or keys are ever uploaded. The app's text is in Traditional Chinese.
 
 ## Releasing
@@ -49,7 +54,7 @@ Switch Pad 是 Windows 上的打包安裝程式：從遊戲庫挑遊戲、按「
 還會從這個 repo 最新的 release 自己更新（程式、殼、打包器）。
 
 1. 從[最新 release](https://github.com/Mono0713/ns2ios-shell/releases/latest) 下載 `SwitchPad.zip`，解壓到任何地方。
-2. 打開 `Switch Pad.cmd`，第一次按上方的「安裝」：沒有 Python 會用 winget 裝 3.12，再裝套件、殼、打包器和 plumesign，並在桌面建捷徑。
+2. 打開 `Switch Pad.cmd`。第一次打開會整理資料夾：程式檔、work、工具 都收進 `程式\`，最上層只剩 `Switch Pad.exe`、`遊戲\`、`合包\`，之後就開 `Switch Pad.exe`。第一次按上方的「安裝」：沒有 Python 會用 winget 裝 3.12，再裝套件、殼、打包器和 plumesign，並在桌面建捷徑。
 3. prod.keys：會自己到 Ryujinx 和 yuzu 系模擬器的資料夾找；找不到就把檔案拖進視窗（複製一份到 `work\`，只留在這台電腦）。
 4. 按「登入 Apple ID」一次。免費帳號簽的 App 7 天後過期（按「全部續期」重簽），同時最多 3 個。
 5. 把 NSP / XCI 拖進視窗新增遊戲；更新檔或 DLC 拖到遊戲卡上就會加進那款，打包時自動用最新版本。

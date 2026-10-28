@@ -15,9 +15,11 @@ $ProgressPreference = 'SilentlyContinue'
 $Repo = 'Mono0713/ns2ios-shell'
 $PlumeRepo = 'khcrysalis/Impactor'
 $here = $PSScriptRoot
+# 程式檔、work、工具 在 nxn\程式\，遊戲在上一層（舊版全部在同一層，Switch Pad 開起來會自己搬）
+$base = if ((Split-Path $here -Leaf) -eq '程式') { Split-Path $here -Parent } else { $here }
 $work = Join-Path $here 'work'
 $toolDir = Join-Path $here '工具'
-New-Item -ItemType Directory -Force -Path $work, $toolDir, (Join-Path $here '遊戲') | Out-Null
+New-Item -ItemType Directory -Force -Path $work, $toolDir, (Join-Path $base '遊戲') | Out-Null
 $headers = @{ 'User-Agent' = 'SwitchPad' }
 
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
@@ -183,7 +185,7 @@ try {
         $from = $anew
         $one = @(Get-ChildItem $anew)
         if ($one.Count -eq 1 -and $one[0].PSIsContainer) { $from = $one[0].FullName }
-        # 程式檔放在最上層，圖示放到 工具\；遊戲、work、工具 裡的其他東西不碰
+        # 程式檔放在這個資料夾（程式\），圖示放到 工具\；遊戲、work、工具 裡的其他東西不碰
         foreach ($f in Get-ChildItem $from -File) {
             $dst = if ($f.Extension -eq '.ico') { Join-Path $toolDir $f.Name } else { Join-Path $here $f.Name }
             Copy-Item -LiteralPath $f.FullName -Destination $dst -Force

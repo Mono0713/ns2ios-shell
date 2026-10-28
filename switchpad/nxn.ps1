@@ -37,6 +37,8 @@ function RunExe($exe, $arglist) {
         # stderr 的空行在 PowerShell 5.1 會變成 "System.Management.Automation.RemoteException"
         $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
         if ($line -eq 'System.Management.Automation.RemoteException') { $line = '' }
+        # 打包器找不到設定檔時說的 title ID（檔名裡不一定有）
+        if ($line -match 'no game profile for title ID (0[0-9A-Fa-f]{15})') { $script:noProfile = $Matches[1].ToUpper() }
         Write-Host $line
     }
     $code = $LASTEXITCODE
@@ -45,10 +47,12 @@ function RunExe($exe, $arglist) {
 }
 
 $here = $PSScriptRoot
+# 程式檔在 nxn\程式\，遊戲和合包在上一層（舊版全部在同一層）
+$base = if ((Split-Path $here -Leaf) -eq '程式') { Split-Path $here -Parent } else { $here }
 $root = Join-Path $here 'work'
 # prod.keys：Switch Pad 自己的 → Ryujinx → yuzu 系的模擬器，第一個找到的
 function Find-Keys {
-    $c = @((Join-Path $root 'prod.keys'), (Join-Path $here 'prod.keys'), "$env:APPDATA\Ryujinx\system\prod.keys")
+    $c = @((Join-Path $root 'prod.keys'), (Join-Path $base 'prod.keys'), "$env:APPDATA\Ryujinx\system\prod.keys")
     foreach ($emu in 'yuzu', 'suyu', 'sudachi', 'citron', 'eden', 'torzu') { $c += "$env:APPDATA\$emu\keys\prod.keys" }
     foreach ($p in $c) { if (Test-Path -LiteralPath $p) { return $p } }
     return ''
@@ -56,7 +60,34 @@ function Find-Keys {
 if (-not $Keys) { $Keys = Find-Keys }
 if (-not $Python) {
     $saved = Join-Path $root 'python.txt'
-    $Python = if (Test-Path $saved) { (Get-Content $saved -Raw).Trim() } else { 'python' }
+    $Python = if (Test-Path $saved) { (Get-Content $saved -Raw).Trim() } else { '' }
+    if (-not $Python) {
+        # 沒記下來就找一個裝好打包套件的：PATH 上的 python 會變（例如後來裝了別的版本排到前面），不能直接用
+        # PowerShell 5.1 傳給外部程式的參數裡如果有雙引號會被吃掉，所以這段 Python 不能用雙引號
+        $probe = 'import sys, lz4.block, capstone, fontTools; print(sys.executable)'
+        $cands = @('python') + @(Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe", "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue |
+                                 Sort-Object FullName -Descending | ForEach-Object { $_.FullName })
+        # py 啟動器知道所有裝好的版本（包括不在 PATH、不在預設位置的）
+        $ErrorActionPreference = 'Continue'
+        try { $cands += @(& py -0p 2>$null | ForEach-Object { if ("$_" -match '([A-Za-z]:\\.+\.exe)\s*$') { $Matches[1] } }) } catch { }
+        $ErrorActionPreference = 'Stop'
+        foreach ($c in $cands) {
+            $ErrorActionPreference = 'Continue'
+            try { $v = (& $c -c $probe 2>$null | Out-String).Trim() } catch { $v = '' }
+            $ErrorActionPreference = 'Stop'
+            if ($v -and (Test-Path -LiteralPath $v)) { $Python = $v; Set-Content -LiteralPath $saved -Value $v -Encoding UTF8; break }
+        }
+        if (-not $Python) {
+            # 都沒有：裝到 PATH 上那個（跟 nxn-update.ps1 裝的套件一樣）
+            $Python = 'python'
+            Write-Host '找不到裝好打包套件的 Python，先安裝套件（lz4、capstone、fonttools、pillow）…'
+            $ErrorActionPreference = 'Continue'
+            & $Python -m pip install --disable-pip-version-check --quiet lz4 capstone fonttools pillow "backports.zstd; python_version < '3.14'" 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -and $_ -ne 'System.Management.Automation.RemoteException' } | ForEach-Object { Write-Host $_ }
+            $ErrorActionPreference = 'Stop'
+            try { $v = (& $Python -c $probe 2>$null | Out-String).Trim() } catch { $v = '' }
+            if ($v -and (Test-Path -LiteralPath $v)) { $Python = $v; Set-Content -LiteralPath $saved -Value $v -Encoding UTF8 }
+        }
+    }
 }
 $plume = Join-Path $here '工具\plumesign.exe'
 
@@ -133,7 +164,7 @@ try {
         if ($Out) {
             # 只有檔名就放在遊戲資料夾裡；有資料夾的相對路徑以 nxn\ 為準（不然會變成 遊戲\X\遊戲\X\…）
             $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out }
-                       elseif ($Out -match '[\\/]') { Join-Path $here $Out }
+                       elseif ($Out -match '[\\/]') { Join-Path $base $Out }
                        else { Join-Path $GameDir $Out }
             $outArg = @('-o', $outPath)
         } elseif ($customShell) {
@@ -156,6 +187,29 @@ try {
         try {
             $env:PYTHONUTF8 = '1'
             $code = RunExe $pyExe (@($packer, $shellZip, $GameDir, '-k', $Keys, '--tools', $nx.DirectoryName) + $outArg)
+            # 上游沒有這款的設定檔（迴旋鏢當初也是）：用 make_provisional.py 從遊戲檔猜一份暫定的，再打包一次
+            if ($code) {
+                $nsps = @(Get-ChildItem -LiteralPath $GameDir -File | Where-Object { $_.Extension -match '^\.(nsp|xci)$' })
+                $baseFile = $nsps | Where-Object { $_.Name -match '\[(01[0-9A-Fa-f]{11}000)\]' } | Sort-Object Length -Descending | Select-Object -First 1
+                $tid = if ($baseFile -and $baseFile.Name -match '\[(01[0-9A-Fa-f]{11}000)\]') { $Matches[1].ToUpper() } else { '' }
+                if ($script:noProfile) {
+                    # 檔名裡沒有 title ID（例如「Tricky Towers.nsp」）：用打包器說的，本體取最大的那個檔
+                    $tid = $script:noProfile
+                    if (-not $baseFile) { $baseFile = $nsps | Where-Object { $_.Name -notmatch '\[0[0-9A-Fa-f]{12}(800|[0-9A-Fa-f]{2}[1-9A-Fa-f])\]' } | Sort-Object Length -Descending | Select-Object -First 1 }
+                }
+                $prov = Join-Path $here 'make_provisional.py'
+                if ($tid -and $baseFile -and (Test-Path $prov) -and -not (Test-Path (Join-Path $srcDir "dm\games\$tid\game.tsv"))) {
+                    $updRe = '\[' + $tid.Substring(0, 13) + '800\]'
+                    $upd = $nsps | Where-Object { $_.Name -match $updRe } |
+                        Sort-Object { if ($_.Name -match '\[v(\d+)\]') { [long]$Matches[1] } else { 0 } } -Descending | Select-Object -First 1
+                    $ver = if ($upd -and $upd.Name -match '\[v(\d+)\]') { "v$($Matches[1])" } else { 'v0' }
+                    Step "上游沒有 $tid 的設定檔，自己做一份暫定的（實驗性，遊戲不一定能跑）"
+                    $code = RunExe $pyExe @($prov, $srcDir, $nx.DirectoryName, $Keys, $baseFile.FullName, $(if ($upd) { $upd.FullName } else { '-' }), $ver, $tid)
+                    if ($code) { throw "做不出暫定設定檔（結束碼 $code）" }
+                    Step "用暫定設定檔重新打包 $(Split-Path $GameDir -Leaf)"
+                    $code = RunExe $pyExe (@($packer, $shellZip, $GameDir, '-k', $Keys, '--tools', $nx.DirectoryName) + $outArg)
+                }
+            }
         } finally { Pop-Location }
         if ($code) { throw "打包失敗（結束碼 $code），記錄在 $GameDir 裡的 *_pack\logs。" }
 
