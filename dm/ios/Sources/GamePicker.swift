@@ -1,7 +1,7 @@
 // Game picker: the first screen of a package of several games (scripts/nxn_merge.py puts each in <App>/games/<title ID>/ with its game.json and icon).
 // A row of game tiles, the chosen one in the middle, over its icon blurred as the backdrop; the time, Wi-Fi and battery at the top right, as on a console.
 // Touch: swipe the row to move through it, tap a tile to start that game. Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput):
-// left and right move, A or + starts. The game last played comes first.
+// left and right move, A or + starts. The games stay in order by name; the highlight starts on the one last played.
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
 // Game list button comes back here until the game starts (one process runs one game, main.m).
 import SwiftUI
@@ -39,20 +39,16 @@ private func loadGames() -> [PickerGame] {
         return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "", icon: gameIcon(dir),
                           played: UserDefaults.standard.object(forKey: "picker.played." + id) as? Date)
     }
-    // the last played first, then the rest by name
-    return list.sorted { a, b in
-        switch (a.played, b.played) {
-        case let (x?, y?): return x > y
-        case (_?, nil): return true
-        case (nil, _?): return false
-        default: return a.name.localizedStandardCompare(b.name) == .orderedAscending
-        }
-    }
+    return list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }   // a fixed order, by name: the highlight starts on the game last played
 }
 
 private final class PickerModel: ObservableObject {
     let games = loadGames()
-    @Published var focus = 0
+    @Published var focus: Int
+    init() {
+        let last = games.indices.filter { games[$0].played != nil }.max { games[$0].played! < games[$1].played! }
+        focus = last ?? 0
+    }
     @Published var starting = false
     var start: (PickerGame) -> Void = { _ in }
     func move(_ d: Int) { if !games.isEmpty, !starting { focus = (focus + d + games.count) % games.count } }
