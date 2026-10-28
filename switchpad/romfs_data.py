@@ -11,8 +11,9 @@ Documents survives a reinstall, so after the first install the free account's we
 What moves: romfs/ always (every shell reads Documents/romfs first). With a shell that says so in its Info.plist
 (DMDataInDocuments), also msl/ (the shader libraries, often as big as the RomFS), and for a package of several games each
 game's games/<tid>/romfs and msl as Documents/games/<tid>/...; an older shell reads a package of several only from inside.
-The id is a hash of the moved entries' names, sizes and CRCs; push writes it to Documents/.romfs-id only after every
-file is in, so a copy cut short is redone next time.
+Each moved folder gets an id, a hash of its entries' names, sizes and CRCs, kept in Documents/.romfs-id (JSON) and
+written for a folder only after all its files are in: a copy cut short is redone, and only folders whose id changed
+are sent again (a new shell's shaders, a game added to a package). A game taken out of a package has its folders removed.
 """
 import argparse
 import asyncio
@@ -87,8 +88,11 @@ async def push(a):
 
     z = zipfile.ZipFile(a.ipa)
     app, pl, parts, files, several = layout(z)
-    want, orig = data_id(files), pl.get('CFBundleIdentifier', '')
-    total = sum(i.file_size for i in files)
+    orig = pl.get('CFBundleIdentifier', '')
+    # each folder that moves (romfs, msl, or a game's in a package) has its own id, so a change sends only what changed:
+    # a new shell's shaders without the game files, or a game added to a package without the games already there
+    by_part = {d: [i for i in files if i.filename.startswith(p)] for p, d in parts}
+    want = {d: data_id(fs) for d, fs in by_part.items()}
 
     ld = await create_using_usbmux(serial=a.udid or None)
     async with ld:
@@ -102,38 +106,53 @@ async def push(a):
         async with await HouseArrestService.create(lockdown=ld, bundle_id=bid, documents_only=True) as afc:
             base = '/Documents' if await afc.exists('/Documents') else ''
             mark = base + '/' + MARK
-            have = ''
+            have = {}
             if await afc.exists(mark):
-                try: have = (await afc.get_file_contents(mark)).decode().strip()
-                except Exception: have = ''
-            if have == want and not a.force:
-                print('game files already on the iPad (%s)' % want)
+                try:
+                    raw = (await afc.get_file_contents(mark)).decode().strip()
+                    have = json.loads(raw) if raw.startswith('{') else {}
+                except Exception: have = {}
+            todo = [d for d in want if a.force or have.get(d) != want[d]]
+            # a game taken out of a package: its folders go too (they would only take space)
+            gone = [d for d in have if d not in want and d.startswith('games/')]
+            for d in gone:
+                if await afc.exists(base + '/' + d): await afc.rm(base + '/' + d, force=True)
+                print('removed %s (no longer in this package)' % d)
+            if not todo:
+                if gone: await afc.set_file_contents(mark, json.dumps(want).encode())
+                print('game files already on the iPad')
                 return
-            print('copying the game files to the iPad: %d files, %d MB' % (len(files), total >> 20))
-            if await afc.exists(mark): await afc.rm(mark, force=True)
-            for _, d in parts:
+            send = [i for d in todo for i in by_part[d]]
+            total = sum(i.file_size for i in send)
+            print('copying to the iPad: %s (%d files, %d MB)' % (', '.join(todo), len(send), total >> 20))
+            # forget the parts about to be replaced first, so a copy cut short is redone next time
+            keep = {d: v for d, v in have.items() if d in want and d not in todo}
+            await afc.set_file_contents(mark, json.dumps(keep).encode())
+            for d in todo:
                 if await afc.exists(base + '/' + d): await afc.rm(base + '/' + d, force=True)
             made, sent, shown = set(), 0, -1
-            for i in sorted(files, key=lambda i: i.filename):
-                rel = base + '/' + dest_of(parts, i.filename)
-                d = rel.rsplit('/', 1)[0]
-                if d not in made: await afc.makedirs(d); made.add(d)
-                h = await afc.fopen(rel, 'w')
-                try:
-                    with z.open(i) as src:
-                        while True:
-                            b = src.read(4 << 20)
-                            if not b: break
-                            await afc.fwrite(h, b)
-                            sent += len(b)
-                            pct = sent * 100 // max(total, 1)
-                            if pct != shown and (pct % 2 == 0 or pct == 100):
-                                shown = pct
-                                print('傳送遊戲資料 %d%%（%d / %d MB）' % (pct, sent >> 20, total >> 20), flush=True)
-                finally:
-                    await afc.fclose(h)
-            await afc.set_file_contents(mark, want.encode())
-            print('game files in place (%s)' % want)
+            for d in todo:
+                for i in sorted(by_part[d], key=lambda i: i.filename):
+                    rel = base + '/' + dest_of(parts, i.filename)
+                    dd = rel.rsplit('/', 1)[0]
+                    if dd not in made: await afc.makedirs(dd); made.add(dd)
+                    h = await afc.fopen(rel, 'w')
+                    try:
+                        with z.open(i) as src:
+                            while True:
+                                b = src.read(4 << 20)
+                                if not b: break
+                                await afc.fwrite(h, b)
+                                sent += len(b)
+                                pct = sent * 100 // max(total, 1)
+                                if pct != shown and (pct % 2 == 0 or pct == 100):
+                                    shown = pct
+                                    print('傳送遊戲資料 %d%%（%d / %d MB）' % (pct, sent >> 20, total >> 20), flush=True)
+                    finally:
+                        await afc.fclose(h)
+                keep[d] = want[d]
+                await afc.set_file_contents(mark, json.dumps(keep).encode())
+            print('game files in place')
 
 
 def main():

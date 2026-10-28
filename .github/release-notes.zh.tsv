@@ -40,3 +40,4 @@ Switch Pad: renew-all in the bottom bar, app update in Settings, no count on the
 Switch Pad: a merged package shows the same tiled icon as on the iPad; the renew button just says 重簽	Switch Pad：合包显示和 iPad 上一样的拼贴图标；重签按钮只写「重签」
 Switch Pad: install a single game without its game files inside the app and copy them into the app's Documents once, so a re-sign only sends the small app	Switch Pad：单款游戏安装时 App 里不放游戏资料，资料只传一次到 App 的 Documents，之后重签只传小 App
 Switch Pad: 只安裝 installs the newest IPA; quieter signing log on the card	Switch Pad：「只安装」装最新打包的 IPA；卡片上不再显示签名工具的除错讯息
+Switch Pad: only the game folders that changed are sent to the iPad again (new shaders, a game added to a package); a game taken out of a package has its files removed	Switch Pad：只重传有变动的游戏资料夹（新着色器、合包新加的游戏）；从合包拿掉的游戏会删掉它的资料
