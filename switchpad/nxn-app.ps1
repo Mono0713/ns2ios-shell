@@ -644,9 +644,14 @@ function Card-Paint($card) {
     $card.BorderBrush = if ($on) { Brush '#0A84FF' } else { [Windows.Media.Brushes]::Transparent }
     $card.FindName('Check').Visibility = if ($on) { 'Visible' } else { 'Collapsed' }
 }
+$addTo = $null      # 合包卡片選「加入遊戲」時：要加進去的那包，勾好按開始就合進它
 function Update-SelCount {
     $n = $selected.Count
     $ui.SelCount.Text = if ($n) { "已選 $n 款" } else { '未選擇' }
+    if ($script:addTo) {
+        $ui.SelCount.Text = "加進「$($script:addTo.Name)」：" + $(if ($n) { "已選 $n 款" } else { '勾要加的遊戲' })
+        $ui.SelCount.Width = [double]::NaN
+    } else { $ui.SelCount.Width = 100 }
     $ui.Start.IsEnabled = ($n -gt 0)
 }
 
@@ -881,7 +886,7 @@ function Build-Packs($inst) {
         $cm = New-Object Windows.Controls.ContextMenu
         $cm.Style = $win.FindResource([Windows.Controls.ContextMenu])
         $cm.Resources.Add([Windows.Controls.MenuItem], $win.FindResource([Windows.Controls.MenuItem]))
-        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'), @('🗑  刪除…', 'delete'))) {
+        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('➕  加入遊戲…', 'add'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'), @('🗑  刪除…', 'delete'))) {
             $mi = New-Object Windows.Controls.MenuItem
             $mi.Header = Menu-Header $it[0]; $mi.Tag = @{ Pack = $p; Action = $it[1] }
             $mi.Add_Click({ param($s, $e) Pack-Action $s.Tag.Pack $s.Tag.Action })
@@ -894,6 +899,15 @@ function Build-Packs($inst) {
 function Pack-Action($p, $action) {
     switch ($action) {
         'show'    { Show-Pack $p }
+        'add'     {
+            if ($state.Running) { return }
+            if (-not $ui.Merge.IsEnabled) { [void][Windows.MessageBox]::Show($ui.Merge.ToolTip, '加入遊戲'); return }
+            # 換到遊戲頁、切成合成一包，勾好要加的遊戲按開始；切回「各自安裝」就取消
+            $script:addTo = $p
+            $selected.Clear(); foreach ($c in $cards.Values) { Card-Paint $c }
+            $ui.Merge.IsChecked = $true; $ui.TabGames.IsChecked = $true
+            Update-SelCount
+        }
         'install' { Start-Run @(@{ Game = $p; Mode = 'install'; Ipa = $p.Ipas[0].FullName }) }
         'folder'  { Start-Process explorer.exe "/select,`"$($p.Ipas[0].FullName)`"" }
         'delete'  {
@@ -1501,9 +1515,53 @@ $timer.Add_Tick({
     } })
 
 # ---------------------------------------------------------------- 按鈕
+# 加進現有的合包：新選的遊戲各自用多遊戲殼打包，再跟舊的合包一起合成，蓋回原本的檔名。
+# bundle ID 和名稱照舊，所以 iPad 上是更新同一個 App（存檔和已經傳過的遊戲資料都留著）。已經在包裡的遊戲跳過。
+function Add-ToPack($p, $dirs, $mode) {
+    $old = $p.Ipas[0].FullName
+    if (-not (Test-Path -LiteralPath $old)) { [void][Windows.MessageBox]::Show("找不到 $old", '加入遊戲'); return }
+    $have = @($p.Games | ForEach-Object { $_.Tid })
+    $ms = Get-MultiShell; $mg = Get-MergeScript
+    $id = if ($ms.Name -match 'shell-\d+-([0-9a-f]+)') { $Matches[1] } else { 'multi' }
+    $jobs = @(); $outs = @(); $skip = @()
+    foreach ($dir in $dirs) {
+        $g = $cards[$dir].Tag
+        if (-not $g.Base) { [void][Windows.MessageBox]::Show("$($g.Name) 的資料夾裡沒有遊戲本體（NSP/XCI）。", '缺本體'); return }
+        $tid = if ($g.Tid) { "$($g.Tid)".ToUpper() } elseif ("$($g.BaseFile)" -match '(?<![0-9A-Fa-f])(01[0-9A-Fa-f]{14})(?![0-9A-Fa-f])') { $Matches[1].ToUpper() } else { '' }
+        if ($tid -and $have -contains $tid) { $skip += $g.Name; continue }
+        $o = Join-Path $g.Dir ("$($g.Name)-multi-$id.ipa")
+        $outs += $o
+        $jobs += @{ Game = $g; Mode = 'mergepart'; Ipa = ''; Out = $o; Shell = $ms.FullName }
+    }
+    if (-not $outs.Count) { [void][Windows.MessageBox]::Show("選的遊戲都已經在「$($p.Name)」裡了。", '加入遊戲'); return }
+    if ($skip.Count) { [void][Windows.MessageBox]::Show("已經在包裡，跳過：$($skip -join '、')", '加入遊戲') }
+    # 沿用舊包的 bundle ID（iPad 上才是同一個 App）
+    $bid = ''
+    try {
+        $z = [IO.Compression.ZipFile]::OpenRead($old)
+        try {
+            $e = $z.Entries | Where-Object { $_.FullName -match '^Payload/[^/]+\.app/Info\.plist$' } | Select-Object -First 1
+            $sr = New-Object IO.StreamReader($e.Open()); try { $pl = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            if ($pl -match '<key>CFBundleIdentifier</key>\s*<string>([^<]+)</string>') { $bid = $Matches[1] }
+        } finally { $z.Dispose() }
+    } catch { }
+    $tmp = "$old.adding"
+    $names = ($jobs | ForEach-Object { $_.Game.Name }) -join '、'
+    $call = "Write-Host '==> 合成一包：把 $($names -replace "'", "''") 加進 $($p.Name -replace "'", "''")'; " +
+            "& $(Quote (Get-Python)) $(Quote $mg) -o $(Quote $tmp) --name $(Quote $p.Name) --shell $(Quote $ms.FullName)" + $(if ($bid) { " --bundle-id $(Quote $bid)" } else { '' }) +
+            " $(Quote $old) $(($outs | ForEach-Object { Quote $_ }) -join ' '); " +
+            "if (`$LASTEXITCODE) { Write-Host '出錯了：合包失敗'; Remove-Item -LiteralPath $(Quote $tmp) -ErrorAction SilentlyContinue; `$global:LASTEXITCODE = 1; return }; " +
+            "Move-Item -LiteralPath $(Quote $tmp) -Destination $(Quote $old) -Force; Write-Host `"合包完成：$($old -replace "'", "''")`""
+    if ($mode -eq 'both') { $call += "; & $(Quote $script) -Ipa $(Quote $old) -NoPause" }
+    $mg2 = [pscustomobject]@{ Dir = $p.Dir; Name = "加進 $($p.Name)（$($outs.Count) 款）"; Ipas = @(); Base = $true; Icon = $p.Icon }
+    $jobs += @{ Game = $mg2; Mode = $(if ($mode -eq 'both') { 'merge+install' } else { 'merge' }); Ipa = ''; Call = $call }
+    $script:addTo = $null; Update-SelCount
+    Start-Run $jobs
+}
 # 跑選的遊戲：mode = both / pack / install；merge = 合成一包
 function Run-Games($dirs, $mode, $merge) {
     $jobs = @()
+    if ($merge -and $script:addTo) { Add-ToPack $script:addTo $dirs $mode; return }
     if ($merge) {
         if ($mode -ne 'install' -and $dirs.Count -lt 2) { [void][Windows.MessageBox]::Show('合成一包至少要選 2 款。', '合成一包'); return }
         if ($mode -eq 'install') {
@@ -1559,7 +1617,7 @@ function Run-Games($dirs, $mode, $merge) {
 $ui.TabGames.Add_Checked({ Set-Tab })
 $ui.TabPacks.Add_Checked({ Set-Tab })
 $ui.Merge.Add_Checked({ Update-ShellLabel })
-$ui.Separate.Add_Checked({ Update-ShellLabel })
+$ui.Separate.Add_Checked({ $script:addTo = $null; Update-SelCount; Update-ShellLabel })
 $ui.Start.Add_Click({
     if (@(Setup-Missing).Count) { [void][Windows.MessageBox]::Show('還沒安裝打包和簽章工具，請先按上面的「安裝」。', 'Switch Pad'); return }
     $mode = if ($ui.ModePack.IsChecked) { 'pack' } elseif ($ui.ModeInstall.IsChecked) { 'install' } else { 'both' }
