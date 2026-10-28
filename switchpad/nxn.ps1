@@ -130,8 +130,10 @@ try {
         $outArg = @()
         $existing = @(Get-ChildItem $GameDir -Filter '*.ipa' -ErrorAction SilentlyContinue)
         if ($Out) {
-            # 相對路徑就當成放在遊戲資料夾裡
-            $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $GameDir $Out }
+            # 只有檔名就放在遊戲資料夾裡；有資料夾的相對路徑以 nxn\ 為準（不然會變成 遊戲\X\遊戲\X\…）
+            $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out }
+                       elseif ($Out -match '[\\/]') { Join-Path $here $Out }
+                       else { Join-Path $GameDir $Out }
             $outArg = @('-o', $outPath)
         } elseif ($customShell) {
             # 不是正式殼（例如測試殼）：輸出成 <資料夾>-<殼版本>.ipa，不碰正式的 IPA
