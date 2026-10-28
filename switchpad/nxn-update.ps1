@@ -85,6 +85,9 @@ try {
     # Python 3.14 起內建 compression.zstd，backports.zstd 只支援 3.13 以下
     $code = RunExe $py @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'lz4', 'capstone', 'fonttools', 'pillow', "backports.zstd; python_version < '3.14'")
     if ($code) { throw "pip 安裝失敗（結束碼 $code）" }
+    # 把遊戲資料直接傳進 iPad 用的（romfs_data.py）；裝不起來也沒關係，安裝時會改成整包裝
+    $code = RunExe $py @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'pymobiledevice3==11.45.0')
+    if ($code) { Write-Host "傳檔工具 pymobiledevice3 沒裝起來（結束碼 $code），安裝遊戲時會整包傳" }
     Ok '套件好了'
 
     # ---- 打包器：殼、Windows 工具、原始碼 ----

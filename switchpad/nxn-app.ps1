@@ -1206,6 +1206,7 @@ $stepDefs = @(
     @{ Name = '打包';     Re = 'packing the IPA' },
     @{ Name = '準備合包'; Re = 'packing the IPA' },
     @{ Name = '簽章安裝'; Re = '==> 簽章並安裝' },
+    @{ Name = '傳資料';   Re = '==> 傳遊戲資料' },
     @{ Name = '合成';     Re = '==> 合成一包' },
     @{ Name = 'Python';   Re = '==> 檢查 Python' },
     @{ Name = '套件';     Re = '==> 安裝 Python 套件' },
@@ -1241,8 +1242,8 @@ function New-Job($g, $mode, $ipa, $out = '', $shellPath = '') {
         'mergepart' { @('解包', '轉換程式', '著色器', '準備合包') }
         'merge'   { @('合成') }
         'merge+install' { @('合成', '檢查帳號', '簽章安裝') }
-        'install' { @('檢查帳號', '簽章安裝') }
-        default   { @('檢查帳號', '解包', '轉換程式', '著色器', '打包', '簽章安裝') }
+        'install' { @('檢查帳號', '簽章安裝', '傳資料') }
+        default   { @('檢查帳號', '解包', '轉換程式', '著色器', '打包', '簽章安裝', '傳資料') }
     }
     $pills = @()
     foreach ($n in $names) {
