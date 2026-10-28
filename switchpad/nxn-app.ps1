@@ -729,6 +729,21 @@ function Read-Pack($ipa) {
     $packCache[$key] = $games
     return $games
 }
+# 合包在 iPad 上的圖示（nxn_merge.py 把幾款的圖示拼成一張），跟著檔案的修改時間快取
+function Pack-Icon($ipa) {
+    $md5 = [Security.Cryptography.MD5]::Create()
+    $h = -join ($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($ipa.FullName)|$($ipa.LastWriteTimeUtc.Ticks)"))[0..5] | ForEach-Object { $_.ToString('x2') })
+    $out = Join-Path $coverDir "packapp-$h.png"
+    if (Test-Path -LiteralPath $out) { return $out }
+    try {
+        $z = [IO.Compression.ZipFile]::OpenRead($ipa.FullName)
+        try {
+            $e = $z.Entries | Where-Object { $_.FullName -match '^Payload/[^/]+\.app/AppIcon60x60@3x\.png$' } | Select-Object -First 1
+            if ($e) { [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $out, $true); return $out }
+        } finally { $z.Dispose() }
+    } catch { }
+    return ''
+}
 function Build-Packs($inst) {
     $ui.Packs.Children.Clear()
     $mdir = Join-Path $here '合包'
@@ -743,7 +758,7 @@ function Build-Packs($inst) {
         $mine = $inst | Where-Object { $_.Ipa -eq $ipa.FullName } | Select-Object -First 1
         $games = @(Read-Pack $ipa)
         $p = [pscustomobject]@{ Dir = $mdir; Name = $ipa.BaseName; Ipas = @($ipa); Base = $false; BaseFile = ''; Games = $games
-                               Icon = $(if ($games.Count -and $games[0].Icon) { $games[0].Icon } else { $appIcon }) }
+                               Icon = $(if ($pi = Pack-Icon $ipa) { $pi } elseif ($games.Count -and $games[0].Icon) { $games[0].Icon } else { $appIcon }) }
         $card = [Windows.Markup.XamlReader]::Parse($cardXaml)
         $card.Tag = $p
         $card.FindName('Title').Text = $p.Name
@@ -1019,7 +1034,7 @@ function Update-Banner($inst) {
     if (-not $live.Count) { $ui.RenewBtn.Visibility = 'Collapsed'; return }
     $name = { param($x) if ($x.Dir -like '*.ipa') { [IO.Path]::GetFileNameWithoutExtension($x.Ipa) } else { Split-Path $x.Dir -Leaf } }
     $min = $live[0].Left
-    $ui.RenewBtn.Content = if ($min -le 0) { '⏰ 全部重簽 · 已過期' } else { "⏰ 全部重簽 · $min 天" }
+    $ui.RenewBtn.Content = '重簽'
     $ui.RenewBtn.Foreground = Brush $(if ($min -le 3) { '#FF9F0A' } else { '#EBEBF5' })
     $ui.RenewBtn.ToolTip = (($live | ForEach-Object { "$(& $name $_)：$(if ($_.Left -le 0) { '已過期' } else { "剩 $($_.Left) 天" })" }) -join "`n") +
                            "`n`n免費 Apple ID 簽的 App 7 天後就打不開，按這裡把上面全部重簽一次（時間大約是各自重簽加起來，大的遊戲比較久）"
