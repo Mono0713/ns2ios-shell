@@ -254,15 +254,34 @@ try {
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = $o }
     }
     $py = (Quiet $Python @('-c', 'import sys; print(sys.executable)')).Out
+    # 傳檔工具 pymobiledevice3 的相依套件在 Python 3.14 還沒有現成的 Windows 版（要裝 C++ 編譯器），
+    # 所以找一個裝得起來的 Python（先找已經裝好的，再試 3.13 → 3.10），記在 work\python-transfer.txt
+    function Transfer-Python {
+        $saved = Join-Path $root 'python-transfer.txt'
+        $cands = @()
+        if (Test-Path $saved) { $cands += (Get-Content $saved -Raw).Trim() }
+        $cands += $py
+        foreach ($v in '3.13', '3.12', '3.11', '3.10') {
+            $r = Quiet 'py' @("-$v", '-c', 'import sys; print(sys.executable)')
+            if (-not $r.Code -and $r.Out) { $cands += $r.Out }
+        }
+        $cands = @($cands | Where-Object { $_ } | Select-Object -Unique)
+        foreach ($c in $cands) { if (-not (Quiet $c @('-c', 'import pymobiledevice3')).Code) { Set-Content $saved $c -Encoding UTF8; return $c } }
+        foreach ($c in $cands) {
+            Write-Host "安裝傳檔工具（pymobiledevice3，只要一次）：$c"
+            $code = RunExe $c @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--only-binary', ':all:', 'pymobiledevice3==11.45.0')
+            if (-not $code -and -not (Quiet $c @('-c', 'import pymobiledevice3')).Code) { Set-Content $saved $c -Encoding UTF8; return $c }
+        }
+        return ''
+    }
     $signIpa = $Ipa; $split = $null
     if (-not $Full -and (Test-Path $dataTool) -and $py) {
         $r = Quiet $py @('-I', $dataTool, 'info', $Ipa)
         if (-not $r.Code) { try { $split = $r.Out | ConvertFrom-Json } catch { $split = $null } }
         if ($split -and -not $split.lite) { $split = $null }
-        if ($split -and (Quiet $py @('-c', 'import pymobiledevice3')).Code) {
-            Write-Host '安裝傳檔工具（pymobiledevice3，只要一次）'
-            $c = RunExe $py @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'pymobiledevice3==11.45.0')
-            if ($c -or (Quiet $py @('-c', 'import pymobiledevice3')).Code) { Warn '傳檔工具裝不起來，這次整包裝'; $split = $null }
+        if ($split) {
+            $tpy = Transfer-Python
+            if ($tpy) { $py = $tpy } else { Warn '傳檔工具裝不起來，這次整包裝'; $split = $null }
         }
         if ($split) {
             $liteDir = Join-Path $root 'lite'

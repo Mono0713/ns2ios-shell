@@ -6,11 +6,13 @@ Documents survives a reinstall, so after the first install the free account's we
 
   romfs_data.py info <ipa>                 one JSON line: whether the IPA can go this way, the RomFS id and size
   romfs_data.py lite <ipa> <out.ipa>       the IPA without its romfs/ folder (stored, plumesign re-packs it anyway)
-  romfs_data.py push <ipa> [--udid UDID]   copy the RomFS into the installed app's Documents/romfs, unless it is there already
+  romfs_data.py push <ipa> [--udid UDID]   copy those folders into the installed app's Documents, unless they are there already
 
-The RomFS id is a hash of the entries' names, sizes and CRCs; push writes it to Documents/.romfs-id only after every
-file is in, so a copy cut short is redone next time. A package of several games reads only its own folders, so it is
-left whole (info says lite: false).
+What moves: romfs/ always (every shell reads Documents/romfs first). With a shell that says so in its Info.plist
+(DMDataInDocuments), also msl/ (the shader libraries, often as big as the RomFS), and for a package of several games each
+game's games/<tid>/romfs and msl as Documents/games/<tid>/...; an older shell reads a package of several only from inside.
+The id is a hash of the moved entries' names, sizes and CRCs; push writes it to Documents/.romfs-id only after every
+file is in, so a copy cut short is redone next time.
 """
 import argparse
 import asyncio
@@ -25,41 +27,48 @@ MARK = '.romfs-id'
 
 
 def layout(z):
+    """(app folder, Info.plist, the folders that move as [(path in the package, path under Documents)], their files, several games?)"""
+    import plistlib
     names = z.namelist()
     app = next((m.group(1) for n in names for m in [re.match(r'(Payload/[^/]+\.app/)Info\.plist$', n)] if m), None)
     if not app: raise SystemExit('not an app package: no Payload/*.app/Info.plist')
-    root = app + 'romfs/'
-    files = [i for i in z.infolist() if i.filename.startswith(root) and not i.is_dir()]
-    several = any(n.startswith(app + 'games/') for n in names)
-    return app, root, files, several
+    pl = plistlib.loads(z.read(app + 'Info.plist'))
+    new = bool(pl.get('DMDataInDocuments'))
+    tids = sorted({m.group(1) for n in names for m in [re.match(re.escape(app) + r'games/([0-9A-Fa-f]{16})/', n)] if m})
+    if tids:
+        parts = [(app + 'games/%s/%s/' % (t, d), 'games/%s/%s' % (t, d)) for t in tids for d in ('romfs', 'msl')] if new else []
+    else:
+        parts = [(app + 'romfs/', 'romfs')] + ([(app + 'msl/', 'msl')] if new else [])
+    files = [i for i in z.infolist() if not i.is_dir() and any(i.filename.startswith(p) for p, _ in parts)]
+    return app, pl, parts, files, bool(tids)
 
 
-def romfs_id(root, files):
+def data_id(files):
     h = hashlib.sha1()
     for i in sorted(files, key=lambda i: i.filename):
-        h.update(('%s\0%d\0%08x\n' % (i.filename[len(root):], i.file_size, i.CRC)).encode())
+        h.update(('%s\0%d\0%08x\n' % (i.filename, i.file_size, i.CRC)).encode())
     return h.hexdigest()[:16]
 
 
-def bundle_id(z, app):
-    import plistlib
-    return plistlib.loads(z.read(app + 'Info.plist')).get('CFBundleIdentifier', '')
+def dest_of(parts, name):
+    for p, d in parts:
+        if name.startswith(p): return d + '/' + name[len(p):]
 
 
 def cmd_info(a):
     with zipfile.ZipFile(a.ipa) as z:
-        app, root, files, several = layout(z)
+        app, pl, parts, files, several = layout(z)
         size = sum(i.file_size for i in files)
-        print(json.dumps({'lite': (not several) and size >= MIN_BYTES, 'several': several, 'id': romfs_id(root, files),
-                          'bytes': size, 'files': len(files), 'bundle': bundle_id(z, app)}))
+        print(json.dumps({'lite': size >= MIN_BYTES, 'several': several, 'id': data_id(files), 'bytes': size, 'files': len(files),
+                          'parts': [d for _, d in parts], 'bundle': pl.get('CFBundleIdentifier', '')}))
 
 
 def cmd_lite(a):
     with zipfile.ZipFile(a.ipa) as z, zipfile.ZipFile(a.out, 'w', zipfile.ZIP_STORED, allowZip64=True) as o:
-        app, root, files, several = layout(z)
-        if several: raise SystemExit('a package of several games keeps its game files inside')
+        app, pl, parts, files, several = layout(z)
+        if not parts: raise SystemExit('this shell reads a package of several games only from inside')
         for i in z.infolist():
-            if i.filename.startswith(root): continue
+            if any(i.filename.startswith(p) for p, _ in parts): continue
             info = zipfile.ZipInfo(i.filename, i.date_time)
             info.external_attr, info.create_system, info.compress_type = i.external_attr, i.create_system, zipfile.ZIP_STORED
             if i.is_dir(): o.writestr(info, b''); continue
@@ -77,8 +86,8 @@ async def push(a):
     from pymobiledevice3.services.house_arrest import HouseArrestService
 
     z = zipfile.ZipFile(a.ipa)
-    app, root, files, several = layout(z)
-    want, orig = romfs_id(root, files), bundle_id(z, app)
+    app, pl, parts, files, several = layout(z)
+    want, orig = data_id(files), pl.get('CFBundleIdentifier', '')
     total = sum(i.file_size for i in files)
 
     ld = await create_using_usbmux(serial=a.udid or None)
@@ -92,7 +101,7 @@ async def push(a):
         print('app on the iPad: %s' % bid)
         async with await HouseArrestService.create(lockdown=ld, bundle_id=bid, documents_only=True) as afc:
             base = '/Documents' if await afc.exists('/Documents') else ''
-            mark, dest = base + '/' + MARK, base + '/romfs'
+            mark = base + '/' + MARK
             have = ''
             if await afc.exists(mark):
                 try: have = (await afc.get_file_contents(mark)).decode().strip()
@@ -102,13 +111,14 @@ async def push(a):
                 return
             print('copying the game files to the iPad: %d files, %d MB' % (len(files), total >> 20))
             if await afc.exists(mark): await afc.rm(mark, force=True)
-            if await afc.exists(dest): await afc.rm(dest, force=True)
+            for _, d in parts:
+                if await afc.exists(base + '/' + d): await afc.rm(base + '/' + d, force=True)
             made, sent, shown = set(), 0, -1
             for i in sorted(files, key=lambda i: i.filename):
-                rel = i.filename[len(root):]
-                d = dest + '/' + rel.rsplit('/', 1)[0] if '/' in rel else dest
+                rel = base + '/' + dest_of(parts, i.filename)
+                d = rel.rsplit('/', 1)[0]
                 if d not in made: await afc.makedirs(d); made.add(d)
-                h = await afc.fopen(dest + '/' + rel, 'w')
+                h = await afc.fopen(rel, 'w')
                 try:
                     with z.open(i) as src:
                         while True:
