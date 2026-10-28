@@ -163,7 +163,6 @@ private struct PickerView: View {
             let gap = side * 0.14
             let current = m.games.indices.contains(m.focus) ? m.games[m.focus] : nil
             ZStack {
-                backdrop(current)
                 VStack(spacing: 0) {
                     header.padding(.horizontal, 32).padding(.top, 22)
                     Spacer(minLength: 0)
@@ -180,6 +179,8 @@ private struct PickerView: View {
                     }
                 }
             }
+            .frame(width: g.size.width, height: g.size.height)
+            .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down
         }
         .preferredColorScheme(.dark)
         .statusBarHidden()
@@ -223,6 +224,7 @@ private struct PickerView: View {
             Color.black
             if let icon = game?.icon {
                 Image(uiImage: icon).resizable().scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
                     .blur(radius: 60).scaleEffect(1.4).opacity(0.55)
                     .id(game?.id).transition(.opacity)
             }
@@ -248,7 +250,7 @@ private struct PickerView: View {
                 Text(game.name).font(.title.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
                 HStack(spacing: 12) {
                     if !game.version.isEmpty { Text(tr("版本 ", "Version ") + game.version) }
-                    if let p = game.played { Text(tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named))) }
+                    if let p = game.played { Text(tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named).locale(Locale(identifier: zhHant ? "zh-Hant" : "en")))) }
                 }
                 .font(.callout).foregroundStyle(.white.opacity(0.7))
             }
