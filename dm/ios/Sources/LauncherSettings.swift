@@ -3,7 +3,8 @@ import Foundation
 import Combine
 
 struct Setting: Decodable, Identifiable {
-    let env, kind, label, note, def: String
+    let env, kind, label, note: String
+    var def: String   // DM_LANG's follows the device's language (LauncherModel)
     let section: String?   // heading on the settings screen; absent in older bundles
     let options: [[String]]?   // choice: [value, label]
     let min, max, step: Double?   // range
@@ -33,6 +34,32 @@ struct Setting: Decodable, Identifiable {
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
+// The game language a player gets unless they choose one: the device's own when the game has it (Traditional Chinese, else Simplified, for a
+// Chinese device; the same language for another region, such as en-GB for en-US), else English. Only a choice that differs from it is stored,
+// so the game follows the device when its language changes
+func deviceLanguage(_ s: Setting, preferred: [String] = Locale.preferredLanguages) -> String? {
+    let codes = (s.options ?? []).map { $0[0] }
+    func has(_ c: String) -> String? { codes.first { $0.caseInsensitiveCompare(c) == .orderedSame } }
+    for p in preferred {
+        let id = Locale(identifier: p), lang = id.language.languageCode?.identifier ?? "", region = id.region?.identifier ?? ""
+        if lang == "zh" {
+            let hant = id.language.script?.identifier == "Hant" || ["TW", "HK", "MO"].contains(region)
+            if let c = has(hant ? "zh-Hant" : "zh-Hans") ?? has(hant ? "zh-Hans" : "zh-Hant") { return c }
+            continue
+        }
+        let regional: String? = switch lang {
+            case "en": ["US", "CA", "PH", ""].contains(region) ? "en-US" : "en-GB"
+            case "fr": region == "CA" ? "fr-CA" : "fr"
+            case "es": ["ES", ""].contains(region) ? "es" : "es-419"
+            case "pt": region == "BR" ? "pt-BR" : "pt"
+            default: nil
+        }
+        if let r = regional, let c = has(r) { return c }
+        if let c = codes.first(where: { $0.lowercased() == lang || $0.lowercased().hasPrefix(lang + "-") }) { return c }
+    }
+    return has("en-US") ?? has("en-GB")
+}
+
 final class LauncherModel: ObservableObject {
     let settings: [Setting]
     let fromFile: Set<String>   // set by an env file: shown, not changed
@@ -42,6 +69,8 @@ final class LauncherModel: ObservableObject {
 
     init(_ settings: [Setting], defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        var settings = settings
+        if let i = settings.firstIndex(where: { $0.env == "DM_LANG" }), let d = deviceLanguage(settings[i]) { settings[i].def = d }
         self.settings = settings
         fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
         for s in settings {

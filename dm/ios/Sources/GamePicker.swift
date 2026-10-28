@@ -166,13 +166,6 @@ private struct PickerView: View {
                     Spacer(minLength: 0)
                     footer.padding(.horizontal, 32).padding(.bottom, 22)
                 }
-                if m.starting {
-                    Color.black.opacity(0.55).ignoresSafeArea()
-                    VStack(spacing: 14) {
-                        ProgressView().controlSize(.large).tint(.white)
-                        Text(tr("正在載入…", "Loading…")).foregroundStyle(.white)
-                    }
-                }
             }
             .frame(width: g.size.width, height: g.size.height)
             .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down

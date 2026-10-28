@@ -26,3 +26,4 @@ Launcher: players 2 to 8 pick their own layout or Identify with their own highli
 Players: two controllers of the same model keep their own button layout	玩家：同型号的两个手柄可以各自切换 Xbox／Switch 配置，不会一起切换
 Packer: pack DLC, take split shader tables for older builds, write the stamp with LF; Boomerang Fu profile	打包器：会把 DLC 一起打包；旧版游戏（例如惊奇 1.0.1）改用这次拆出来的着色器表；Windows 上写库标记一律用 LF；新增 Boomerang Fu 的暂定设定档
 Switch Pad: the Windows pack-and-install app, with first-run setup and updates from the latest release	Switch Pad：Windows 上打包并安装到 iPad 的程序，第一次使用会自动安装所需工具，之后从最新 release 自动更新（程序、壳、打包器）；release 附上 SwitchPad.zip
+Game picker: several games in one package start from a picker; the launcher goes back to it, keeps settings at once, and the game language follows the device	合包：选游戏画面（滑动切换、点图标开始、时间／Wi-Fi／电量）；设置画面可回到游戏清单、设置一改就保存、游戏语言默认跟随系统（繁中→简中→英文）；修正合包里 NVN 游戏没有着色器的红画面
