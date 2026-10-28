@@ -5,6 +5,7 @@
 // The launcher may swap a phone's player with another or remove the phone (shell_slots.h): a removed phone is told so (kicked) and stays out, even across reconnects, until
 // its page asks to join again or the app restarts.
 // One port serves the page (GET /, phone_pad_page.h, generated from phone_pad.html) and the controller stream (GET /ws, WebSocket). Protocol, all from the phone:
+//   text   {"t":"layout","xbox":0|1}  -> the phone's own layout switch, answered with an assign in that layout
 //   text   {"t":"hello","v":1,"id":"<device id>","name":"<label>"[,"join":1]}  -> answered {"t":"assign","player":<1..8>,"layout":"switch"|"xbox"}, {"t":"full"} or {"t":"kicked"}
 //          (join: the player asked to come back after the launcher removed the phone); assign comes again whenever the launcher moves the phone to another player or changes its button layout
 //   binary 8 bytes: 0x01, sequence (u8, wraps), buttons (u16 LE, NpadButton bits as dm_input.h), lx, ly, rx, ry (i8 each, -127..127, y up)
@@ -151,6 +152,15 @@ static void on_hello(client *c, const char *json) {
     send_assign(c, p);
     LOG("phone pads: '%s' connected: player %d", name, p + 1);
 }
+// The page's own layout switch: the same as the launcher's (shell_players.m keeps it for this phone); the assign that follows redraws the page
+static void on_text(client *c, const char *json) {
+    char t[16] = ""; json_str(json, "t", t, sizeof t);
+    if (strcmp(t, "layout")) { on_hello(c, json); return; }
+    int p = c->player < 0 ? -1 : shell_slot_of(c); if (p < 0) return;
+    int xbox = strstr(json, "\"xbox\":1") != NULL;
+    LOG("phone pads: '%s' (player %d) chose the %s layout on the phone", c->name, p + 1, xbox ? "Xbox" : "Switch");
+    shell_slot_request_layout(p, xbox);
+}
 static void on_state(client *c, const uint8_t *b, size_t n) {
     int p = c->player < 0 ? -1 : shell_slot_of(c);   // the table's, not c->player: the launcher may have just moved the phone
     if (p < 0 || n < 8 || b[0] != 1) return;
@@ -226,7 +236,7 @@ static int ws_frames(client *c) {   // 0: the phone closed the connection or sen
         for (size_t i = 0; i < len; i++) d[i] ^= mask[i & 3];
         if (op == 8) return 0;
         if (op == 9) { uint8_t pong[2] = {0x8a, 0}; send_all(c->fd, pong, 2); }
-        else if (op == 1) { char j[256]; size_t n = len < sizeof j - 1 ? len : sizeof j - 1; memcpy(j, d, n); j[n] = 0; on_hello(c, j); }
+        else if (op == 1) { char j[256]; size_t n = len < sizeof j - 1 ? len : sizeof j - 1; memcpy(j, d, n); j[n] = 0; on_text(c, j); }
         else if (op == 2) on_state(c, d, len);
         off += p + 4 + len;
     }

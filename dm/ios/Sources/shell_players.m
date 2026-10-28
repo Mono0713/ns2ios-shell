@@ -228,6 +228,9 @@ static void slots_changed(void) {   // any thread (a phone joins on the server's
     });
 }
 
+static void command(NSDictionary *u);
+// A phone's page switched its own layout (phone_pads.c, its server thread): kept for that phone as the launcher's switch is
+static void layout_request(int p, int xbox) { dispatch_async(dispatch_get_main_queue(), ^{ command(@{@"op": @"layout", @"p": @(p + 1), @"xbox": @(xbox)}); }); }
 static void command(NSDictionary *u) {
     NSString *op = u[@"op"]; int p = [u[@"p"] intValue] - 1;
     if ([op isEqualToString:@"swap"]) shell_slot_swap([u[@"a"] intValue] - 1, [u[@"b"] intValue] - 1);
@@ -258,6 +261,7 @@ static void command(NSDictionary *u) {
 void shell_players_start(void) {   // main.m, on the main thread, once
     g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set]; g_motion_state = [NSMapTable strongToStrongObjectsMapTable];
     shell_slots_handlers(SHELL_SLOT_CONTROLLER, on_moved, on_kick, on_layout);
+    shell_slots_on_layout_request(layout_request);
     shell_slots_identify_handler(SHELL_SLOT_CONTROLLER, on_identify);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);

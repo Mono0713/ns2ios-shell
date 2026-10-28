@@ -182,6 +182,10 @@ class PhonePadsWithControllersTests(PhonePadsTests):
         self.launcher('layout 0 1')
         self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'xbox'})
         self.assertEqual(self.host()['slots'][0], [2, 1])
+        # the phone's own layout switch: answered with an assign in that layout, and the slot table has it
+        a.frame(1, json.dumps({'t': 'layout', 'xbox': 0}).encode())
+        self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'switch'})
+        self.assertEqual(self.host()['slots'][0], [2, 0])
         # a removed phone is released, told so, and stays out when it reconnects until it asks to join again
         a.state(3, 1 << 0)
         self.launcher('kick 0')
