@@ -45,10 +45,12 @@ function RunExe($exe, $arglist) {
 }
 
 $here = $PSScriptRoot
+# 程式檔在 nxn\程式\，遊戲和合包在上一層（舊版全部在同一層）
+$base = if ((Split-Path $here -Leaf) -eq '程式') { Split-Path $here -Parent } else { $here }
 $root = Join-Path $here 'work'
 # prod.keys：Switch Pad 自己的 → Ryujinx → yuzu 系的模擬器，第一個找到的
 function Find-Keys {
-    $c = @((Join-Path $root 'prod.keys'), (Join-Path $here 'prod.keys'), "$env:APPDATA\Ryujinx\system\prod.keys")
+    $c = @((Join-Path $root 'prod.keys'), (Join-Path $base 'prod.keys'), "$env:APPDATA\Ryujinx\system\prod.keys")
     foreach ($emu in 'yuzu', 'suyu', 'sudachi', 'citron', 'eden', 'torzu') { $c += "$env:APPDATA\$emu\keys\prod.keys" }
     foreach ($p in $c) { if (Test-Path -LiteralPath $p) { return $p } }
     return ''
@@ -133,7 +135,7 @@ try {
         if ($Out) {
             # 只有檔名就放在遊戲資料夾裡；有資料夾的相對路徑以 nxn\ 為準（不然會變成 遊戲\X\遊戲\X\…）
             $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out }
-                       elseif ($Out -match '[\\/]') { Join-Path $here $Out }
+                       elseif ($Out -match '[\\/]') { Join-Path $base $Out }
                        else { Join-Path $GameDir $Out }
             $outArg = @('-o', $outPath)
         } elseif ($customShell) {

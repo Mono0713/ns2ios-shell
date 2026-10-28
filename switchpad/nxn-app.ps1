@@ -5,7 +5,112 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 trap { [void][Windows.MessageBox]::Show($_.ToString(), 'Switch Pad 出錯'); break }
 
 $here = $PSScriptRoot
-$gamesDir = Join-Path $here '遊戲'
+# 程式檔都在 nxn\程式\，遊戲、合包和 Switch Pad.exe 在上一層 nxn\（舊版全部攤在 nxn\ 最上層，開起來會自己搬）
+$appDirName = '程式'
+$base = if ((Split-Path $here -Leaf) -eq $appDirName) { Split-Path $here -Parent } else { $here }
+
+# ---------------------------------------------------------------- 搬家：最上層只留 Switch Pad.exe、遊戲、合包，其他收進 程式\
+# 搬到一半失敗也沒關係：每次開都會把還留在最上層的搬過去。正在打包或安裝（另一個 Switch Pad 在跑）就等下次再搬。
+function Build-Launcher($exe, $ico) {
+    # Switch Pad.exe：只是用隱藏視窗的 PowerShell 開 程式\nxn-app.ps1，讓最上層有一個帶圖示的程式可以點
+    $src = @'
+using System; using System.Diagnostics; using System.IO; using System.Runtime.InteropServices;
+static class SwitchPadLauncher {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int MessageBoxW(IntPtr h, string text, string caption, uint type);
+    static int Main() {
+        string dir = AppDomain.CurrentDomain.BaseDirectory;
+        string ps1 = Path.Combine(Path.Combine(dir, "程式"), "nxn-app.ps1");
+        if (!File.Exists(ps1)) ps1 = Path.Combine(dir, "nxn-app.ps1");
+        if (!File.Exists(ps1)) { MessageBoxW(IntPtr.Zero, "找不到 " + ps1, "Switch Pad", 0x10); return 1; }
+        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
+            "-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File \"" + ps1 + "\"");
+        psi.UseShellExecute = false; psi.CreateNoWindow = true; psi.WorkingDirectory = Path.GetDirectoryName(ps1);
+        Process.Start(psi);
+        return 0;
+    }
+}
+'@
+    # 編譯器的命令列不一定認得中文路徑，先在暫存資料夾用英文檔名做好再搬過去
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) "switchpad-$PID"
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    try {
+        $cp = New-Object CodeDom.Compiler.CompilerParameters
+        $cp.GenerateExecutable = $true
+        $cp.OutputAssembly = Join-Path $tmp 'SwitchPad.exe'
+        $cp.CompilerOptions = '/target:winexe /optimize'
+        if (Test-Path -LiteralPath $ico) {
+            Copy-Item -LiteralPath $ico -Destination (Join-Path $tmp 'icon.ico')
+            $cp.CompilerOptions += " /win32icon:`"$(Join-Path $tmp 'icon.ico')`""
+        }
+        [void]$cp.ReferencedAssemblies.Add('System.dll')
+        $r = (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($cp, $src)
+        if ($r.Errors.HasErrors) { throw "做不出 Switch Pad.exe：$(@($r.Errors | ForEach-Object { $_.ErrorText }) -join '; ')" }
+        Move-Item -LiteralPath $cp.OutputAssembly -Destination $exe -Force
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+function Move-ToAppDir {
+    $appDir = Join-Path $base $appDirName
+    $others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'nxn[\w-]*\.ps1' })
+    $plain = @('nxn*.ps1', 'nxn_*.py', 'fix_empty_romfs.py', 'make_provisional.py', 'romfs_data.py', 'SwitchPad.ico', 'Switch Pad.cmd', '打包安裝視窗.cmd', '一鍵打包安裝.cmd', '首次登入AppleID.cmd') |
+        ForEach-Object { Get-ChildItem -LiteralPath $base -File -Filter $_ -ErrorAction SilentlyContinue }
+    $dirs = @('work', '工具') | ForEach-Object { Join-Path $base $_ } | Where-Object { Test-Path -LiteralPath $_ }
+    if (-not ($plain.Count + @($dirs).Count)) { return }
+    # 剛按完「更新」時舊的視窗還在關，等它一下
+    for ($i = 0; $others.Count -and $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 500
+        $others = @($others | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+    }
+    if ($others.Count) { return }
+    New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+    foreach ($d in $dirs) {
+        $dst = Join-Path $appDir (Split-Path $d -Leaf)
+        if (Test-Path -LiteralPath $dst) { throw "$dst 已經存在，$d 沒辦法搬過去" }
+        Move-Item -LiteralPath $d -Destination $dst
+    }
+    foreach ($f in $plain) {
+        $dst = Join-Path $appDir $f.Name
+        # 兩邊都有：留新的（舊版的「更新」會把新檔放在最上層）
+        if ((Test-Path -LiteralPath $dst) -and (Get-Item -LiteralPath $dst).LastWriteTime -gt $f.LastWriteTime) { Remove-Item -LiteralPath $f.FullName; continue }
+        Move-Item -LiteralPath $f.FullName -Destination $dst -Force
+    }
+    # 設定裡的殼是完整路徑，跟著 work\ 搬
+    $sf = Join-Path $appDir 'work\app-settings.json'
+    if (Test-Path $sf) {
+        $old = (Join-Path $base 'work\').ToLower(); $new = Join-Path $appDir 'work\'
+        $j = Get-Content $sf -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($j.Shell -and ([string]$j.Shell).ToLower().StartsWith($old)) {
+            $j.Shell = $new + ([string]$j.Shell).Substring($old.Length)
+            $j | ConvertTo-Json | Set-Content $sf -Encoding UTF8
+        }
+    }
+    # 舊版放在最上層的捷徑指向舊位置，Switch Pad.exe 取代它
+    $lnk = Join-Path $base 'Switch Pad.lnk'
+    if (Test-Path -LiteralPath $lnk) {
+        try { if ((New-Object -ComObject WScript.Shell).CreateShortcut($lnk).Arguments -like '*nxn-app.ps1*') { Remove-Item -LiteralPath $lnk } } catch { }
+    }
+}
+try {
+    Move-ToAppDir
+    $appDir = Join-Path $base $appDirName
+    $exe = Join-Path $base 'Switch Pad.exe'
+    if ((Test-Path (Join-Path $appDir 'nxn-app.ps1')) -and -not (Test-Path -LiteralPath $exe)) {
+        $ico = Join-Path $appDir '工具\SwitchPad.ico'
+        if (-not (Test-Path $ico)) { $ico = Join-Path $appDir 'SwitchPad.ico' }
+        Build-Launcher $exe $ico
+    }
+    # 這次是從最上層開的，搬好了就從 程式\ 重開
+    if ($here -eq $base -and (Test-Path (Join-Path $appDir 'nxn-app.ps1')) -and -not (Test-Path (Join-Path $base 'nxn-app.ps1'))) {
+        if (Test-Path -LiteralPath $exe) { Start-Process -FilePath $exe }
+        else { Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$(Join-Path $appDir 'nxn-app.ps1')`"") }
+        exit
+    }
+} catch {
+    [void][Windows.MessageBox]::Show("整理資料夾沒完成，下次打開會再試一次：`n$($_.Exception.Message)", 'Switch Pad')
+    if ($here -eq $base -and -not (Test-Path (Join-Path $base 'work'))) { exit }   # work\ 已經搬走，從這裡跑不起來
+}
+
+$gamesDir = Join-Path $base '遊戲'
 $script = Join-Path $here 'nxn.ps1'
 $work = Join-Path $here 'work'
 $logDir = Join-Path $work 'gui-logs'
@@ -269,18 +374,18 @@ try {
 $win = Load-Window $xamlText
 if (Test-Path $appIcon) {
     $win.Icon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri]$appIcon)
-    # 有圖示的捷徑（.cmd 沒辦法有圖示）：nxn 資料夾和桌面各一個，已經有就不動
+    # 桌面捷徑指向 Switch Pad.exe；舊版建的是 PowerShell 開 nxn-app.ps1 的捷徑，換掉
     try {
+        $exe = Join-Path $base 'Switch Pad.exe'
+        $lnkPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Switch Pad.lnk'
         $wsh = New-Object -ComObject WScript.Shell
-        foreach ($dir in $here, [Environment]::GetFolderPath('Desktop')) {
-            $lnkPath = Join-Path $dir 'Switch Pad.lnk'
-            if (Test-Path -LiteralPath $lnkPath) { continue }
-            $lnk = $wsh.CreateShortcut($lnkPath)
-            $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-            $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$(Join-Path $here 'nxn-app.ps1')`""
-            $lnk.WorkingDirectory = $here
-            $lnk.IconLocation = "$appIcon,0"
-            $lnk.WindowStyle = 7
+        $lnk = $wsh.CreateShortcut($lnkPath)
+        if ((Test-Path -LiteralPath $exe) -and (-not (Test-Path -LiteralPath $lnkPath) -or $lnk.Arguments -like '*nxn-app.ps1*')) {
+            $lnk.TargetPath = $exe
+            $lnk.Arguments = ''
+            $lnk.WorkingDirectory = $base
+            $lnk.IconLocation = "$exe,0"
+            $lnk.WindowStyle = 1
             $lnk.Description = 'Switch Pad'
             $lnk.Save()
         }
@@ -441,7 +546,7 @@ $iconJob = $null
 $nxExtract = Join-Path $work 'tools\nx_extract.exe'
 # prod.keys：Switch Pad 自己的（拖進視窗的會放在 work\）→ Ryujinx → yuzu 系的模擬器（跟 nxn.ps1 的 Find-Keys 一樣）
 function Find-Keys {
-    $c = @((Join-Path $work 'prod.keys'), (Join-Path $here 'prod.keys'), "$env:APPDATA\Ryujinx\system\prod.keys")
+    $c = @((Join-Path $work 'prod.keys'), (Join-Path $base 'prod.keys'), "$env:APPDATA\Ryujinx\system\prod.keys")
     foreach ($emu in 'yuzu', 'suyu', 'sudachi', 'citron', 'eden', 'torzu') { $c += "$env:APPDATA\$emu\keys\prod.keys" }
     foreach ($p in $c) { if (Test-Path -LiteralPath $p) { return $p } }
     return ''
@@ -746,7 +851,7 @@ function Pack-Icon($ipa) {
 }
 function Build-Packs($inst) {
     $ui.Packs.Children.Clear()
-    $mdir = Join-Path $here '合包'
+    $mdir = Join-Path $base '合包'
     $ipas = @(Get-ChildItem -LiteralPath $mdir -Filter '*.ipa' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
         if (-not $ipas.Count) {
         $t = New-Object Windows.Controls.TextBlock
@@ -808,8 +913,8 @@ function Pack-Action($p, $action) {
 function Pack-Path($name) {
     $safe = ($name -replace '[\\/:*?"<>|]', '_').Trim()
     if (-not $safe) { $safe = '遊戲合包' }
-    $p = Join-Path (Join-Path $here '合包') "$safe.ipa"
-    if (Test-Path -LiteralPath $p) { $p = Join-Path (Join-Path $here '合包') ("$safe-" + (Get-Date -Format 'MMdd-HHmm') + '.ipa') }
+    $p = Join-Path (Join-Path $base '合包') "$safe.ipa"
+    if (Test-Path -LiteralPath $p) { $p = Join-Path (Join-Path $base '合包') ("$safe-" + (Get-Date -Format 'MMdd-HHmm') + '.ipa') }
     return $p
 }
 # 改名：用 nxn_merge.py 拿舊的合包當輸入重新寫一份（原樣複製壓縮資料，很快），成功才刪掉舊的
@@ -1403,7 +1508,7 @@ function Run-Games($dirs, $mode, $merge) {
         if ($mode -ne 'install' -and $dirs.Count -lt 2) { [void][Windows.MessageBox]::Show('合成一包至少要選 2 款。', '合成一包'); return }
         if ($mode -eq 'install') {
             # 只安裝：裝 nxn\合包 裡最新的那包，不管勾了哪些遊戲
-            $mdir = Join-Path $here '合包'
+            $mdir = Join-Path $base '合包'
             $last = Get-ChildItem -LiteralPath $mdir -Filter '*.ipa' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
             if (-not $last) { [void][Windows.MessageBox]::Show('還沒有合成好的包，先用「打包並安裝」或「只打包」。', '合成一包'); return }
             $mg2 = [pscustomobject]@{ Dir = $mdir; Name = "合包（$($last.Name)）"; Ipas = @($last); Base = $false }
@@ -1421,7 +1526,7 @@ function Run-Games($dirs, $mode, $merge) {
             $outs += $o
             $jobs += @{ Game = $g; Mode = 'mergepart'; Ipa = ''; Out = $o; Shell = $ms.FullName }
         }
-        $mdir = Join-Path $here '合包'
+        $mdir = Join-Path $base '合包'
         New-Item -ItemType Directory -Force -Path $mdir | Out-Null
         $names = ($dirs | ForEach-Object { $cards[$_].Tag.Name }) -join '、'
         $pname = Ask-Text '合成一包' 'iPad 主畫面上顯示的名稱（之後也可以在「合包」裡改）' '遊戲合包'
@@ -1554,7 +1659,7 @@ $ui.Settings.Add_Click({
     $sw.FindName('Overwrite').IsChecked = [bool]$cfg.Overwrite
     $sw.FindName('OpenGames').Add_Click({ Start-Process explorer.exe "`"$gamesDir`"" })
     $sw.FindName('OpenLogs').Add_Click({ Start-Process explorer.exe "`"$logDir`"" })
-    if (-not (Test-Path (Join-Path $here 'nxn-gui.ps1'))) { $sw.FindName('OldGui').Visibility = 'Collapsed' }
+    if ($here -ne $base -or -not (Test-Path (Join-Path $here 'nxn-gui.ps1'))) { $sw.FindName('OldGui').Visibility = 'Collapsed' }   # 舊版視窗只認得最上層的 遊戲\
     $sw.FindName('OldGui').Add_Click({ Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$(Join-Path $here 'nxn-gui.ps1')`"") })
     $upd = Update-Available
     $sw.FindName('UpdateText').Text = if ($upd) { "有新版本：$upd" } elseif ($latest) { "已是最新（$($latest.tag_name)）" } else { '還沒問到 GitHub 上的版本' }
