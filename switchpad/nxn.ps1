@@ -231,6 +231,7 @@ try {
     # plumesign 只有在沒給 --udid（選裝置）或帳號有好幾個團隊時才會問問題，其他時候可以直接在背景跑，記錄寫進這裡
     function Run-Sign($argv) {
         $ErrorActionPreference = 'Continue'
+        $env:RUST_LOG = 'info'   # plumesign 預設印除錯訊息（整段資料結構），只留一般進度
         $lines = New-Object Collections.Generic.List[string]
         & $plume @argv 2>&1 | ForEach-Object {
             $l = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
