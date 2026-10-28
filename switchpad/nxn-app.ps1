@@ -886,7 +886,7 @@ function Build-Packs($inst) {
         $cm = New-Object Windows.Controls.ContextMenu
         $cm.Style = $win.FindResource([Windows.Controls.ContextMenu])
         $cm.Resources.Add([Windows.Controls.MenuItem], $win.FindResource([Windows.Controls.MenuItem]))
-        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('➕  加入遊戲…', 'add'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'), @('🗑  刪除…', 'delete'))) {
+        foreach ($it in @(@('🎮  看裡面的遊戲', 'show'), @('➕  加入遊戲…', 'add'), @('➖  移除遊戲…', 'show'), @('📲  安裝到 iPad', 'install'), @('✏  改名…', 'rename'), @('📂  打開資料夾', 'folder'), @('🗑  刪除…', 'delete'))) {
             $mi = New-Object Windows.Controls.MenuItem
             $mi.Header = Menu-Header $it[0]; $mi.Tag = @{ Pack = $p; Action = $it[1] }
             $mi.Add_Click({ param($s, $e) Pack-Action $s.Tag.Pack $s.Tag.Action })
@@ -1021,6 +1021,15 @@ function Show-Pack($p) {
         $v = New-Object Windows.Controls.TextBlock; $v.Foreground = Brush '#8E8E93'; $v.FontSize = 12
         $v.Text = (@($(if ($gm.Version) { "v$($gm.Version)" }), $gm.Tid) | Where-Object { $_ }) -join ' · '
         [void]$sp.Children.Add($n); [void]$sp.Children.Add($v)
+        if ($p.Games.Count -gt 1 -and -not $state.Running) {
+            $rm = New-Object Windows.Controls.Button
+            $rm.Content = '移除'; $rm.VerticalAlignment = 'Center'; $rm.Tag = $gm
+            [Windows.Controls.DockPanel]::SetDock($rm, 'Right')
+            $rm.Add_Click({ param($s, $e)
+                $ok = [Windows.MessageBox]::Show($pw, "從「$($p.Name)」拿掉「$($s.Tag.Name)」？`n`n遊戲資料夾裡的檔案不受影響，之後還能再加回來。要重新安裝到 iPad 才會生效。", '移除遊戲', 'YesNo', 'Question')
+                if ($ok -eq 'Yes') { $pw.DialogResult = $false; Remove-FromPack $p $s.Tag } })
+            [void]$row.Children.Add($rm)
+        }
         [void]$row.Children.Add($sp)
         [void]$list.Children.Add($row)
     }
@@ -1515,6 +1524,34 @@ $timer.Add_Tick({
     } })
 
 # ---------------------------------------------------------------- 按鈕
+# 合包的 bundle ID：加入或移除遊戲後沿用它，iPad 上才是同一個 App
+function Pack-BundleId($ipa) {
+    try {
+        $z = [IO.Compression.ZipFile]::OpenRead($ipa)
+        try {
+            $e = $z.Entries | Where-Object { $_.FullName -match '^Payload/[^/]+\.app/Info\.plist$' } | Select-Object -First 1
+            $sr = New-Object IO.StreamReader($e.Open()); try { $pl = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            if ($pl -match '<key>CFBundleIdentifier</key>\s*<string>([^<]+)</string>') { return $Matches[1] }
+        } finally { $z.Dispose() }
+    } catch { }
+    return ''
+}
+# 從合包拿掉一款：用 nxn_merge_drop.py 把舊包重寫一份（不重新打包，很快），蓋回原檔名。iPad 上重新安裝後，
+# 那款傳過去的遊戲資料會在下次傳檔時刪掉（romfs_data.py）；它的存檔留在 App 裡。
+function Remove-FromPack($p, $gm) {
+    $old = $p.Ipas[0].FullName
+    $mg = Get-MergeScript
+    $drop = Join-Path $here 'nxn_merge_drop.py'
+    if (-not $mg -or -not (Test-Path $drop)) { [void][Windows.MessageBox]::Show('找不到 nxn_merge.py 或 nxn_merge_drop.py。', '移除遊戲'); return }
+    $bid = Pack-BundleId $old
+    $tmp = "$old.removing"
+    $call = "Write-Host '==> 合成一包：從 $($p.Name -replace "'", "''") 移除 $($gm.Name -replace "'", "''")'; " +
+            "& $(Quote (Get-Python)) $(Quote $drop) $(Quote $mg) $($gm.Tid) -o $(Quote $tmp) --name $(Quote $p.Name)" + $(if ($bid) { " --bundle-id $(Quote $bid)" } else { '' }) + " $(Quote $old); " +
+            "if (`$LASTEXITCODE) { Write-Host '出錯了：移除失敗'; Remove-Item -LiteralPath $(Quote $tmp) -ErrorAction SilentlyContinue; `$global:LASTEXITCODE = 1; return }; " +
+            "Move-Item -LiteralPath $(Quote $tmp) -Destination $(Quote $old) -Force; Write-Host '移除好了，重新安裝到 iPad 後才會生效'"
+    $g = [pscustomobject]@{ Dir = $p.Dir; Name = "從 $($p.Name) 移除 $($gm.Name)"; Ipas = @(); Base = $false; BaseFile = ''; Icon = $p.Icon }
+    Start-Run @(@{ Game = $g; Mode = 'merge'; Ipa = ''; Call = $call })
+}
 # 加進現有的合包：新選的遊戲各自用多遊戲殼打包，再跟舊的合包一起合成，蓋回原本的檔名。
 # bundle ID 和名稱照舊，所以 iPad 上是更新同一個 App（存檔和已經傳過的遊戲資料都留著）。已經在包裡的遊戲跳過。
 function Add-ToPack($p, $dirs, $mode) {
@@ -1535,16 +1572,7 @@ function Add-ToPack($p, $dirs, $mode) {
     }
     if (-not $outs.Count) { [void][Windows.MessageBox]::Show("選的遊戲都已經在「$($p.Name)」裡了。", '加入遊戲'); return }
     if ($skip.Count) { [void][Windows.MessageBox]::Show("已經在包裡，跳過：$($skip -join '、')", '加入遊戲') }
-    # 沿用舊包的 bundle ID（iPad 上才是同一個 App）
-    $bid = ''
-    try {
-        $z = [IO.Compression.ZipFile]::OpenRead($old)
-        try {
-            $e = $z.Entries | Where-Object { $_.FullName -match '^Payload/[^/]+\.app/Info\.plist$' } | Select-Object -First 1
-            $sr = New-Object IO.StreamReader($e.Open()); try { $pl = $sr.ReadToEnd() } finally { $sr.Dispose() }
-            if ($pl -match '<key>CFBundleIdentifier</key>\s*<string>([^<]+)</string>') { $bid = $Matches[1] }
-        } finally { $z.Dispose() }
-    } catch { }
+    $bid = Pack-BundleId $old
     $tmp = "$old.adding"
     $names = ($jobs | ForEach-Object { $_.Game.Name }) -join '、'
     $call = "Write-Host '==> 合成一包：把 $($names -replace "'", "''") 加進 $($p.Name -replace "'", "''")'; " +
