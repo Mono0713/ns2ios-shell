@@ -72,7 +72,7 @@ def atomic_json(path, value):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp-' + str(os.getpid()) + '-' + str(threading.get_ident())
     with open(tmp, 'w') as f: json.dump(value, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+    dmsh_mtlcache._replace(tmp, path)   # Windows: a scanner holding the file publish_cache just cloned there fails a plain os.replace (WinError 5)
 
 def source_without_rule_bodies():
     source = open(__file__, 'r').read(); lines = source.splitlines(True); tree = ast.parse(source)

@@ -141,11 +141,12 @@ python scripts/nxn_merge.py -o Games.ipa "Boomerang Fu.ipa" "ANIMAL WELL.ipa"
 Each game goes to `games/<title ID>/` (its `dm/` tables, `msl/`, `romfs/`, `aoc/`, `game.json`, `icon.png`) and its program to
 `Frameworks/Guest_<title ID>.framework`; the shell's own files stay at the top. Entries are copied as they are compressed, so a
 merge takes about as long as copying the files. On the device `main.m` finds `games/`: with two or more games it shows
-`GamePicker.swift` first and only then sets that game's paths (`DM_GUEST` for `loader.c`, saves in `Documents/save/<title ID>`)
-and starts loading it; with one it starts it at once, and a package without `games/` works as before.
+`GamePicker.swift` first and only then sets that game's paths (`DM_GUEST` for `loader.c`, saves in `Documents/save/<title ID>`);
+with one it starts it at once, and a package without `games/` works as before.
 
-One process runs one game: the host maps the game's program at fixed addresses and cannot take it out again. The launcher's
-Change game goes to the home screen and ends the app, and the next tap on its icon opens the picker. The bundle ID is the same
+One process runs one game: the host maps the game's program at fixed addresses and cannot take it out again. So a package of
+several games loads the program only when the launcher starts the game (`boot_preload` in `main.m`), and until then the
+launcher's Game list button (or B on Play) goes back to the picker; after that, changing games means closing the app. The bundle ID is the same
 for every merge (`org.nxnative.games`, `--bundle-id` to change it), so a merge with one more game installs over the last and keeps
 the saves; an IPA the script made can be given again as input. The shell has to carry `MULTI=1` in `dm/shell_info.txt`.
 

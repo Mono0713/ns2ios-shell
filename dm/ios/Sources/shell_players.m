@@ -66,7 +66,7 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     uint64_t old = atomic_exchange(&g_last_nav[p], buttons), pressed = buttons & ~old, released = old & ~buttons;
     if (!atomic_load(&g_launcher) || !(pressed | released)) return;
     static const struct { int bit, held; const char *key; } keys[] = {
-        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_PLUS, 0, "plus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
+        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_X, 0, "x"}, {B_Y, 0, "y"}, {B_PLUS, 0, "plus"}, {B_MINUS, 0, "minus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         int on = (pressed >> keys[i].bit & 1) != 0;
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
@@ -228,6 +228,9 @@ static void slots_changed(void) {   // any thread (a phone joins on the server's
     });
 }
 
+static void command(NSDictionary *u);
+// A phone's page switched its own layout (phone_pads.c, its server thread): kept for that phone as the launcher's switch is
+static void layout_request(int p, int xbox) { dispatch_async(dispatch_get_main_queue(), ^{ command(@{@"op": @"layout", @"p": @(p + 1), @"xbox": @(xbox)}); }); }
 static void command(NSDictionary *u) {
     NSString *op = u[@"op"]; int p = [u[@"p"] intValue] - 1;
     if ([op isEqualToString:@"swap"]) shell_slot_swap([u[@"a"] intValue] - 1, [u[@"b"] intValue] - 1);
@@ -258,6 +261,7 @@ static void command(NSDictionary *u) {
 void shell_players_start(void) {   // main.m, on the main thread, once
     g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set]; g_motion_state = [NSMapTable strongToStrongObjectsMapTable];
     shell_slots_handlers(SHELL_SLOT_CONTROLLER, on_moved, on_kick, on_layout);
+    shell_slots_on_layout_request(layout_request);
     shell_slots_identify_handler(SHELL_SLOT_CONTROLLER, on_identify);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);

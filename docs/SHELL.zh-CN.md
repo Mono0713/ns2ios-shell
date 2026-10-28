@@ -130,7 +130,7 @@ python scripts/nxn_merge.py -o Games.ipa "Boomerang Fu.ipa" "ANIMAL WELL.ipa"
 设备上 `main.m` 看到 `games/`：两款以上先显示 `GamePicker.swift`，选好才设定那款的路径（`loader.c` 读 `DM_GUEST`，存档在
 `Documents/save/<title ID>`）并开始载入；只有一款就直接启动；没有 `games/` 的包和以前一样。
 
-一个进程只跑一款：主机把游戏程序映射在固定地址，载入后拿不掉。启动设置的「换游戏」会回到主画面并结束 App，再点一次图示就回到选单。
+一个进程只跑一款：主机把游戏程序映射在固定地址，载入后拿不掉。所以多款的包要等启动设置按下开始才载入程序（`main.m` 的 `boot_preload`），在那之前启动设置的「游戏清单」按钮（或在开始游戏上按 B）可以回到选单；游戏开始后要换游戏就得关掉 App。
 每次合包的 bundle ID 相同（`org.nxnative.games`，可用 `--bundle-id` 改），所以多加一款再合包会覆盖安装、保留存档；合好的 IPA 也能再当输入。
 壳的 `dm/shell_info.txt` 要有 `MULTI=1`。
 

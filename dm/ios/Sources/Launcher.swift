@@ -6,14 +6,29 @@ import SwiftUI
 import Combine
 import UIKit
 import CoreImage.CIFilterBuiltins
+import GameController
 import os
 
 // A package of several games (main.m, GamePicker.swift): the chosen game's folder, its game.json standing in for the app's own name and version,
-// and its own UserDefaults suite, so each game keeps its settings
-private let gameRoot: URL? = ProcessInfo.processInfo.environment["DM_SHELL_GAME_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
-private let gameInfo: [String: Any] = gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }
-    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-let gameDefaults: UserDefaults = ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard
+// and its own UserDefaults suite, so each game keeps its settings. Read each time: the launcher can go back to the picker, which may choose another game
+private var gameRoot: URL? { ProcessInfo.processInfo.environment["DM_SHELL_GAME_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
+private var gameInfo: [String: Any] {
+    gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+}
+var gameDefaults: SettingsStore {   // LauncherSettings.swift; earlier builds kept these in UserDefaults (the suite game.<title ID>, or the app's own)
+    let g = ProcessInfo.processInfo.environment["DM_SHELL_GAME"]
+    return SettingsStore.named(g ?? "app", from: g.flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard)
+}
+@_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
+
+// The launcher and the game picker move with player 1's controller themselves (DMLauncherInput). Without this, iPadOS also moves its own focus over their
+// buttons with it, and A then pressed whichever button that focus was left on (Open game folder, once tapped) as well as the highlighted row
+func controllerNotForUIKit(_ view: UIView) {
+    if #available(iOS 17.0, *) {
+        let i = GCEventInteraction(); i.handledEventTypes = .gamepad
+        view.addInteraction(i)
+    }
+}
 private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 private func info(_ key: String) -> Any? {
     if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
@@ -47,7 +62,7 @@ private let zhText: [String: String] = [
     // the launcher's own
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
-    "Open game folder": "打開遊戲資料夾", "Change game": "換遊戲",
+    "Open game folder": "打開遊戲資料夾", "Game list": "遊戲清單",
     "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
     "Motion controls": "體感操作（陀螺儀）",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
@@ -93,9 +108,9 @@ private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : enText[s] ?? 
 
 // Players (shell_players.m): who plays which player, from the physical controllers and the phones, at the top of the launcher. The list comes from the
 // DMPlayersChanged notification and the changes go back as DMPlayersCommand (swap, kick, layout, add), so this file needs no C header
-private struct PlayerRow: Identifiable, Equatable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
-private struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; var id: Int { index } }
-private final class PlayersModel: ObservableObject {
+struct PlayerRow: Identifiable, Equatable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
+struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; var id: Int { index } }
+final class PlayersModel: ObservableObject {
     @Published var players: [PlayerRow] = []
     @Published var removed: [RemovedPad] = []
     private var token: NSObjectProtocol?
@@ -123,7 +138,7 @@ private final class PlayersModel: ObservableObject {
 
 // Which players just pressed something (shell_players.m posts DMPlayerActive): their badge lights up for a moment, so each one sees which row is theirs.
 // Apart from PlayersModel, so a press redraws only the badges
-private final class ActivityModel: ObservableObject {
+final class ActivityModel: ObservableObject {
     @Published var lit: Set<Int> = []
     private var token: NSObjectProtocol?
     private var generation: [Int: Int] = [:]
@@ -151,8 +166,8 @@ private struct PlayerBadge: View {
     }
 }
 
-private let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
-private func controllerIcon(_ label: String) -> String {
+let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
+func controllerIcon(_ label: String) -> String {
     let l = label.lowercased()
     return l.contains("xbox") ? "logo.xbox" : l.contains("dualsense") || l.contains("dualshock") ? "logo.playstation" : "gamecontroller.fill"
 }
@@ -245,7 +260,7 @@ private struct PlayersSection: View {
 
 // Phone controllers (phone_pads.c): the address phones open, and a QR code of it. DM_PHONE_PADS_LIVE is the port the server listens on (unset when it is off or could not start);
 // the address is this device's IPv4 address on Wi-Fi (en0), or on another interface that is up (a personal hotspot's bridge) when there is no Wi-Fi
-private func phonePadsURL() -> String? {
+func phonePadsURL() -> String? {
     guard let port = ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] else { return nil }
     var list: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&list) == 0, let first = list else { return nil }
@@ -263,11 +278,13 @@ private func phonePadsURL() -> String? {
     return "http://\(addr):\(port)/"
 }
 
-private func qrImage(_ text: String) -> UIImage? {
+func qrImage(_ text: String) -> UIImage? {
     let f = CIFilter.qrCodeGenerator()
     f.message = Data(text.utf8)
     f.correctionLevel = "M"
-    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+    // black on clear rather than black on white: the white around it comes from the view, so the code and its margin are one colour
+    let fc = CIFilter.falseColor(); fc.inputImage = f.outputImage; fc.color0 = CIColor(red: 0, green: 0, blue: 0); fc.color1 = CIColor(red: 1, green: 1, blue: 1, alpha: 0)
+    guard let out = fc.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
     return UIImage(cgImage: cg)
 }
 
@@ -455,10 +472,10 @@ private extension LauncherModel {
 @_silgen_name("dm_touch_style") private func dmTouchStyle(_ opacity: Float, _ scale: Float)
 private final class ShellSettings: ObservableObject {
     private let fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
-    @Published var gyro: Bool
-    @Published var fps: Int   // 30 or 60: 60 leaves the game its own rate, which is 60 at most
-    @Published var touchOpacity: Double { didSet { style() } }
-    @Published var touchScale: Double { didSet { style() } }
+    @Published var gyro: Bool { didSet { save() } }   // each kept as soon as changed, as LauncherModel's
+    @Published var fps: Int { didSet { save() } }   // 30 or 60: 60 leaves the game its own rate, which is 60 at most
+    @Published var touchOpacity: Double { didSet { style(); save() } }
+    @Published var touchScale: Double { didSet { style(); save() } }
     var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
     var fpsLocked: Bool { fromFile.contains("DM_FPS") }
     init() {
@@ -470,11 +487,16 @@ private final class ShellSettings: ObservableObject {
         style()
     }
     private func style() { dmTouchStyle(Float(touchOpacity), Float(touchScale)) }
-    func apply() {
+    private func save() {
         let d = gameDefaults
         d.set(touchOpacity, forKey: "launcher.touchOpacity"); d.set(touchScale, forKey: "launcher.touchScale")
-        if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO"); shellMotionEnable(gyro ? 1 : 0) }
-        if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30"); if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
+        if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO") }
+        if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30") }
+    }
+    func apply() {
+        save()
+        if !gyroLocked { shellMotionEnable(gyro ? 1 : 0) }
+        if !fpsLocked { if fps == 30 { setenv("DM_FPS", "30", 1) } else { unsetenv("DM_FPS") } }
         fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps) fps, touch controls \(Int(touchOpacity * 100)) % opaque at \(Int(touchScale * 100)) % size\n", stderr)
     }
 }
@@ -524,13 +546,6 @@ private struct TouchStyleRow: View {   // opacity or size of the touch controls,
     }
 }
 
-// A package of several games runs one game per process (main.m): changing games means starting the app again. Go to the home screen the way
-// the Home gesture does, then end, so the next tap on the icon opens the game picker
-private func changeGame() {
-    fputs("launcher: change game: the app closes\n", stderr)
-    UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
-}
 private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
     if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
        let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -540,6 +555,7 @@ private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     @ObservedObject var shell: ShellSettings
     let play: () -> Void
+    let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
     @State private var memory = os_proc_available_memory()
     @StateObject private var players = PlayersModel()
     @StateObject private var nav = NavModel()
@@ -566,6 +582,13 @@ private struct LauncherView: View {
                 }
                 .padding(16)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                .overlay(alignment: .topLeading) {
+                    if let back {
+                        Button(action: back) { Label(tr("Game list"), systemImage: "chevron.left").font(.headline) }
+                            .buttonStyle(.bordered).controlSize(.large).padding(16)
+                            .overlay { if nav.focus == "back" { Capsule().stroke(Color.white, lineWidth: 3).padding(10) } }
+                    }
+                }
                 ScrollViewReader { proxy in
                 List {
                     PlayersSection(m: players)
@@ -587,14 +610,6 @@ private struct LauncherView: View {
                             .nav("reset")
                     } footer: {
                         Text(tr("Brings back all settings this game was tested with."))
-                    }
-                    if severalGames {
-                        Section {
-                            Button(tr("Change game"), action: changeGame)
-                                .nav("change")
-                        } footer: {
-                            Text(tr("The app closes; tap its icon again to choose another game."))
-                        }
                     }
                     Section {
                         Button(tr("Open game folder"), action: openGameFolder)
@@ -673,7 +688,6 @@ private struct LauncherView: View {
             }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
-        if severalGames { items.append(NavItem(id: "change", activate: changeGame)) }
         items.append(NavItem(id: "folder", activate: openGameFolder))
         return items
     }
@@ -681,6 +695,12 @@ private struct LauncherView: View {
         let items = navItems()
         if nav.focus == "play" {   // right (or down) goes back to the row left for Play
             if key == "right" || key == "down" { nav.focus = items.contains { $0.id == nav.list } ? nav.list : items.first?.id ?? "play" }
+            else if key == "up", back != nil { nav.focus = "back" }   // the Game list button above
+            return
+        }
+        if nav.focus == "back" {   // down to Play, right to the rows
+            if key == "down" { nav.focus = "play" }
+            else if key == "right" { nav.focus = items.contains { $0.id == nav.list } ? nav.list : items.first?.id ?? "play" }
             return
         }
         guard let i = items.firstIndex(where: { $0.id == nav.focus }) else { nav.reset(); nav.focus = items.first?.id ?? "play"; return }   // its row went away
@@ -709,7 +729,7 @@ private struct LauncherView: View {
         }
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
-        guard let key = u?["key"] as? String else { return }
+        guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
         if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
         if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
         held?.task.cancel(); held = nil
@@ -721,13 +741,15 @@ private struct LauncherView: View {
             if let part = nav.part, let r = row { playerPart(r, part); return }
             if nav.editing { nav.editing = false; return }
             if nav.focus == "play" { play(); return }
+            if nav.focus == "back" { back?(); return }
             guard let item = navItems().first(where: { $0.id == nav.focus }) else { return }
             if item.slider { nav.editing = true } else { item.activate() }
         case "b":   // back one step, else to Play
             if nav.moveTo != nil { nav.moveTo = nil }
             else if nav.part != nil { nav.part = nil }
             else if nav.editing { nav.editing = false }
-            else if nav.focus != "play" { nav.list = nav.focus; nav.focus = "play" }
+            else if nav.focus != "play" && nav.focus != "back" { nav.list = nav.focus; nav.focus = "play" }
+            else if let back { back() }   // B on Play: back to the game list
         default:   // a direction: once, then repeated while held (moving up and down, or a value)
             let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
             navDirection(key)
@@ -740,6 +762,8 @@ private struct LauncherView: View {
     }
 
     private func appIcon() -> UIImage? {
+        let root = gameRoot ?? Bundle.main.resourceURL
+        if let r = root, let i = UIImage(contentsOfFile: r.appendingPathComponent("dm/icon.jpg").path) { return i }   // the game's own, larger than the app icon (nxn_pack.py)
         if let r = gameRoot, let i = UIImage(contentsOfFile: r.appendingPathComponent("icon.png").path) { return i }
         if let i = UIImage(named: "AppIcon") { return i }
         guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
@@ -757,17 +781,24 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
     var host: UIViewController?
-    let view = LauncherView(m: model, shell: shell) {
+    let view = LauncherView(m: model, shell: shell, play: {
         guard let h = host else { return }
         host = nil
         model.apply()
         shell.apply()
-        h.dismiss(animated: false) { done() }
-    }
+        h.dismiss(animated: true) { done() }
+    }, back: severalGames ? {
+        guard let h = host else { return }
+        host = nil
+        fputs("launcher: back to the game list\n", stderr)
+        h.dismiss(animated: true) { frontIosBackToPicker() }
+    } : nil)
     let h = UIHostingController(rootView: view)
+    controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
+    h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
     host = h
-    parent.present(h, animated: false)
+    parent.present(h, animated: true)
     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
     return true
 }

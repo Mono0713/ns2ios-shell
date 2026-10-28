@@ -53,10 +53,10 @@
 
 ~ dm/host/loader.c              # module images from Frameworks/Guest.framework instead of the executable (+ dm_shell_modules); DM_GUEST names the chosen game's Guest_<title ID>.framework in a package of several games
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL); profile mem_map_limit too (DM_MEM_MAP_LIMIT)
-~ dm/host/hle_oe.c              # profile perf_mode overridable at run time (DM_PERF_BOOST): the shell compiles the placeholder's 0
+~ dm/host/hle_oe.c              # profile perf_mode overridable at run time (DM_PERF_BOOST): the shell compiles the placeholder's 0; logs the language the game is given (once)
 ~ dm/host/hle_os.c              # profile alloc_big_align overridable at run time (DM_ALLOC_BIG_ALIGN): likewise
 ~ dm/host/main.c                # profile game_args overridable at run time (DM_GAME_ARGS): the shell compiles the placeholder's empty string
-~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name; render_cond / tex_dyn_slots / tex_dirty_upload read from the environment
+~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name (DM_MSL_DIR first); render_cond / tex_dyn_slots / tex_dirty_upload read from the environment
 ~ dm/gfx/nvn/hle_nvn.c          # profile tex_flush_upload / tex_dirty_upload / render_cond overridable at run time: the shell compiles the placeholder's 0
 ~ dm/gfx/gl/hle_gl.m            # a shader library the packing computer could not compile is compiled on the device instead
 ~ dm/gfx/vk/hle_vk.m            # same for Vulkan: vk_shaders.py --source-only writes MSL, the device compiles it
@@ -66,8 +66,9 @@
 ~ dm/tools/nx_extract/Program.cs      # wraps the stacked storage in AlignedReadStorage
 
 ~ dm/gfx/tools/dmsh_chain.py    # tolerate a single-file translator build and a CRLF checkout
+~ dm/gfx/tools/dmsh_build.py    # atomic_json retries the rename on Windows, as dmsh_mtlcache does (a scanner holding the fresh file)
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
-~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host; shell_players_start and phone_pads_start at launch; a package of several games (games/<title ID>/): the picker first, then that game's files, saves in save/<title ID>
+~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host; shell_players_start and phone_pads_start at launch; a package of several games (games/<title ID>/): the picker first, then that game's files, saves in save/<title ID>, its program loaded only when it starts so the launcher can go back to the picker
 ~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only; physical controllers moved to shell_players.m (the pad hides while a controller or phone plays and shows for a few seconds after a tap); the iPad's motion for player 1; the launcher's opacity and size; a QR button that shows the phone gamepads' address in game; the touch layout kept per game
 ~ dm/ios/project.yml           # local network permission and the Bonjour service (_nxpad._tcp) for the phone gamepads
 ~ dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
@@ -76,9 +77,9 @@
 ~ dm/host/dm_input.h           # dm_motion_set_player: a front end's real motion for a player's six-axis sensor
 ~ dm/host/hle_hid.c            # the six-axis sensors read dm_motion_set_player's motion while it is fresh (lying still otherwise)
 ~ dm/host/tests/t_hid.c        # the real-motion checks
-~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame; the game picker before the launcher in a package of several games
-~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A edits the highlighted row in place, B goes back, left to Play, + starts), players 2 to 8 set their own row with their own controller, the phone gamepads' address and QR code under Play, Motion controls, touch-control opacity and size, a 30 / 60 fps cap, an Identify button per player; English copy reworded; in a package of several games: the chosen game's name, icon and launcher.json, its own settings, a Change game button
-~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL)
+~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame; the game picker before the launcher in a package of several games, and again from the launcher's Game list
+~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A edits the highlighted row in place, B goes back, left to Play, + starts), players 2 to 8 set their own row with their own controller, the phone gamepads' address and QR code under Play, Motion controls, touch-control opacity and size, a 30 / 60 fps cap, an Identify button per player; English copy reworded; in a package of several games: the chosen game's name, icon and launcher.json, its own settings, a Game list button back to the picker; the game's own icon (dm/icon.jpg); settings kept as soon as changed
+~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL); choices kept as soon as changed, in a JSON file of the app's own (SettingsStore); the game language defaults to the device's
 ~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout
 ~ dm/games/settings.py          # the memory kind: a GB slider (DM_APP_POOL)

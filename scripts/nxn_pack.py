@@ -1116,6 +1116,8 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
         pl['DMLanguage'] = os.environ.get('NXN_LANG', 'en-US')
         icon_src = game / 'icon.jpg'
         if icon_src.is_file():
+            # the game's icon as it is (256 px), for the launcher and the game picker of a package of several games, which show it larger than the app icon
+            shutil.copyfile(icon_src, A / 'dm' / 'icon.jpg')
             try:
                 from PIL import Image
                 im = Image.open(icon_src).convert('RGB')
