@@ -19,6 +19,7 @@ param(
     [switch]$Login,
     [switch]$PackOnly,
     [switch]$Overwrite,
+    [switch]$Full,                   # 整包裝（遊戲資料也放在 App 裡），不分開傳
     [switch]$NoPause
 )
 $ErrorActionPreference = 'Stop'
@@ -230,6 +231,7 @@ try {
     # plumesign 只有在沒給 --udid（選裝置）或帳號有好幾個團隊時才會問問題，其他時候可以直接在背景跑，記錄寫進這裡
     function Run-Sign($argv) {
         $ErrorActionPreference = 'Continue'
+        $env:RUST_LOG = 'info'   # plumesign 預設印除錯訊息（整段資料結構），只留一般進度
         $lines = New-Object Collections.Generic.List[string]
         & $plume @argv 2>&1 | ForEach-Object {
             $l = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
@@ -240,9 +242,66 @@ try {
         $script:signOut = $lines -join "`n"
         return $c
     }
-    $signArgs = @('sign', '--package', $Ipa, '--apple-id', '--register-and-install')
     $dev = Find-Device
     Write-Host "裝置：$($dev.Serial)（連線編號 $($dev.Id)）"
+
+    # 遊戲資料（romfs）分開放：裝一個不含 romfs 的小 App，資料放進 App 的 Documents/romfs（殼會先讀那裡，重裝也不會被清掉）。
+    # 之後每週重簽只傳小 App；資料只有第一次或遊戲換版本時才傳。合包和沒什麼 RomFS 的遊戲照舊整包裝。
+    $dataTool = Join-Path $here 'romfs_data.py'
+    # 安靜地跑一個程式、只拿 stdout 和結束碼（PowerShell 5.1 在 Stop 模式下會把 stderr 當成錯誤）
+    function Quiet($exe, $argv) {
+        $ErrorActionPreference = 'Continue'
+        $o = (& $exe @argv 2>$null | Out-String).Trim()
+        [pscustomobject]@{ Code = $LASTEXITCODE; Out = $o }
+    }
+    $py = (Quiet $Python @('-c', 'import sys; print(sys.executable)')).Out
+    # 傳檔工具 pymobiledevice3 的相依套件在 Python 3.14 還沒有現成的 Windows 版（要裝 C++ 編譯器），
+    # 所以找一個裝得起來的 Python（先找已經裝好的，再試 3.13 → 3.10），記在 work\python-transfer.txt
+    function Transfer-Python {
+        $saved = Join-Path $root 'python-transfer.txt'
+        $cands = @()
+        if (Test-Path $saved) { $cands += (Get-Content $saved -Raw).Trim() }
+        $cands += $py
+        foreach ($v in '3.13', '3.12', '3.11', '3.10') {
+            $r = Quiet 'py' @("-$v", '-c', 'import sys; print(sys.executable)')
+            if (-not $r.Code -and $r.Out) { $cands += $r.Out }
+        }
+        $cands = @($cands | Where-Object { $_ } | Select-Object -Unique)
+        foreach ($c in $cands) { if (-not (Quiet $c @('-c', 'import pymobiledevice3')).Code) { Set-Content $saved $c -Encoding UTF8; return $c } }
+        foreach ($c in $cands) {
+            Write-Host "安裝傳檔工具（pymobiledevice3，只要一次）：$c"
+            $code = RunExe $c @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--only-binary', ':all:', 'pymobiledevice3==11.45.0')
+            if (-not $code -and -not (Quiet $c @('-c', 'import pymobiledevice3')).Code) { Set-Content $saved $c -Encoding UTF8; return $c }
+        }
+        return ''
+    }
+    $signIpa = $Ipa; $split = $null
+    if (-not $Full -and (Test-Path $dataTool) -and $py) {
+        $r = Quiet $py @('-I', $dataTool, 'info', $Ipa)
+        if (-not $r.Code) { try { $split = $r.Out | ConvertFrom-Json } catch { $split = $null } }
+        if ($split -and -not $split.lite) { $split = $null }
+        if ($split) {
+            $tpy = Transfer-Python
+            if ($tpy) { $py = $tpy } else { Warn '傳檔工具裝不起來，這次整包裝'; $split = $null }
+        }
+        if ($split) {
+            $liteDir = Join-Path $root 'lite'
+            New-Item -ItemType Directory -Force -Path $liteDir | Out-Null
+            $stem = [IO.Path]::GetFileNameWithoutExtension($Ipa) -replace '[^\w.-]', '_'
+            $f = Get-Item -LiteralPath $Ipa
+            $lite = Join-Path $liteDir ("$stem-" + $f.Length + '-' + $f.LastWriteTimeUtc.Ticks + '.ipa')
+            if (-not (Test-Path -LiteralPath $lite)) {
+                # 同一個 IPA 的舊小包（IPA 改過了）先清掉
+                Get-ChildItem -LiteralPath $liteDir -Filter "$stem-*.ipa" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+                Write-Host "做不含遊戲資料的小 App（遊戲資料 $([int]($split.bytes / 1MB)) MB 另外傳）"
+                $c = RunExe $py @('-I', $dataTool, 'lite', $Ipa, "$lite.part")
+                if ($c) { Warn '做小 App 失敗，這次整包裝'; $split = $null; Remove-Item -LiteralPath "$lite.part" -ErrorAction SilentlyContinue }
+                else { Move-Item -LiteralPath "$lite.part" -Destination $lite -Force }
+            }
+            if ($split) { $signIpa = $lite; Write-Host "小 App：$([int]((Get-Item -LiteralPath $lite).Length / 1MB)) MB" }
+        }
+    }
+    $signArgs = @('sign', '--package', $signIpa, '--apple-id', '--register-and-install')
     $code = Run-Sign ($signArgs + @('--udid', $dev.Id))
     if ($code -and $script:signOut -match '(?i)device.{0,20}not found') {
         # 編號在拔插後會變，重新問一次再試
@@ -252,6 +311,16 @@ try {
     }
     if ($code -and $script:signOut -match '(?i)no account selected|please login|unauthori[sz]ed|re-?authenticat') {
         throw "Apple ID 要重新登入：按右上角的「登入 Apple ID」，登入後再按一次安裝。IPA 本身是好的：$Ipa"
+    }
+    if (-not $code -and $split) {
+        Step '傳遊戲資料到 iPad'
+        $c = RunExe $py @('-I', $dataTool, 'push', $Ipa, '--udid', $dev.Serial)
+        if ($c) {
+            throw @"
+App 裝好了，但遊戲資料沒傳完（結束碼 $c），現在打開會找不到遊戲檔。
+iPad 保持接著、解鎖，再按一次安裝就會重新傳一次。
+"@
+        }
     }
     if ($code) {
         throw @"

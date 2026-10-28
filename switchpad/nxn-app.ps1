@@ -1206,6 +1206,7 @@ $stepDefs = @(
     @{ Name = '打包';     Re = 'packing the IPA' },
     @{ Name = '準備合包'; Re = 'packing the IPA' },
     @{ Name = '簽章安裝'; Re = '==> 簽章並安裝' },
+    @{ Name = '傳資料';   Re = '==> 傳遊戲資料' },
     @{ Name = '合成';     Re = '==> 合成一包' },
     @{ Name = 'Python';   Re = '==> 檢查 Python' },
     @{ Name = '套件';     Re = '==> 安裝 Python 套件' },
@@ -1240,9 +1241,9 @@ function New-Job($g, $mode, $ipa, $out = '', $shellPath = '') {
         'pack'    { @('解包', '轉換程式', '著色器', '打包') }
         'mergepart' { @('解包', '轉換程式', '著色器', '準備合包') }
         'merge'   { @('合成') }
-        'merge+install' { @('合成', '檢查帳號', '簽章安裝') }
-        'install' { @('檢查帳號', '簽章安裝') }
-        default   { @('檢查帳號', '解包', '轉換程式', '著色器', '打包', '簽章安裝') }
+        'merge+install' { @('合成', '檢查帳號', '簽章安裝', '傳資料') }
+        'install' { @('檢查帳號', '簽章安裝', '傳資料') }
+        default   { @('檢查帳號', '解包', '轉換程式', '著色器', '打包', '簽章安裝', '傳資料') }
     }
     $pills = @()
     foreach ($n in $names) {
@@ -1360,7 +1361,8 @@ function Read-Log($job) {
                     $def = $stepDefs | Where-Object { $_.Name -eq $job.StepNames[$i] }
                     if ($l -match $def.Re) { Set-Step $job $i 'active'; break }
                 }
-                if ($l -notmatch '^\[?\d{4}-\d\d-\d\dT' -and $l.Length -lt 300) { $job.Msg.Text = ($l -replace '^\[\d\d:\d\d:\d\d\]\s*', '') }
+                # 卡片上只顯示看得懂的一行：略過時間戳開頭的記錄、和工具印出的資料結構片段（有大括號、或只是收尾的符號）
+                if ($l -notmatch '^\[?\d{4}-\d\d-\d\dT' -and $l -notmatch '[{}]|^[\]\)\},\s]+$' -and $l.Length -lt 200) { $job.Msg.Text = ($l -replace '^\[\d\d:\d\d:\d\d\]\s*', '') }
             }
         } finally { $fs.Dispose() }
     } catch { }
@@ -1438,9 +1440,8 @@ function Run-Games($dirs, $mode, $merge) {
             $g = $cards[$dir].Tag
             if ($mode -eq 'install') {
                 if (-not $g.Ipas.Count) { [void][Windows.MessageBox]::Show("$($g.Name) 還沒有打包好的 IPA，先用「打包並安裝」。", '沒有 IPA'); return }
-                # 優先裝上次裝過的那個，沒有就裝最新的
-                $last = Get-Installed | Where-Object { $_.Dir -eq $g.Dir -and (Test-Path -LiteralPath $_.Ipa) } | Select-Object -First 1
-                $jobs += @{ Game = $g; Mode = 'install'; Ipa = $(if ($last) { $last.Ipa } else { $g.Ipas[0].FullName }) }
+                # 裝資料夾裡最新打包的那個（重簽才是照安裝紀錄裝上次那個）
+                $jobs += @{ Game = $g; Mode = 'install'; Ipa = $g.Ipas[0].FullName }
             } else {
                 if (-not $g.Base) { [void][Windows.MessageBox]::Show("$($g.Name) 的資料夾裡沒有遊戲本體（NSP/XCI）。", '缺本體'); return }
                 $jobs += @{ Game = $g; Mode = $mode; Ipa = '' }

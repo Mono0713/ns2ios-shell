@@ -38,6 +38,9 @@ Switch Pad: the 全部續期 bar is always there once something is installed; ea
 Switch Pad: update and renew are small buttons in the title bar; right-click a game or a merged package to delete it (to the Recycle Bin)	Switch Pad：更新和续期改成标题栏的小按钮；右键游戏或合包可以删除（移到回收站）
 Switch Pad: renew-all in the bottom bar, app update in Settings, no count on the 合包 tab, tidier right-click menus	Switch Pad：全部重签放在底部栏，程序更新放进设置，合包分页不显示数字，右键菜单对齐
 Switch Pad: a merged package shows the same tiled icon as on the iPad; the renew button just says 重簽	Switch Pad：合包显示和 iPad 上一样的拼贴图标；重签按钮只写「重签」
+Switch Pad: install a single game without its game files inside the app and copy them into the app's Documents once, so a re-sign only sends the small app	Switch Pad：单款游戏安装时 App 里不放游戏资料，资料只传一次到 App 的 Documents，之后重签只传小 App
+Switch Pad: 只安裝 installs the newest IPA; quieter signing log on the card	Switch Pad：「只安装」装最新打包的 IPA；卡片上不再显示签名工具的除错讯息
+Switch Pad: only the game folders that changed are sent to the iPad again (new shaders, a game added to a package); a game taken out of a package has its files removed	Switch Pad：只重传有变动的游戏资料夹（新着色器、合包新加的游戏）；从合包拿掉的游戏会删掉它的资料
 Game picker: several games in one package start from a picker; the launcher goes back to it, keeps settings at once, and the game language follows the device	合包：选游戏画面（滑动切换、点图标开始、时间／Wi-Fi／电量）；设置画面可回到游戏清单、设置一改就保存、游戏语言默认跟随系统（繁中→简中→英文）；修正合包里 NVN 游戏没有着色器的红画面
 Shell: romfs and msl from Documents; phones: one player per phone, layout switch on the phone	壳：游戏文件和着色器可放在 Documents（重签不用重传）；手机手把：同一支手机只占一个玩家、15 秒没反应就移除，手机画面上可自己切换 Xbox／Switch 配置
 Game picker: the phones' QR code as the first tile, and a players card	合包选单：第一格就是手机的 QR code（绿点＝已连接数），打开后是 8 格玩家清单：按键会亮、点一下震动、切换 Xbox／Switch 配置、移除
