@@ -32,3 +32,4 @@ Switch Pad: 合成一包 with 只安裝 installs the newest merged package	Switc
 Switch Pad: games and merged packages in their own sections; a package opens to the games inside	Switch Pad：游戏库分成「游戏」和「合包」两区；点合包可以看里面有哪些游戏（图标、名称、版本），并直接安装
 Switch Pad: 遊戲 / 合包 tabs; name a package when merging, rename it later	Switch Pad：上方分成「游戏」「合包」两个分页；合成一包时可以取名，之后也能在合包里改名（iPad 上的名称跟着改，要重新安装才会变）
 Switch Pad: each new merged package gets its own bundle ID	Switch Pad：每个新合包有自己的 bundle ID，几个合包可以同时装在 iPad 上；改名时沿用原本的，存档不会掉
+Switch Pad: install runs in the background; the plumesign window opens only when it needs an answer	Switch Pad：安装在后台进行，只有 plumesign 需要回答问题时才开窗口

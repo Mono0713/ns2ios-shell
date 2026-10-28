@@ -230,8 +230,18 @@ try {
         Write-Host "問不到 Apple 行動裝置服務（$($_.Exception.Message)），交給 plumesign 自己選裝置"
     }
     $signArgs = @('sign', '--package', $Ipa, '--apple-id', '--register-and-install')
-    # plumesign 會在中途問問題（選裝置、要不要重設憑證），需要真的終端機；輸出被接管時會出現 "not a terminal"。
-    # 所以另開一個命令列視窗跑它，失敗時停住讓你看訊息。
+    # plumesign 只有在要問問題時（選裝置、要不要重設憑證、重新登入）才需要真的終端機，輸出被接管時問問題會出現 "not a terminal"。
+    # 所以知道裝到哪台時先在背景跑、記錄直接寫進這裡；失敗了才另開一個命令列視窗讓你回答，失敗時停住讓你看訊息。
+    function Run-SignQuiet($argv) {
+        $ErrorActionPreference = 'Continue'
+        & $plume @argv 2>&1 | ForEach-Object {
+            $l = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+            if ($l.Trim()) { Write-Host $l }
+        }
+        $c = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        return $c
+    }
     function Q($x) { "'" + ($x -replace "'", "''") + "'" }
     function Run-Sign($argv, $pause) {
         $onFail = if ($pause) { "Write-Host ''; Read-Host '安裝失敗，看完上面的訊息後按 Enter 關閉' | Out-Null" } else { "Start-Sleep 3" }
@@ -240,15 +250,15 @@ try {
         $proc = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"$inner`"" -Wait -PassThru
         return $proc.ExitCode
     }
-    Write-Host '（plumesign 會在另一個命令列視窗執行，如果它問問題請在那個視窗回答）'
     if ($muxId) {
-        $code = Run-Sign ($signArgs + @('--udid', $muxId)) $false
+        $code = Run-SignQuiet ($signArgs + @('--udid', $muxId))
         if ($code) {
-            # 編號在拔插後會變，萬一剛好對不上就不指定、讓它自己問一次
-            Warn "指定裝置失敗（結束碼 $code），改成讓 plumesign 自己問要裝到哪台"
+            # 編號在拔插後會變，或 plumesign 要問問題（重新登入、重設憑證），就開視窗讓你回答
+            Warn "背景安裝沒成功（結束碼 $code），改開 plumesign 視窗，如果它問問題請在那個視窗回答"
             $code = Run-Sign $signArgs $true
         }
     } else {
+        Write-Host '（plumesign 會在另一個命令列視窗執行，如果它問問題請在那個視窗回答）'
         $code = Run-Sign $signArgs $true
     }
     if ($code) {
