@@ -53,7 +53,7 @@
 
 ~ dm/host/loader.c              # module images from Frameworks/Guest.framework instead of the executable (+ dm_shell_modules); DM_GUEST names the chosen game's Guest_<title ID>.framework in a package of several games
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL); profile mem_map_limit too (DM_MEM_MAP_LIMIT)
-~ dm/host/hle_oe.c              # profile perf_mode overridable at run time (DM_PERF_BOOST): the shell compiles the placeholder's 0
+~ dm/host/hle_oe.c              # profile perf_mode overridable at run time (DM_PERF_BOOST): the shell compiles the placeholder's 0; logs the language the game is given (once)
 ~ dm/host/hle_os.c              # profile alloc_big_align overridable at run time (DM_ALLOC_BIG_ALIGN): likewise
 ~ dm/host/main.c                # profile game_args overridable at run time (DM_GAME_ARGS): the shell compiles the placeholder's empty string
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name (DM_MSL_DIR first); render_cond / tex_dyn_slots / tex_dirty_upload read from the environment
