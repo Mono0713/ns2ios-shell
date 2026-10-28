@@ -13,9 +13,9 @@ The layout it writes (main.m reads it):
 
 One process runs one game: the host maps the game's program at fixed addresses and cannot take it out again, so the
 launcher's Change game closes the app. Entries are copied as they are compressed in the source IPAs (no inflating and
-deflating again), so merging costs about the time it takes to copy the files. The bundle ID is the same for every merge
-(org.nxnative.games unless --bundle-id), so a merge with one more game installs over the last one and keeps the saves,
-which are Documents/save/<title ID>.
+deflating again), so merging costs about the time it takes to copy the files. The bundle ID is kept from the first merged
+IPA given (org.nxnative.games for a first merge, or --bundle-id), so a merge with one more game, or a new --name, installs
+over the last one and keeps the saves, which are Documents/save/<title ID>. Give each separate package its own --bundle-id.
 """
 import argparse, io, json, os, plistlib, re, struct, sys, time, zipfile, zlib
 
@@ -146,31 +146,93 @@ class Out:
         self.f.close()
 
 
-def grid_icon(icons):
-    """the app icon: up to four game icons in a 2 x 2 grid (Pillow), else the first game's icon as it is"""
-    icons = [i for i in icons if i]
-    if not icons: return None
-    try:
-        from PIL import Image
-    except ImportError:
-        return icons[0]
-    try:
-        ims = [Image.open(io.BytesIO(b)).convert('RGB') for b in icons[:4]]
-        if len(ims) == 1: out = ims[0].resize((180, 180), Image.LANCZOS)
-        else:
-            out = Image.new('RGB', (180, 180), (24, 24, 28)); cell, gap = 86, 3
-            for k, im in enumerate(ims):
-                out.paste(im.resize((cell, cell), Image.LANCZOS), (gap + (k % 2) * (cell + 2 * gap), gap + (k // 2) * (cell + 2 * gap)))
-        b = io.BytesIO(); out.save(b, 'PNG'); return b.getvalue()
-    except Exception as e:
-        say('note: the app icon is the first game\'s (%s)' % e)
-        return icons[0]
+# The app icon is drawn here with the standard library only (zlib), so it does not depend on Pillow being installed: the
+# game icons nxn_pack.py writes are plain 8-bit PNGs, which is all png_read needs to handle.
+def png_read(data):
+    """an 8-bit, non-interlaced PNG (grey, RGB, palette, grey+alpha or RGBA) as (width, height, rows of RGB bytes)"""
+    if data[:8] != b'\x89PNG\r\n\x1a\n': raise ValueError('not a PNG')
+    pos, idat, plte, trns = 8, b'', None, None
+    while pos < len(data):
+        n, kind = struct.unpack('>I4s', data[pos:pos + 8]); body = data[pos + 8:pos + 8 + n]; pos += 12 + n
+        if kind == b'IHDR': w, h, depth, ctype, _, _, inter = struct.unpack('>IIBBBBB', body)
+        elif kind == b'PLTE': plte = body
+        elif kind == b'tRNS': trns = body
+        elif kind == b'IDAT': idat += body
+        elif kind == b'IEND': break
+    if depth != 8 or inter: raise ValueError('PNG depth %d / interlace %d not handled' % (depth, inter))
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ctype]
+    raw, stride, prev, rows, i = zlib.decompress(idat), w * bpp, bytearray(w * bpp), [], 0
+    for _ in range(h):
+        f, line = raw[i], bytearray(raw[i + 1:i + 1 + stride]); i += 1 + stride
+        for x in range(stride):
+            a = line[x - bpp] if x >= bpp else 0; b = prev[x]; c = prev[x - bpp] if x >= bpp else 0
+            if f == 1: line[x] = (line[x] + a) & 255
+            elif f == 2: line[x] = (line[x] + b) & 255
+            elif f == 3: line[x] = (line[x] + (a + b) // 2) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        prev = line
+        if ctype == 2: rgb = bytes(line)
+        elif ctype == 6: rgb = bytes(v for k in range(w) for v in line[4 * k:4 * k + 3])
+        elif ctype == 0: rgb = bytes(v for v in line for _ in range(3))
+        elif ctype == 4: rgb = bytes(line[2 * k] for k in range(w) for _ in range(3))
+        else: rgb = b''.join(plte[3 * v:3 * v + 3] for v in line)
+        rows.append(rgb)
+    return w, h, rows
+
+
+def png_write(w, h, rows):
+    raw = b''.join(b'\0' + r for r in rows)
+    chunk = lambda k, d: struct.pack('>I', len(d)) + k + d + struct.pack('>I', zlib.crc32(k + d))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+
+
+def scaled(img, sw, sh):
+    """img (w, h, rows) resampled to sw x sh: each target pixel averages the source box it covers"""
+    w, h, rows = img; out = []
+    for ty in range(sh):
+        y0, y1 = ty * h // sh, max(ty * h // sh + 1, (ty + 1) * h // sh)
+        line = bytearray()
+        for tx in range(sw):
+            x0, x1 = tx * w // sw, max(tx * w // sw + 1, (tx + 1) * w // sw)
+            n = (y1 - y0) * (x1 - x0)
+            for ch in range(3):
+                line.append(sum(rows[y][3 * x + ch] for y in range(y0, y1) for x in range(x0, x1)) // n)
+        out.append(bytes(line))
+    return sw, sh, out
+
+
+def tile(img, cw, ch):
+    """img scaled to cover a cw x ch cell and cropped to its middle"""
+    w, h, _ = img; k = max(cw / w, ch / h)
+    sw, sh = max(cw, round(w * k)), max(ch, round(h * k))
+    _, _, rows = scaled(img, sw, sh); x0, y0 = (sw - cw) // 2, (sh - ch) // 2
+    return [r[3 * x0:3 * (x0 + cw)] for r in rows[y0:y0 + ch]]
+
+
+def grid_icon(icons, side=180, gap=4):
+    """the app icon: two games side by side, three as one large and two small, four in a 2 x 2 grid; one game's icon as it is"""
+    imgs = []
+    for b in icons:
+        if not b: continue
+        try: imgs.append(png_read(b))
+        except Exception as e: say('note: a game icon could not be read (%s)' % e)
+    if not imgs: return next((b for b in icons if b), None)
+    if len(imgs) == 1: return png_write(side, side, scaled(imgs[0], side, side)[2])
+    half = (side - gap) // 2; far = side - half
+    cells = ([(0, 0, half, side), (far, 0, half, side)] if len(imgs) == 2 else
+             [(0, 0, half, side), (far, 0, half, half), (far, far, half, half)] if len(imgs) == 3 else
+             [(0, 0, half, half), (far, 0, half, half), (0, far, half, half), (far, far, half, half)])
+    canvas = [bytearray(b'\x18\x18\x1c' * side) for _ in range(side)]
+    for (x, y, cw, ch), img in zip(cells, imgs):
+        for dy, r in enumerate(tile(img, cw, ch)): canvas[y + dy][3 * x:3 * (x + cw)] = r
+    return png_write(side, side, [bytes(r) for r in canvas])
 
 
 def png_resize(png, px):
     try:
-        from PIL import Image
-        b = io.BytesIO(); Image.open(io.BytesIO(png)).convert('RGB').resize((px, px), Image.LANCZOS).save(b, 'PNG'); return b.getvalue()
+        return png_write(px, px, scaled(png_read(png), px, px)[2])
     except Exception:
         return png
 
@@ -180,7 +242,8 @@ def main():
     ap.add_argument('ipas', nargs='+', help='IPAs from nxn_pack.py (or from this script)')
     ap.add_argument('-o', '--out', required=True, help='the merged IPA')
     ap.add_argument('--name', default='Switch 遊戲', help='the app name on the home screen')
-    ap.add_argument('--bundle-id', default='org.nxnative.games', help='keep it the same to install a new merge over the last one (saves stay)')
+    ap.add_argument('--bundle-id', help='keep it the same to install a new merge over the last one (saves stay); '
+                    'default: that of the first merged IPA given, else org.nxnative.games')
     ap.add_argument('--shell', help='a shell zip (or IPA) whose app to use instead of the first IPA\'s')
     a = ap.parse_args()
     for f in (sys.stdout, sys.stderr):   # a game name a Windows console's code page cannot show must not stop the merge
@@ -194,6 +257,9 @@ def main():
         for g in games_in(z):
             if g.tid in seen: die('%s is in both %s and %s: give each game once' % (g.name, seen[g.tid], z.filename))
             seen[g.tid] = z.filename; games.append(g)
+    if not a.bundle_id:   # a merge of a merged IPA (adding a game, renaming it) stays the same app on the iPad
+        a.bundle_id = next((b for b in (plistlib.loads(z.read(app_dir(z) + 'Info.plist')).get('CFBundleIdentifier', '') for z in zs)
+                            if not re.fullmatch(r'org\.nxnative\.[0-9a-f]{16}', b)), 'org.nxnative.games')
     if len(games) < 2: say('only one game: the picker is skipped and it starts at once')
 
     sz = zipfile.ZipFile(a.shell) if a.shell else zs[0]
@@ -225,7 +291,10 @@ def main():
         pl = plistlib.loads(sz.read(SA + 'Info.plist'))
         pl['CFBundleIdentifier'] = a.bundle_id
         pl['CFBundleDisplayName'] = a.name
-        pl['CFBundleName'] = a.name
+        # CFBundleName names the App ID that signing registers with Apple, which takes letters, digits and spaces only:
+        # install tools strip the rest, so a Chinese name leaves it empty and Apple refuses it ("No value was provided for
+        # the parameter 'appIdName'"). The home screen shows CFBundleDisplayName, which keeps the name as given.
+        pl['CFBundleName'] = re.sub(r'\s+', ' ', re.sub(r'[^A-Za-z0-9 ]', '', a.name)).strip() or 'NX Games'
         pl['CFBundleShortVersionString'] = pl['CFBundleVersion'] = time.strftime('%Y.%m%d.%H%M')
         pl.pop('DMLanguage', None)   # each game's own, from its game.json (main.m)
         icon = grid_icon([g.icon for g in games])
