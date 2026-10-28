@@ -38,5 +38,12 @@ dest = src / 'dm' / 'games' / ('%016X' % app)
 if dest.exists():
     shutil.rmtree(dest)
 shutil.copytree(pdir, dest)
+# The shader tables come out empty here (the shader split fills them while packing), but the packer reads an NVN shader
+# table with only its header as "this game has no NVN shaders" and takes the Vulkan route. Leave them out, as Boomerang
+# Fu's profile does, so the packer splits the shaders from the game files.
+for n in ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv'):
+    t = dest / n
+    if t.is_file() and len([l for l in t.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]) <= 1:
+        t.unlink()
 print('profile installed:', dest)
 print((dest / 'game.tsv').read_text(encoding='utf-8'))
