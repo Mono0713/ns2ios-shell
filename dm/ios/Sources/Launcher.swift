@@ -109,7 +109,7 @@ private func tr(_ s: String) -> String { zhHant ? zhText[s] ?? s : enText[s] ?? 
 // Players (shell_players.m): who plays which player, from the physical controllers and the phones, at the top of the launcher. The list comes from the
 // DMPlayersChanged notification and the changes go back as DMPlayersCommand (swap, kick, layout, add), so this file needs no C header
 struct PlayerRow: Identifiable, Equatable { let player, kind: Int; let label, name: String; let xbox: Bool; var id: Int { player } }
-private struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; var id: Int { index } }
+struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; var id: Int { index } }
 final class PlayersModel: ObservableObject {
     @Published var players: [PlayerRow] = []
     @Published var removed: [RemovedPad] = []
