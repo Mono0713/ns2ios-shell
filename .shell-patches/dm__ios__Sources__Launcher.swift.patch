@@ -748,7 +748,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,17 +754,23 @@
+@@ -137,21 +754,28 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
@@ -764,15 +764,22 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          guard let h = host else { return }
          host = nil
          model.apply()
-+        shell.apply()
-         h.dismiss(animated: false) { done() }
+-        h.dismiss(animated: false) { done() }
 -    }
++        shell.apply()
++        h.dismiss(animated: true) { done() }
 +    }, back: severalGames ? {
 +        guard let h = host else { return }
 +        host = nil
 +        fputs("launcher: back to the game list\n", stderr)
-+        h.dismiss(animated: false) { frontIosBackToPicker() }
++        h.dismiss(animated: true) { frontIosBackToPicker() }
 +    } : nil)
      let h = UIHostingController(rootView: view)
      h.modalPresentationStyle = .fullScreen
++    h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
      host = h
+-    parent.present(h, animated: false)
++    parent.present(h, animated: true)
+     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
+     return true
+ }

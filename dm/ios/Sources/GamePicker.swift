@@ -146,6 +146,7 @@ private struct GameTile: View {
         .shadow(color: .black.opacity(0.5), radius: focused ? 18 : 8, y: focused ? 10 : 4)
         .scaleEffect(focused ? 1 : 0.84)
         .opacity(focused ? 1 : 0.65)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
     }
 }
 
@@ -245,6 +246,7 @@ private struct PickerView: View {
         if let game {
             VStack(spacing: 6) {
                 Text(game.name).font(.title.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+                    .contentTransition(.opacity)
                 HStack(spacing: 12) {
                     if !game.version.isEmpty { Text(tr("版本 ", "Version ") + game.version) }
                     if let p = game.played { Text(tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named).locale(Locale(identifier: zhHant ? "zh-Hant" : "en")))) }
@@ -252,6 +254,7 @@ private struct PickerView: View {
                 .font(.callout).foregroundStyle(.white.opacity(0.7))
             }
             .padding(.horizontal, 32)
+            .animation(.easeInOut(duration: 0.25), value: game.id)   // the name and version cross-fade as the row slides
         }
     }
 
@@ -298,15 +301,16 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     let model = PickerModel()
     let h = UIHostingController(rootView: PickerView(m: model))
     h.modalPresentationStyle = .fullScreen
+    h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
     model.start = { [weak h] game in
         UserDefaults.standard.set(Date(), forKey: "picker.played." + game.id)
         fputs("picker: \(game.id) (\(game.name))\n", stderr)
         NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
         DispatchQueue.main.async {   // let the loading veil draw before main.m reads the game's files
             game.id.withCString { shellGameChoose($0) }
-            h?.dismiss(animated: false) { done() }
+            h?.dismiss(animated: true) { done() }
         }
     }
-    parent.present(h, animated: false)
+    parent.present(h, animated: true)
     fputs("picker: \(model.games.count) games shown\n", stderr)
 }

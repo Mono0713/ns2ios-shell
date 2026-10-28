@@ -764,17 +764,18 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         host = nil
         model.apply()
         shell.apply()
-        h.dismiss(animated: false) { done() }
+        h.dismiss(animated: true) { done() }
     }, back: severalGames ? {
         guard let h = host else { return }
         host = nil
         fputs("launcher: back to the game list\n", stderr)
-        h.dismiss(animated: false) { frontIosBackToPicker() }
+        h.dismiss(animated: true) { frontIosBackToPicker() }
     } : nil)
     let h = UIHostingController(rootView: view)
     h.modalPresentationStyle = .fullScreen
+    h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
     host = h
-    parent.present(h, animated: false)
+    parent.present(h, animated: true)
     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
     return true
 }
