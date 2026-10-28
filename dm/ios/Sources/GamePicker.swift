@@ -235,7 +235,6 @@ private struct PickerView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
-            Text("\(m.games.count)").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
             StatusBar()
         }
