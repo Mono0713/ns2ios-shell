@@ -69,6 +69,7 @@ final class SettingsStore {
     func set(_ v: Any, forKey k: String) {
         if let a = d[k] as? NSObject, let b = v as? NSObject, a == b { return }   // a slider sends the same value many times
         d[k] = v; write()
+        fputs("launcher: kept \(k.dropFirst("launcher.".count))=\(v) in \(url.lastPathComponent)\n", stderr)
     }
     func removeObject(forKey k: String) { if d.removeValue(forKey: k) != nil { write() } }
 }
@@ -112,11 +113,16 @@ final class LauncherModel: ObservableObject {
         if let i = settings.firstIndex(where: { $0.env == "DM_LANG" }), let d = deviceLanguage(settings[i]) { settings[i].def = d }
         self.settings = settings
         fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
+        // Read every kept choice before assigning any: each assignment to values saves them all, and saving with the rest still unread
+        // would store their defaults, deleting the choices about to be read (the language, and every setting after the first, came back as defaults)
+        var loaded: [String: String] = [:]
         for s in settings {
-            if fromFile.contains(s.env), let v = ProcessInfo.processInfo.environment[s.env] { values[s.env] = v; continue }
+            if fromFile.contains(s.env), let v = ProcessInfo.processInfo.environment[s.env] { loaded[s.env] = v; continue }
             let saved = defaults.string(forKey: "launcher." + s.env)
-            values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
+            loaded[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
+            if let saved, !s.isDefault(loaded[s.env]!) { fputs("launcher: \(s.env)=\(saved) kept from before\n", stderr) }
         }
+        values = loaded
     }
 
     var sections: [String] {
@@ -126,10 +132,12 @@ final class LauncherModel: ObservableObject {
 
     // Reset every launcher choice to the game's defaults; an env file's values stay.
     func reset() {
+        var v = values
         for s in settings {
             defaults.removeObject(forKey: "launcher." + s.env)
-            if !fromFile.contains(s.env) { values[s.env] = s.def }
+            if !fromFile.contains(s.env) { v[s.env] = s.def }
         }
+        values = v
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
 
