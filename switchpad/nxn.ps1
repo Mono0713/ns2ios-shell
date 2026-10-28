@@ -212,9 +212,9 @@ try {
             }
         } finally { $tcp.Close() }
     }
-    $muxId = $null
-    try {
-        $devs = @(Get-MuxDevices)
+    function Find-Device {
+        try { $devs = @(Get-MuxDevices) }
+        catch { throw "問不到 Apple 行動裝置服務（$($_.Exception.Message)）。請安裝 Apple Devices 或 iTunes。" }
         $norm = { param($x) ($x -replace '-', '').ToUpper() }
         if ($Udid) { $pick = @($devs | Where-Object { (& $norm $_.Serial) -eq (& $norm $Udid) }) }
         else {
@@ -223,43 +223,35 @@ try {
             if (-not $pick) { $pick = $devs }
             $pick = @($pick | Group-Object Serial | ForEach-Object { $_.Group[0] })
         }
-        if ($pick.Count -eq 1) { $muxId = $pick[0].Id; Write-Host "裝置：$($pick[0].Serial)（連線編號 $muxId）" }
-        elseif ($pick.Count -gt 1) { Write-Host "接著 $($pick.Count) 台 Apple 裝置，請在 plumesign 視窗選一台" }
-        else { Write-Host '找不到接著的 iPad（要用 USB 接著、解鎖），交給 plumesign 自己找' }
-    } catch {
-        Write-Host "問不到 Apple 行動裝置服務（$($_.Exception.Message)），交給 plumesign 自己選裝置"
+        if (-not $pick) { throw '找不到 iPad：請用 USB 接上並解鎖，第一次要在 iPad 上按「信任」。' }
+        if ($pick.Count -gt 1) { Warn "接著 $($pick.Count) 台 Apple 裝置，裝到第一台（$($pick[0].Serial)）；要指定請在設定填 UDID" }
+        $pick[0]
     }
-    $signArgs = @('sign', '--package', $Ipa, '--apple-id', '--register-and-install')
-    # plumesign 只有在要問問題時（選裝置、要不要重設憑證、重新登入）才需要真的終端機，輸出被接管時問問題會出現 "not a terminal"。
-    # 所以知道裝到哪台時先在背景跑、記錄直接寫進這裡；失敗了才另開一個命令列視窗讓你回答，失敗時停住讓你看訊息。
-    function Run-SignQuiet($argv) {
+    # plumesign 只有在沒給 --udid（選裝置）或帳號有好幾個團隊時才會問問題，其他時候可以直接在背景跑，記錄寫進這裡
+    function Run-Sign($argv) {
         $ErrorActionPreference = 'Continue'
+        $lines = New-Object Collections.Generic.List[string]
         & $plume @argv 2>&1 | ForEach-Object {
             $l = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
-            if ($l.Trim()) { Write-Host $l }
+            if ($l.Trim()) { Write-Host $l; $lines.Add($l) }
         }
         $c = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
+        $script:signOut = $lines -join "`n"
         return $c
     }
-    function Q($x) { "'" + ($x -replace "'", "''") + "'" }
-    function Run-Sign($argv, $pause) {
-        $onFail = if ($pause) { "Write-Host ''; Read-Host '安裝失敗，看完上面的訊息後按 Enter 關閉' | Out-Null" } else { "Start-Sleep 3" }
-        $inner = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; & $(Q $plume) $(($argv | ForEach-Object { Q $_ }) -join ' '); " +
-                 "`$c = `$LASTEXITCODE; if (`$c) { $onFail }; exit `$c"
-        $proc = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"$inner`"" -Wait -PassThru
-        return $proc.ExitCode
+    $signArgs = @('sign', '--package', $Ipa, '--apple-id', '--register-and-install')
+    $dev = Find-Device
+    Write-Host "裝置：$($dev.Serial)（連線編號 $($dev.Id)）"
+    $code = Run-Sign ($signArgs + @('--udid', $dev.Id))
+    if ($code -and $script:signOut -match '(?i)device.{0,20}not found') {
+        # 編號在拔插後會變，重新問一次再試
+        $dev = Find-Device
+        Warn "裝置編號變了，改用 $($dev.Id) 再試一次"
+        $code = Run-Sign ($signArgs + @('--udid', $dev.Id))
     }
-    if ($muxId) {
-        $code = Run-SignQuiet ($signArgs + @('--udid', $muxId))
-        if ($code) {
-            # 編號在拔插後會變，或 plumesign 要問問題（重新登入、重設憑證），就開視窗讓你回答
-            Warn "背景安裝沒成功（結束碼 $code），改開 plumesign 視窗，如果它問問題請在那個視窗回答"
-            $code = Run-Sign $signArgs $true
-        }
-    } else {
-        Write-Host '（plumesign 會在另一個命令列視窗執行，如果它問問題請在那個視窗回答）'
-        $code = Run-Sign $signArgs $true
+    if ($code -and $script:signOut -match '(?i)no account selected|please login|unauthori[sz]ed|re-?authenticat') {
+        throw "Apple ID 要重新登入：按右上角的「登入 Apple ID」，登入後再按一次安裝。IPA 本身是好的：$Ipa"
     }
     if ($code) {
         throw @"
@@ -267,6 +259,7 @@ try {
 常見原因：
   - iPad 沒解鎖，或還沒按「信任這台電腦」
   - 免費 Apple ID 的憑證 7 天就過期、同時最多 3 個 App，先在 iPad 上刪掉一個舊的
+  - 上面的記錄有 plumesign 的原始訊息
   - 還是不行就用 工具\Impactor-windows-x86_64-portable.exe 手動拖這個 IPA 進去
 "@
     }

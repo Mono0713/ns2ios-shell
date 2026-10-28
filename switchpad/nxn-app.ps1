@@ -1029,10 +1029,88 @@ function Update-Account {
         else { $ui.Account.Text = '還沒登入 Apple ID'; $ui.AcctDot.Fill = Brush '#FF453A'; $ui.Login.Content = '登入 Apple ID' }
     } catch { $ui.Account.Text = '無法確認 Apple ID' }
 }
-$loginProc = $null
-$ui.Login.Add_Click({
-    # 密碼和雙重驗證碼要互動輸入，所以開一個看得到的命令列視窗
-    $script:loginProc = Start-Process powershell.exe -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script`"", '-Login') })
+# 在 app 裡登入：plumesign 在背景跑，密碼和雙重驗證碼從它的標準輸入餵進去（不放在命令列上），輸出寫進檔案再輪詢
+function Show-Login {
+    $lx = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="420" SizeToContent="Height" Background="#000000" Foreground="White" ResizeMode="NoResize"
+        FontFamily="Microsoft JhengHei UI" FontSize="14" WindowStartupLocation="CenterOwner" Title="Apple ID">
+  <Window.Resources>__RES__</Window.Resources>
+  <StackPanel Margin="22">
+    <TextBlock Text="登入 Apple ID" FontSize="22" FontWeight="Bold" Margin="0,0,0,14"/>
+    <TextBlock x:Name="UserLbl" Text="Apple ID" Foreground="#8E8E93" Margin="0,0,0,4"/>
+    <TextBox x:Name="User" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="16" CaretBrush="White"/>
+    <TextBlock x:Name="PassLbl" Text="密碼" Foreground="#8E8E93" Margin="0,12,0,4"/>
+    <PasswordBox x:Name="Pass" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="16" CaretBrush="White"/>
+    <TextBlock x:Name="CodeLbl" Text="驗證碼（看 iPad 或 iPhone 上跳出的 6 位數）" Foreground="#8E8E93" Margin="0,12,0,4" Visibility="Collapsed"/>
+    <TextBox x:Name="Code" Background="#2C2C2E" Foreground="White" BorderThickness="0" Padding="8,6" FontSize="20" CaretBrush="White" Visibility="Collapsed"/>
+    <TextBlock x:Name="Status" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,12,0,0"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="Cancel" Content="取消" IsCancel="True" Margin="0,0,8,0"/>
+      <Button x:Name="Ok" Content="登入" Style="{StaticResource Primary}" IsDefault="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+'@
+    $lw = Load-Window $lx
+    $lw.Owner = $win
+    $f = @{}; foreach ($n in 'User','Pass','UserLbl','PassLbl','CodeLbl','Code','Status','Ok','Cancel') { $f[$n] = $lw.FindName($n) }
+    $st = @{ Proc = $null; Log = Join-Path $work 'login.log'; Asked = $false; Done = $false }
+    $send = { param($line)
+        $b = [Text.Encoding]::UTF8.GetBytes($line + "`n")
+        $st.Proc.StandardInput.BaseStream.Write($b, 0, $b.Length); $st.Proc.StandardInput.BaseStream.Flush() }
+    $lt = New-Object Windows.Threading.DispatcherTimer
+    $lt.Interval = [TimeSpan]::FromMilliseconds(400)
+    $lt.Add_Tick({
+        $txt = ''
+        try { $fs = New-Object IO.FileStream($st.Log, 'Open', 'Read', 'ReadWrite'); $sr = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8); $txt = $sr.ReadToEnd(); $sr.Dispose() } catch { }
+        if (-not $st.Asked -and $txt -match '(?i)enter (the )?(2fa )?code') {
+            $st.Asked = $true
+            $f.CodeLbl.Visibility = 'Visible'; $f.Code.Visibility = 'Visible'; $f.Code.Text = ''
+            $f.Ok.Content = '送出'; $f.Ok.IsEnabled = $true
+            $f.Status.Text = ''
+            $f.Code.Focus() | Out-Null
+        }
+        if ($st.Proc.HasExited) {
+            $lt.Stop()
+            if ($st.Proc.ExitCode -eq 0) { $st.Done = $true; $lw.DialogResult = $true; return }
+            $last = @($txt -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 3
+            $f.Status.Text = "登入失敗：$(($last -join ' ').Trim())"
+            $f.Status.Foreground = Brush '#FF453A'
+            $f.User.IsEnabled = $true; $f.Pass.IsEnabled = $true
+            $f.CodeLbl.Visibility = 'Collapsed'; $f.Code.Visibility = 'Collapsed'
+            $f.Ok.Content = '登入'; $f.Ok.IsEnabled = $true; $st.Proc = $null; $st.Asked = $false
+        }
+    })
+    $f.Ok.Add_Click({
+        if ($st.Proc -and $st.Asked) {
+            $c = $f.Code.Text.Trim()
+            if (-not $c) { return }
+            & $send $c
+            $f.Ok.IsEnabled = $false; $f.Status.Foreground = Brush '#8E8E93'; $f.Status.Text = '確認驗證碼…'
+            return
+        }
+        $u = $f.User.Text.Trim(); $pw = $f.Pass.Password
+        if (-not $u -or -not $pw) { $f.Status.Text = '請輸入 Apple ID 和密碼'; return }
+        Remove-Item -LiteralPath $st.Log -ErrorAction SilentlyContinue
+        $psi = New-Object Diagnostics.ProcessStartInfo 'cmd.exe'
+        $psi.Arguments = "/d /c `"`"$plume`" account login --username `"$($u -replace '"', '')`" > `"$($st.Log)`" 2>&1`""
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.RedirectStandardInput = $true
+        $psi.EnvironmentVariables['RUST_LOG'] = 'info'
+        $st.Proc = [Diagnostics.Process]::Start($psi)
+        # plumesign 先問密碼（沒給 --password 時從標準輸入讀一行）
+        & $send $pw
+        $f.User.IsEnabled = $false; $f.Pass.IsEnabled = $false; $f.Ok.IsEnabled = $false
+        $f.Status.Foreground = Brush '#8E8E93'; $f.Status.Text = '登入中…'
+        $lt.Start()
+    })
+    $lw.Add_Closed({ $lt.Stop(); if ($st.Proc -and -not $st.Proc.HasExited) { try { $st.Proc.Kill() } catch { } }
+                     Remove-Item -LiteralPath $st.Log -ErrorAction SilentlyContinue })
+    $lw.Add_ContentRendered({ $f.User.Focus() | Out-Null })
+    [void]$lw.ShowDialog()
+    if ($st.Done) { Update-Account }
+}
+$ui.Login.Add_Click({ Show-Login })
 $win.Add_ContentRendered({ Update-Account; Check-Updates })
 
 # ---------------------------------------------------------------- 執行：一次一款，每款一個進度列
@@ -1420,7 +1498,6 @@ $ui.Settings.Add_Click({
     }
 })
 
-$win.Add_Activated({ if ($script:loginProc -and $script:loginProc.HasExited) { $script:loginProc = $null; Update-Account } })
 $win.Add_Closing({ param($s, $e)
     if ($state.Proc -and -not $state.Proc.HasExited) {
         $r = [Windows.MessageBox]::Show('還有工作在跑，關掉會停止它。確定要關？', '還在執行', 'YesNo')
