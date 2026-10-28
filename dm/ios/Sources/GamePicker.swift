@@ -103,11 +103,9 @@ private final class StatusModel: ObservableObject {
 
 private struct StatusBar: View {
     @StateObject private var s = StatusModel()
-    @State private var now = Date()
-    private let clock = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     var body: some View {
         HStack(spacing: 14) {
-            Text(now, style: .time).monospacedDigit()
+            TimelineView(.everyMinute) { t in Text(t.date, style: .time).monospacedDigit() }   // redrawn on each new minute
             Image(systemName: !s.online ? "wifi.slash" : s.wifi ? "wifi" : "network")
                 .opacity(s.online ? 1 : 0.5)
                 .accessibilityLabel(s.online ? tr("已連線", "Online") : tr("未連線", "Offline"))
@@ -119,7 +117,6 @@ private struct StatusBar: View {
         }
         .font(.title3.weight(.medium))
         .foregroundStyle(.white.opacity(0.85))
-        .onReceive(clock) { now = $0 }
     }
 }
 
