@@ -24,9 +24,48 @@ if work.exists():
 ex = work / 'extract'
 r = subprocess.run([str(Path(tools) / 'nx_extract.exe'), keys, base, upd, str(ex), '--manifest'],
                    capture_output=True, text=True, encoding='utf-8', errors='replace')
-print(r.stdout[-2000:], r.stderr[-2000:])
+
+
+def key_problem(text, keys_path):
+    """A plain explanation (Traditional Chinese, for Switch Pad's log) of an extraction that failed for want of a key, or None.
+    LibHac's messages: 'Missing NCA title key.' (no ticket for the NCA's rights ID: the NSP has no ticket, or only a
+    personalized one, which nx_extract skips with a [RED] line) and 'Unable to decrypt title key.' (the ticket is there but
+    prod.keys has no titlekek for the NCA's key generation: keys dumped from older firmware than the game needs)."""
+    names = []
+    try:
+        names = re.findall(r'(?im)^\s*(titlekek_[0-9a-f]{2})\s*=', Path(keys_path).read_text(encoding='utf-8', errors='replace'))
+    except OSError:
+        pass
+    newest = max(names, key=lambda n: int(n[9:], 16)) if names else None
+    if 'Unable to decrypt title key' in text or 'Unable to decrypt NCA0 key area' in text or 'Unable to decrypt NCA section' in text:
+        return ('解包失敗：prod.keys 太舊，解不開這款遊戲。\n'
+                '這款遊戲需要比你的 prod.keys 更新的金鑰' + ('（你的 prod.keys 最新只到 %s）' % newest if newest else '') + '。\n'
+                '怎麼解決：把 Switch 更新到最新系統版本，再用 Lockpick_RCM 重新匯出 prod.keys，'
+                '換掉 ' + str(keys_path) + '，然後重新打包。')
+    if 'is not a common ticket' in text:
+        return ('解包失敗：這個 NSP 裡的票證（ticket）是綁定你主機帳號的個人票證，打包器沒辦法用它解密。\n'
+                '怎麼解決：重新從 Switch 匯出這款遊戲，匯出工具選「移除個人化票證／common ticket」的選項'
+                '（例如 DBI 或 NXDumpTool 的設定），再放回遊戲資料夾重新打包。')
+    if 'Missing NCA title key' in text:
+        return ('解包失敗：這個 NSP 裡沒有解密需要的票證（.tik），可能是匯出時漏掉或檔案不完整。\n'
+                '怎麼解決：重新從 Switch 匯出這款遊戲（含票證），或確認本體、更新檔都是完整的 NSP，再重新打包。')
+    if 'header key is incorrect' in text:
+        return ('解包失敗：prod.keys 不完整或不是這台機器匯出的，連遊戲檔頭都解不開。\n'
+                '怎麼解決：用 Lockpick_RCM 重新匯出完整的 prod.keys，換掉 ' + str(keys_path) + ' 後重新打包。')
+    return None
+
+
+out = r.stdout + '\n' + r.stderr
 if r.returncode:
+    hint = key_problem(out, keys)
+    if hint:
+        sys.exit(hint)
+    # the exception's own message is at the start of stderr, before its stack trace: show both ends
+    print(r.stdout[-2000:])
+    err = r.stderr.splitlines()
+    print('\n'.join(err[:8] + (['...'] if len(err) > 16 else []) + err[max(8, len(err) - 8):]))
     sys.exit('nx_extract failed')
+print(r.stdout[-2000:], r.stderr[-2000:])
 F = pg.facts_of(ex / 'ExeFS', ex / 'romfs_manifest.tsv')
 dv = re.search(r'display version (\S+)', r.stdout)
 # the title ID: given (Switch Pad passes the one the packer asked for), else from the file name's [0100…]

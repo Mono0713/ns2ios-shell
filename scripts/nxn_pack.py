@@ -496,6 +496,29 @@ def build_nx_extract(dotnet, work, tools_dir=None):
     return exe
 
 
+def key_hint(keys):
+    """run() hint for nx_extract: an extraction that failed for want of a key, said plainly (in Traditional Chinese, the
+    language Switch Pad shows) instead of LibHac's stack trace. LibHac's messages: 'Unable to decrypt title key.' (prod.keys
+    has no titlekek for the game's key generation: keys from older firmware), 'Missing NCA title key.' (no ticket for the
+    NCA, or only a personalized one, which nx_extract skips with a [RED] line). switchpad/make_provisional.py says the same."""
+    def hint(text):
+        try: names = re.findall(r'(?im)^\s*(titlekek_[0-9a-f]{2})\s*=', Path(keys).read_text(encoding='utf-8', errors='replace'))
+        except OSError: names = []
+        newest = max(names, key=lambda n: int(n[9:], 16)) if names else None
+        if 'Unable to decrypt title key' in text or 'Unable to decrypt NCA0 key area' in text or 'Unable to decrypt NCA section' in text:
+            return ('解包失敗：prod.keys 太舊，解不開這款遊戲' + ('（最新只到 %s）' % newest if newest else '') + '。'
+                    '把 Switch 更新到最新系統，用 Lockpick_RCM 重新匯出 prod.keys，換掉 %s 後重新打包。' % keys)
+        if 'is not a common ticket' in text:
+            return ('解包失敗：NSP 裡的票證是綁定主機帳號的個人票證，無法解密。'
+                    '重新匯出這款遊戲，匯出工具選移除個人化票證（common ticket）的選項，再重新打包。')
+        if 'Missing NCA title key' in text:
+            return '解包失敗：NSP 裡沒有解密需要的票證（.tik）。重新從 Switch 匯出這款遊戲（含票證）後再打包。'
+        if 'header key is incorrect' in text:
+            return '解包失敗：prod.keys 不完整，連檔頭都解不開。用 Lockpick_RCM 重新匯出完整的 prod.keys，換掉 %s 後重新打包。' % keys
+        return None
+    return hint
+
+
 def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
     ex = work / 'extract'
     ex.mkdir(parents=True, exist_ok=True)
@@ -507,7 +530,7 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         tmp = ex / (ver + '.partial')
         shutil.rmtree(tmp, ignore_errors=True)
         run([nx, keys, base, upd if upd else '-', tmp] + (['--allow-damaged'] if allow_damaged else []), log=work / 'logs' / ('extract_%s.log' % ver),
-            what='extracting %s (%s)' % (ver, base.name))
+            what='extracting %s (%s)' % (ver, base.name), hint=key_hint(keys))
         # A previous run can leave <ver> behind without an ExeFS (an interrupted extraction, or one made before the folder
         # held an update as well), and a rename onto a non-empty directory fails on Windows. Clear it and take the new one.
         if dst.exists(): shutil.rmtree(dst, ignore_errors=True)

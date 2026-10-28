@@ -1104,7 +1104,8 @@ $checkTimer.Add_Tick({
     if (-not $state.Running) { Update-Notice }
 })
 function Set-Keys($path) {
-    Copy-Item -LiteralPath $path -Destination (Join-Path $work 'prod.keys') -Force
+    $dst = Join-Path $work 'prod.keys'
+    if ((Resolve-Path -LiteralPath $path).Path -ne $dst) { Copy-Item -LiteralPath $path -Destination $dst -Force }
     Get-ChildItem -Path $coverDir -Filter '*.none' -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
     Build-Library
 }
@@ -1712,6 +1713,17 @@ $ui.Settings.Add_Click({
         <CheckBox x:Name="Overwrite" Content="打包時蓋掉資料夾裡原本的 IPA" Foreground="White" Margin="0,12,0,0"/>
       </StackPanel>
     </Border>
+    <TextBlock Text="金鑰" Foreground="#8E8E93" Margin="4,16,0,6"/>
+    <Border Background="#1C1C1E" CornerRadius="12" Padding="14">
+      <StackPanel>
+        <DockPanel>
+          <Button x:Name="ChangeKeys" DockPanel.Dock="Right" Content="更換"/>
+          <TextBlock x:Name="KeysText" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
+        </DockPanel>
+        <TextBlock Foreground="#8E8E93" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+                   Text="打包要用你自己 Switch 匯出的 prod.keys。新遊戲解包失敗、說 prod.keys 太舊時，把 Switch 更新到最新系統，用 Lockpick_RCM 重新匯出，再按「更換」選新的檔案（也可以直接拖進主視窗）。"/>
+      </StackPanel>
+    </Border>
     <TextBlock Text="Switch Pad" Foreground="#8E8E93" Margin="4,16,0,6"/>
     <Border Background="#1C1C1E" CornerRadius="12" Padding="14">
       <DockPanel>
@@ -1743,6 +1755,21 @@ $ui.Settings.Add_Click({
     }
     $sw.FindName('Udid').Text = $cfg.Udid
     $sw.FindName('Overwrite').IsChecked = [bool]$cfg.Overwrite
+    # 金鑰：現在用哪個 prod.keys（Find-Keys 的順序），最新到第幾代 titlekek（只讀名稱，不讀值）
+    $showKeys = {
+        $k = Find-Keys
+        $sw.FindName('KeysText').Text = if (-not $k) { '找不到 prod.keys' } else {
+            $gens = @(Select-String -LiteralPath $k -Pattern '^\s*titlekek_([0-9a-fA-F]{2})\s*=' -ErrorAction SilentlyContinue | ForEach-Object { [Convert]::ToInt32($_.Matches[0].Groups[1].Value, 16) })
+            $newest = if ($gens) { [int]($gens | Measure-Object -Maximum).Maximum } else { $null }
+            "$k`n" + $(if ($null -ne $newest) { "金鑰最新到第 $($newest + 1) 代（titlekek_$('{0:x2}' -f $newest)）" } else { '這個檔案裡沒有 titlekek，可能不完整' })
+        }
+    }
+    & $showKeys
+    $sw.FindName('ChangeKeys').Add_Click({
+        $dlg = New-Object Microsoft.Win32.OpenFileDialog
+        $dlg.Title = '選擇 prod.keys'; $dlg.Filter = 'prod.keys|*.keys|所有檔案|*.*'
+        if ($dlg.ShowDialog($sw)) { Set-Keys $dlg.FileName; & $showKeys }
+    })
     $sw.FindName('OpenGames').Add_Click({ Start-Process explorer.exe "`"$gamesDir`"" })
     $sw.FindName('OpenLogs').Add_Click({ Start-Process explorer.exe "`"$logDir`"" })
     if ($here -ne $base -or -not (Test-Path (Join-Path $here 'nxn-gui.ps1'))) { $sw.FindName('OldGui').Visibility = 'Collapsed' }   # 舊版視窗只認得最上層的 遊戲\
