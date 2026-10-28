@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,310 @@
+@@ -3,10 +3,313 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -17,7 +17,10 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +private var gameInfo: [String: Any] {
 +    gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
 +}
-+var gameDefaults: UserDefaults { ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard }
++var gameDefaults: SettingsStore {   // LauncherSettings.swift; earlier builds kept these in UserDefaults (the suite game.<title ID>, or the app's own)
++    let g = ProcessInfo.processInfo.environment["DM_SHELL_GAME"]
++    return SettingsStore.named(g ?? "app", from: g.flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard)
++}
 +@_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
 +private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 +private func info(_ key: String) -> Any? {
@@ -313,7 +316,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +318,31 @@
+@@ -18,17 +321,31 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -347,7 +350,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +352,7 @@
+@@ -38,7 +355,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -356,7 +359,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +365,22 @@
+@@ -51,8 +368,22 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -380,7 +383,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,43 +392,219 @@
+@@ -64,43 +395,219 @@
      }
  }
  
@@ -607,7 +610,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,24 +612,137 @@
+@@ -108,24 +615,137 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -748,7 +751,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +754,28 @@
+@@ -137,21 +757,28 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }

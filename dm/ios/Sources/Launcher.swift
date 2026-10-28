@@ -14,7 +14,10 @@ private var gameRoot: URL? { ProcessInfo.processInfo.environment["DM_SHELL_GAME_
 private var gameInfo: [String: Any] {
     gameRoot.flatMap { try? Data(contentsOf: $0.appendingPathComponent("game.json")) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
 }
-var gameDefaults: UserDefaults { ProcessInfo.processInfo.environment["DM_SHELL_GAME"].flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard }
+var gameDefaults: SettingsStore {   // LauncherSettings.swift; earlier builds kept these in UserDefaults (the suite game.<title ID>, or the app's own)
+    let g = ProcessInfo.processInfo.environment["DM_SHELL_GAME"]
+    return SettingsStore.named(g ?? "app", from: g.flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard)
+}
 @_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
 private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 private func info(_ key: String) -> Any? {

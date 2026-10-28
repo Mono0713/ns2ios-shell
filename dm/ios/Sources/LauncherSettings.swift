@@ -34,6 +34,45 @@ struct Setting: Decodable, Identifiable {
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
+// Where the launcher keeps a game's choices: Library/Application Support/launcher/<name>.json (name: the title ID in a package of several games,
+// "app" otherwise), written whole as each choice changes. A file of the app's own rather than UserDefaults: those writes go to a system process
+// that the game, once it runs, may keep from getting them, and choices were found missing after the app was closed. The UserDefaults ones of
+// earlier builds are taken over the first time
+final class SettingsStore {
+    private static var open: [String: SettingsStore] = [:]
+    static func named(_ name: String, from old: UserDefaults) -> SettingsStore {
+        if let s = open[name] { return s }
+        let s = SettingsStore(name, from: old); open[name] = s; return s
+    }
+    private let url: URL
+    private var d: [String: Any] = [:]
+    private init(_ name: String, from old: UserDefaults) {
+        let dir = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory()))
+            .appendingPathComponent("launcher", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        url = dir.appendingPathComponent(name + ".json")
+        if let data = try? Data(contentsOf: url), let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            d = j
+            fputs("launcher: \(d.count) kept choices from \(url.lastPathComponent)\n", stderr)
+        } else {
+            d = old.dictionaryRepresentation().filter { $0.key.hasPrefix("launcher.") }
+            if !d.isEmpty { write(); fputs("launcher: \(d.count) choices taken over from UserDefaults into \(url.lastPathComponent)\n", stderr) }
+        }
+    }
+    private func write() {
+        guard let data = try? JSONSerialization.data(withJSONObject: d, options: [.sortedKeys]) else { return }
+        do { try data.write(to: url, options: .atomic) } catch { fputs("[RED] launcher: cannot keep the choices in \(url.path): \(error.localizedDescription)\n", stderr) }
+    }
+    func string(forKey k: String) -> String? { d[k] as? String }
+    func object(forKey k: String) -> Any? { d[k] }
+    func bool(forKey k: String) -> Bool { d[k] as? Bool ?? false }
+    func set(_ v: Any, forKey k: String) {
+        if let a = d[k] as? NSObject, let b = v as? NSObject, a == b { return }   // a slider sends the same value many times
+        d[k] = v; write()
+    }
+    func removeObject(forKey k: String) { if d.removeValue(forKey: k) != nil { write() } }
+}
+
 // The game language a player gets unless they choose one: the device's own when the game has it (Traditional Chinese, else Simplified, for a
 // Chinese device; the same language for another region, such as en-GB for en-US), else English. Only a choice that differs from it is stored,
 // so the game follows the device when its language changes
@@ -65,9 +104,9 @@ final class LauncherModel: ObservableObject {
     let fromFile: Set<String>   // set by an env file: shown, not changed
     @Published var values: [String: String] = [:] { didSet { save() } }   // kept as soon as changed: closing the app or going back to the game list keeps them
 
-    private let defaults: UserDefaults
+    private let defaults: SettingsStore
 
-    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
+    init(_ settings: [Setting], defaults: SettingsStore) {
         self.defaults = defaults
         var settings = settings
         if let i = settings.firstIndex(where: { $0.env == "DM_LANG" }), let d = deviceLanguage(settings[i]) { settings[i].def = d }

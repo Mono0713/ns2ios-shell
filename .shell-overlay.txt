@@ -78,7 +78,7 @@
 ~ dm/host/tests/t_hid.c        # the real-motion checks
 ~ dm/ios/Sources/front_ios.m    # loading screen from Play to the first frame; the game picker before the launcher in a package of several games, and again from the launcher's Game list
 ~ dm/ios/Sources/Launcher.swift # Traditional Chinese when the device prefers it; an Open game folder button; the player list at the top, player 1's controller moves through it (A edits the highlighted row in place, B goes back, left to Play, + starts), players 2 to 8 set their own row with their own controller, the phone gamepads' address and QR code under Play, Motion controls, touch-control opacity and size, a 30 / 60 fps cap, an Identify button per player; English copy reworded; in a package of several games: the chosen game's name, icon and launcher.json, its own settings, a Game list button back to the picker; the game's own icon (dm/icon.jpg); settings kept as soon as changed
-~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL); choices kept as soon as changed; the game language defaults to the device's
+~ dm/ios/Sources/LauncherSettings.swift # the choice "-" leaves the package's own value (DM_APP_POOL); choices kept as soon as changed, in a JSON file of the app's own (SettingsStore); the game language defaults to the device's
 ~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout
 ~ dm/games/settings.py          # the memory kind: a GB slider (DM_APP_POOL)
