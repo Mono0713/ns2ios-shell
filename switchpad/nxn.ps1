@@ -58,7 +58,21 @@ function Find-Keys {
 if (-not $Keys) { $Keys = Find-Keys }
 if (-not $Python) {
     $saved = Join-Path $root 'python.txt'
-    $Python = if (Test-Path $saved) { (Get-Content $saved -Raw).Trim() } else { 'python' }
+    $Python = if (Test-Path $saved) { (Get-Content $saved -Raw).Trim() } else { '' }
+    if (-not $Python) {
+        # 沒記下來就找一個裝好打包套件的：PATH 上的 python 會變（例如後來裝了別的版本排到前面），不能直接用
+        # PowerShell 5.1 傳給外部程式的參數裡如果有雙引號會被吃掉，所以這段 Python 不能用雙引號
+        $probe = 'import sys, lz4.block, capstone, fontTools; print(sys.executable)'
+        $cands = @('python') + @(Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe", "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue |
+                                 Sort-Object FullName -Descending | ForEach-Object { $_.FullName })
+        foreach ($c in $cands) {
+            $ErrorActionPreference = 'Continue'
+            try { $v = (& $c -c $probe 2>$null | Out-String).Trim() } catch { $v = '' }
+            $ErrorActionPreference = 'Stop'
+            if ($v -and (Test-Path -LiteralPath $v)) { $Python = $v; Set-Content -LiteralPath $saved -Value $v -Encoding UTF8; break }
+        }
+        if (-not $Python) { $Python = 'python' }
+    }
 }
 $plume = Join-Path $here '工具\plumesign.exe'
 
