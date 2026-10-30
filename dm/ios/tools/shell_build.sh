@@ -112,8 +112,11 @@ MULTI=0; grep -q 'shell_game_choose' Sources/main.m && grep -q 'DM_GUEST' ../hos
 DOCDATA=0; grep -q 'msl_locate' Sources/main.m && DOCDATA=1   # romfs/ and msl/ may be installed into Documents (games/<title ID>/ for several) instead of the bundle
 [ "$GUEST" = 1 ] || die "host/loader.c has no dm_shell_modules: this tree is not the shell route"
 [ "$ENV" = 1 ] || die "Sources/main.m does not read dm/env.txt: the packer's memory layout would be ignored"
-printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\nMULTI=%s\nDOCDATA=%s\n' \
-  "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" "$MULTI" "$DOCDATA" \
+# PACK_ABI: the package format (tools/pack_abi.py). Packages carry the stamp of the shell they were packed with, and a
+# newer shell with the same value takes them as they are (nxn_merge.py, Switch Pad), so a host-only change costs no repacking
+PACK_ABI=$(python3 ../tools/pack_abi.py) || die "tools/pack_abi.py failed"
+printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\nMULTI=%s\nDOCDATA=%s\nPACK_ABI=%s\n' \
+  "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" "$MULTI" "$DOCDATA" "$PACK_ABI" \
   > "$A/dm/shell_info.txt"
 t "shell understands gates: $GATES"
 
