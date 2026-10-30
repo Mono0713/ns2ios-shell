@@ -26,6 +26,7 @@ def dynsyms(img):
         t, v = struct.unpack_from('<qQ', img, dyn + i * 16)
         if t == 0: break
         tags.setdefault(t, v)
+    if 5 not in tags or 6 not in tags: return []   # no dynamic symbol table (a module of New Super Mario Bros. U Deluxe): nothing to list
     symtab, strtab = tags[6], tags[5]
     n = struct.unpack_from('<I', img, tags[4] + 4)[0] if 4 in tags else (strtab - symtab) // 24
     out = []
