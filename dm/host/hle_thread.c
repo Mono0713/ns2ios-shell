@@ -437,6 +437,65 @@ static void hitch_init(void) {
     pthread_t th; pthread_create(&th, NULL, hitch_main, (void *)e); pthread_detach(th);
     LOG("DM_HITCH_DUMP=%s: the guest threads are logged when no frame is presented for that many ms", e);
 }
+// DM_SAMPLE=<ms>[:<s>] (diagnostic): a sampling profiler for a game that runs but never gets anywhere (Stick Fight: its main loop presents empty frames, no import
+// or svc stands out, the decision it waits on is in its own code). Every <ms> every guest thread is grabbed as DM_HITCH_DUMP does; the first four guest frames (pc,
+// lr, the frame-pointer chain) are counted per thread, and every <s> seconds (default 10) the 30 most frequent stacks of the window are logged with their share of the
+// samples, as module+offset (the offsets of the rewritten module are the original ones, so IL2CPP / symbol tools on the game's own files resolve them). 12 windows a run.
+typedef struct { uint32_t handle, n; uint64_t f[4]; } samp_t;
+#define SAMP_N 4096
+static samp_t g_samp[SAMP_N];
+static uint32_t samp_hash(uint32_t h, const uint64_t *f) { uint64_t x = h; for (int i = 0; i < 4; i++) x = (x ^ f[i]) * 0x100000001b3ull; return (uint32_t)(x ^ x >> 29) & (SAMP_N - 1); }
+static void samp_add(const hitch_t *h) {
+    uint64_t f[4] = {0}; int g = 0;
+    for (int k = 0; k < h->npc && g < 4; k++) if (module_of((void *)h->pc[k])) f[g++] = h->pc[k];
+    if (!g) f[0] = h->npc ? h->pc[0] : 0;   // only host frames (a sleep, an import with no frame chain back): count where it is
+    for (uint32_t i = samp_hash(h->handle, f), probe = 0; probe < SAMP_N; i = (i + 1) & (SAMP_N - 1), probe++) {
+        samp_t *s = &g_samp[i];
+        if (!s->n) { s->handle = h->handle; memcpy(s->f, f, sizeof f); s->n = 1; return; }
+        if (s->handle == h->handle && !memcmp(s->f, f, sizeof f)) { s->n++; return; }
+    }
+}
+static int samp_cmp(const void *a, const void *b) { return (int)((const samp_t *)b)->n - (int)((const samp_t *)a)->n; }
+static void samp_frame(char *w, size_t n, uint64_t a) {
+    module_t *m = module_of((void *)a); Dl_info di;
+    if (m) snprintf(w, n, "%s+%#llx", m->name, (unsigned long long)(a - (uint64_t)m->base));
+    else if (dladdr((void *)a, &di) && di.dli_sname) snprintf(w, n, "%s", di.dli_sname);
+    else snprintf(w, n, "%#llx", (unsigned long long)a);
+}
+static void *samp_main(void *arg) {
+    pthread_setname_np("dm sampler");
+    const char *e = arg; uint64_t every = (uint64_t)atoi(e) * 1000000ull, win = 10000000000ull;
+    if (strchr(e, ':')) win = (uint64_t)atoi(strchr(e, ':') + 1) * 1000000000ull;
+    static hitch_t hs[256]; static char names[256][48]; static uint32_t hnd[256]; int nn = 0;
+    for (int w = 1; w <= 12; w++) {
+        memset(g_samp, 0, sizeof g_samp); uint64_t t_end = now_ns() + win, total = 0;
+        while (now_ns() < t_end) {
+            struct timespec ts = {(time_t)(every / 1000000000ull), (long)(every % 1000000000ull)}; nanosleep(&ts, 0);
+            int nt = 0;
+            pthread_mutex_lock(&G); for (thr_t *t = g_all; t && nt < 256; t = t->all) if (t->started && !t->exited) hitch_grab(t, &hs[nt++]); pthread_mutex_unlock(&G);
+            for (int k = 0; k < nt; k++) {
+                samp_add(&hs[k]); total++;
+                int known = 0; for (int i = 0; i < nn; i++) if (hnd[i] == hs[k].handle) { known = 1; break; }
+                if (!known && nn < 256) { hnd[nn] = hs[k].handle; memcpy(names[nn], hs[k].name, sizeof names[nn]); nn++; }
+            }
+        }
+        static samp_t top[SAMP_N]; int m = 0;
+        for (int i = 0; i < SAMP_N; i++) if (g_samp[i].n) top[m++] = g_samp[i];
+        qsort(top, (size_t)m, sizeof *top, samp_cmp);
+        LOG("[sample] window %d: %llu samples, %d distinct stacks", w, (unsigned long long)total, m);
+        for (int i = 0; i < m && i < 30; i++) {
+            const char *nm = "?"; for (int j = 0; j < nn; j++) if (hnd[j] == top[i].handle) { nm = names[j]; break; }
+            char fr[4][96] = {{0}}; for (int k = 0; k < 4; k++) if (top[i].f[k]) samp_frame(fr[k], sizeof fr[k], top[i].f[k]);
+            LOG("[sample]  %5.1f%% %#x '%s' %s %s %s %s", 100.0 * top[i].n / (double)(total ? total : 1), top[i].handle, nm, fr[0], fr[1], fr[2], fr[3]);
+        }
+    }
+    return NULL;
+}
+static void samp_init(void) {
+    const char *e = getenv("DM_SAMPLE"); if (!e || atoi(e) <= 0) return;
+    pthread_t th; pthread_create(&th, NULL, samp_main, (void *)e); pthread_detach(th);
+    LOG("DM_SAMPLE=%s: every guest thread's stack is sampled; the most frequent stacks are logged per window", e);
+}
 // Register the main thread and return its handle (passed to nnosInitialize as the main thread handle)
 uint32_t svc_thread_main_init(void) {
     pthread_key_create(&g_keythr, NULL);
@@ -444,6 +503,7 @@ uint32_t svc_thread_main_init(void) {
     { const char *e = getenv("DM_PREEMPT"); g_core_preempt = e ? atoi(e) != 0 : DM_GAME_CORE_PREEMPT; }
     pause_install();
     hitch_init();
+    samp_init();
     thr_t *t = calloc(1, sizeof *t);
     pthread_cond_init(&t->cv, NULL); pthread_cond_init(&t->pcv, NULL);
     t->started = 1; t->prio = 44; t->core = 0; t->mask = 7; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt); t->host_work = &dm_host_work;
