@@ -846,6 +846,22 @@ def step_rewrite(exe_dir, mods, out, work, force=False):
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
 
 
+def precheck(game, prof_dir, folder):
+    """game_check.py on the extracted files: log what to expect, write precheck.json for Switch Pad, and stop now -- not after
+    the hour the rewrite and the shaders take -- when the game cannot run on this shell."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import game_check
+        items = game_check.check(game, prof_dir)
+        game_check.write(items, folder)
+    except Exception as e:      # the check is advice: a pack it cannot look at still goes ahead
+        warn('precheck skipped: %s' % e); return
+    for i in items:
+        (say if i['level'] == 'info' else warn)('precheck: %s' % i['text'])
+    bad = [i['text'] for i in items if i['level'] == 'bad']
+    if bad: die('precheck: %s' % '; '.join(bad))
+
+
 def graphics_route(prof_dir, registered=None):
     """Which shader route this game takes, from what its profile carries.
 
@@ -1221,7 +1237,7 @@ def main():
     ap.add_argument('-k', '--keys', default=os.environ.get('KEYS', ''), help='prod.keys')
     ap.add_argument('-o', '--out', default='', help='output IPA (default: next to the NSPs)')
     ap.add_argument('-p', '--package', default='', help='version to pack (default: the newest one in the folder)')
-    ap.add_argument('--stop-after', default='', choices=['', 'extract', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
+    ap.add_argument('--stop-after', default='', choices=['', 'extract', 'check', 'rewrite', 'shaders', 'guest', 'assemble', 'pack'])
     ap.add_argument('--force', action='store_true', help='redo steps whose output already exists')
     ap.add_argument('--no-shaders', action='store_true', help='a GL/Vulkan game: build it without a shader library, so it boots and captures its own shaders (no picture until they are packed in)')
     ap.add_argument('--allow-damaged', action='store_true', help='read files that fail their hash check as they are: a dump with a few bad files (a couple of music tracks) still packs')
@@ -1363,6 +1379,8 @@ def main():
     dirs = step_extract(nx, keys, folder, picks, work, versions, a.allow_damaged)
     if a.stop_after == 'extract': return say('stopped after extract')
     game = dirs[pkg]
+    precheck(game, gdir, folder)
+    if a.stop_after == 'check': return say('stopped after the check')
     derived_dir = None
     reg = gdir
     bad, had_row = check_build_ids(game, rows, pkg, mods)
