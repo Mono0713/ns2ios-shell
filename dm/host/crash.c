@@ -163,6 +163,7 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
         for (int k = 0; k < 6; k++) off("", w[k]);
         fputc('\n', stderr);
     }
+    { void hletrace_crash(void); hletrace_crash(); }   // DM_HLETRACE: the calls of the window the crash cut short
     dm_backtrace(uc->uc_mcontext->__ss.__fp);
     // Stack scan: when the frame chain is broken (a return address was overwritten, pc = lr lands on garbage) the backtrace prints nothing; scan 512 words up from sp and list everything that resolves to a module / host symbol (nearest callers first)
     {   uint64_t sp = uc->uc_mcontext->__ss.__sp;   // The frame just popped (when a return address was overwritten, the bad value and the leftovers of whatever overwrote it sit below sp)

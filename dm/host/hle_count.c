@@ -115,4 +115,17 @@ void *hletrace_wrap(const char *kind, const char *name, void *fn) {
     if (!n) { pthread_t t; pthread_create(&t, NULL, tc_main, NULL); pthread_detach(t); LOG("DM_HLETRACE=%d: the imports and svcs the game calls are logged every %d s", tc_period(), tc_period()); }
     return (void *)(dm_tc_stubs + 32 * n);
 }
+// On a crash (crash.c on_crash): the window cut short, so the calls of the last moments are not lost with the process (Heave Ho crashed 0.5 s into a window and the
+// log ended a window early). Signal context: no demangling (it allocates), raw names straight to stderr
+void hletrace_crash(void) {
+    if (tc_period() < 0) return;
+    unsigned n = atomic_load(&g_ntc), k = 0; static uint64_t d[TC_MAX]; static unsigned idx[TC_MAX];
+    for (unsigned i = 0; i < n; i++) { d[i] = atomic_load(&g_tc[i].n) - g_tc_prev[i]; if (d[i]) idx[k++] = i; }
+    for (unsigned a = 1; a < k; a++) { unsigned v = idx[a], b = a; while (b && d[idx[b - 1]] < d[v]) { idx[b] = idx[b - 1]; b--; } idx[b] = v; }
+    fprintf(stderr, "[dm] [hletrace] at the crash, since the last window: %u imports called", k);
+    for (unsigned a = 0; a < k && a < 60; a++) fprintf(stderr, "%s %s%s=%llu", a ? "," : "", strcmp(g_tc_kind[idx[a]], "STUB") ? "" : "STUB ", g_tc_name[idx[a]], (unsigned long long)d[idx[a]]);
+    fprintf(stderr, "\n[dm] [hletrace] at the crash svc:");
+    for (int s2 = 0; s2 < 256; s2++) { uint64_t dd = atomic_load(&g_tsvc[s2]) - g_tsvc_prev[s2]; if (dd) fprintf(stderr, " %#x=%llu", s2, (unsigned long long)dd); }
+    fputc('\n', stderr);
+}
 void hletrace_svc(int num) { if (tc_period() > 0 && num >= 0 && num < 256) atomic_fetch_add(&g_tsvc[num], 1); }
