@@ -1,5 +1,12 @@
 # Switch Pad
 
+> **Switch Pad now has its own repository: [Mono0713/Switch-Pad](https://github.com/Mono0713/Switch-Pad)** — download it from
+> [its releases](https://github.com/Mono0713/Switch-Pad/releases/latest). An installed Switch Pad updates itself from there
+> (the shell and the packer still come from this repository). This folder is kept until existing installs have moved over.
+>
+> **Switch Pad 已經獨立成自己的 repo：[Mono0713/Switch-Pad](https://github.com/Mono0713/Switch-Pad)**，請到[那裡的 release](https://github.com/Mono0713/Switch-Pad/releases/latest) 下載。
+> 已經裝好的 Switch Pad 會自動改從那裡更新（殼和打包器仍從這個 repo 拿）。這個資料夾等大家都換過去後再移除。
+
 A Windows app that packs your own Switch games into iPad apps and installs them, with one window instead of a terminal:
 pick games from a library, press Start, and it extracts, packs, signs and installs each one. It keeps itself, the shell
 and the packer up to date from this repository's latest release.
