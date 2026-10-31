@@ -245,6 +245,7 @@ def main():
     ap.add_argument('--bundle-id', help='keep it the same to install a new merge over the last one (saves stay); '
                     'default: that of the first merged IPA given, else org.nxnative.games')
     ap.add_argument('--shell', help='a shell zip (or IPA) whose app to use instead of the first IPA\'s')
+    ap.add_argument('--icon', help='a PNG for the app icon (8-bit RGB or RGBA, square) instead of the grid of the games\' icons')
     a = ap.parse_args()
     for f in (sys.stdout, sys.stderr):   # a game name a Windows console's code page cannot show must not stop the merge
         try: f.reconfigure(errors='replace')
@@ -297,7 +298,15 @@ def main():
         pl['CFBundleName'] = re.sub(r'\s+', ' ', re.sub(r'[^A-Za-z0-9 ]', '', a.name)).strip() or 'NX Games'
         pl['CFBundleShortVersionString'] = pl['CFBundleVersion'] = time.strftime('%Y.%m%d.%H%M')
         pl.pop('DMLanguage', None)   # each game's own, from its game.json (main.m)
-        icon = grid_icon([g.icon for g in games])
+        icon = None
+        if a.icon:
+            # one fixed icon (Switch Pad's game library), so the home screen does not change as games come and go
+            with open(a.icon, 'rb') as f: icon = f.read()
+            try:
+                w, h, _ = png_read(icon)
+                if (w, h) != (180, 180): icon = png_resize(icon, 180)
+            except Exception as e: die('--icon %s: %s' % (a.icon, e))
+        else: icon = grid_icon([g.icon for g in games])
         if icon:
             o.add(out_A + 'AppIcon60x60@3x.png', icon); o.add(out_A + 'AppIcon60x60@2x.png', png_resize(icon, 120))
             pl['CFBundleIcons'] = {'CFBundlePrimaryIcon': {'CFBundleIconFiles': ['AppIcon60x60']}}
