@@ -536,6 +536,13 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         if dst.exists(): shutil.rmtree(dst, ignore_errors=True)
         tmp.replace(dst)
         dirs[ver] = dst
+    # Modules built for system 22 and later may keep their segments ZBIC-compressed (Super Bunny Man 1.3.0's main) where every
+    # tool here reads LZ4: store those segments uncompressed once, before anything reads the modules (dm/tools/nso_zbic.py)
+    sys.path.insert(0, str(TOOLS))
+    import nso_zbic
+    for ver, dst in dirs.items():
+        done = nso_zbic.normalize_exefs(dst / 'ExeFS') if (dst / 'ExeFS').is_dir() else []
+        if done: say('%s: %s had ZBIC-compressed segments (system 22 and later), stored uncompressed' % (ver, ', '.join(done)))
     return dirs
 
 
