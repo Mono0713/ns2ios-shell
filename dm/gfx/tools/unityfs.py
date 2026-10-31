@@ -195,6 +195,38 @@ PPtr<Shader>: int m_FileID; SInt64 m_PathID
 PPtr<Texture>: int m_FileID; SInt64 m_PathID
 Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> platforms; vector<data:unsigned int> offsets; vector<data:unsigned int> compressedLengths; vector<data:unsigned int> decompressedLengths; vector<data:UInt8> compressedBlob; vector<data:PPtr<Shader>> m_Dependencies; map<data:pair(string,PPtr<Texture>)>~ m_NonModifiableTextures; bool! m_ShaderIsBaked
 '''
+# The Unity 2019.4 Shader (Unspottable, Unity 2019.4.22f1: Data/*.assets without type trees and no bundle), from AssetRipper's TypeTreeDumps (StructsDump/release/2019.4.22f1.dump;
+# 2019.4.27f1's is node for node the same), generated from the dump and checked against it with the flags: 2020.3's global and local keyword indices and segmented blob, with 2018.3's
+# parameters in each subprogram, no common parameters and a ray tracing program in each pass. Its type hash is not known yet, so it is chosen by the file's Unity version (KNOWN_BY_VERSION)
+SHADER_2019_4 = '''SerializedTextureProperty: string m_DefaultName; int m_TexDim
+SerializedProperty: string m_Name; string m_Description; vector<data:string> m_Attributes; int m_Type; unsigned int m_Flags; float m_DefValue[0]; float m_DefValue[1]; float m_DefValue[2]; float m_DefValue[3]; SerializedTextureProperty m_DefTexture
+SerializedProperties: vector<data:SerializedProperty> m_Props
+SerializedShaderFloatValue: float val; string name
+SerializedShaderRTBlendState: SerializedShaderFloatValue srcBlend; SerializedShaderFloatValue destBlend; SerializedShaderFloatValue srcBlendAlpha; SerializedShaderFloatValue destBlendAlpha; SerializedShaderFloatValue blendOp; SerializedShaderFloatValue blendOpAlpha; SerializedShaderFloatValue colMask
+SerializedStencilOp: SerializedShaderFloatValue pass; SerializedShaderFloatValue fail; SerializedShaderFloatValue zFail; SerializedShaderFloatValue comp
+SerializedShaderVectorValue: SerializedShaderFloatValue x; SerializedShaderFloatValue y; SerializedShaderFloatValue z; SerializedShaderFloatValue w; string name
+SerializedTagMap: map<data:pair(string,string)>~ tags
+SerializedShaderState: string m_Name; SerializedShaderRTBlendState rtBlend0; SerializedShaderRTBlendState rtBlend1; SerializedShaderRTBlendState rtBlend2; SerializedShaderRTBlendState rtBlend3; SerializedShaderRTBlendState rtBlend4; SerializedShaderRTBlendState rtBlend5; SerializedShaderRTBlendState rtBlend6; SerializedShaderRTBlendState rtBlend7; bool! rtSeparateBlend; SerializedShaderFloatValue zClip; SerializedShaderFloatValue zTest; SerializedShaderFloatValue zWrite; SerializedShaderFloatValue culling; SerializedShaderFloatValue offsetFactor; SerializedShaderFloatValue offsetUnits; SerializedShaderFloatValue alphaToMask; SerializedStencilOp stencilOp; SerializedStencilOp stencilOpFront; SerializedStencilOp stencilOpBack; SerializedShaderFloatValue stencilReadMask; SerializedShaderFloatValue stencilWriteMask; SerializedShaderFloatValue stencilRef; SerializedShaderFloatValue fogStart; SerializedShaderFloatValue fogEnd; SerializedShaderFloatValue fogDensity; SerializedShaderVectorValue fogColor; int fogMode; int gpuProgramID; SerializedTagMap m_Tags; int m_LOD; bool! lighting
+ShaderBindChannel: SInt8 source; SInt8 target
+ParserBindChannels: vector<data:ShaderBindChannel>! m_Channels; int m_SourceMap
+VectorParameter: int m_NameIndex; int m_Index; int m_ArraySize; SInt8 m_Type; SInt8! m_Dim
+MatrixParameter: int m_NameIndex; int m_Index; int m_ArraySize; SInt8 m_Type; SInt8! m_RowCount
+TextureParameter: int m_NameIndex; int m_Index; int m_SamplerIndex; bool m_MultiSampled; SInt8! m_Dim
+BufferBinding: int m_NameIndex; int m_Index
+StructParameter: int m_NameIndex; int m_Index; int m_ArraySize; int m_StructSize; vector<data:VectorParameter> m_VectorMembers; vector<data:MatrixParameter> m_MatrixMembers
+ConstantBuffer: int m_NameIndex; vector<data:MatrixParameter> m_MatrixParams; vector<data:VectorParameter> m_VectorParams; vector<data:StructParameter> m_StructParams; int m_Size
+UAVParameter: int m_NameIndex; int m_Index; int m_OriginalIndex
+SamplerParameter: unsigned int sampler; int bindPoint
+SerializedSubProgram: unsigned int m_BlobIndex; ParserBindChannels m_Channels; vector<data:UInt16> m_GlobalKeywordIndices; vector<data:UInt16> m_LocalKeywordIndices; SInt8 m_ShaderHardwareTier; SInt8! m_GpuProgramType; vector<data:VectorParameter> m_VectorParams; vector<data:MatrixParameter> m_MatrixParams; vector<data:TextureParameter> m_TextureParams; vector<data:BufferBinding> m_BufferParams; vector<data:ConstantBuffer> m_ConstantBuffers; vector<data:BufferBinding> m_ConstantBufferBindings; vector<data:UAVParameter> m_UAVParams; vector<data:SamplerParameter> m_Samplers; int m_ShaderRequirements
+SerializedProgram: vector<data:SerializedSubProgram> m_SubPrograms
+SerializedPass: map<data:pair(string,int)>~ m_NameIndices; int m_Type; SerializedShaderState m_State; unsigned int m_ProgramMask; SerializedProgram progVertex; SerializedProgram progFragment; SerializedProgram progGeometry; SerializedProgram progHull; SerializedProgram progDomain; SerializedProgram progRayTracing; bool m_HasInstancingVariant; bool! m_HasProceduralInstancingVariant; string m_UseName; string m_Name; string m_TextureName; SerializedTagMap m_Tags
+SerializedSubShader: vector<data:SerializedPass> m_Passes; SerializedTagMap m_Tags; int m_LOD
+SerializedShaderDependency: string from; string to
+SerializedShader: SerializedProperties m_PropInfo; vector<data:SerializedSubShader> m_SubShaders; string m_Name; string m_CustomEditorName; string m_FallbackName; vector<data:SerializedShaderDependency> m_Dependencies; bool! m_DisableNoSubshadersMessage
+PPtr<Shader>: int m_FileID; SInt64 m_PathID
+PPtr<Texture>: int m_FileID; SInt64 m_PathID
+Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> platforms; vector<data:vector<data:unsigned int>> offsets; vector<data:vector<data:unsigned int>> compressedLengths; vector<data:vector<data:unsigned int>> decompressedLengths; vector<data:UInt8> compressedBlob; vector<data:PPtr<Shader>> m_Dependencies; map<data:pair(string,PPtr<Texture>)>~ m_NonModifiableTextures; bool! m_ShaderIsBaked
+'''
 # The Unity 2022.3 ComputeShader (Monster Train 2, Unity 2022.3.54f1: 12 in Data/sharedassets2.assets, which carries no type trees, and no bundle has one), from Unity 2022.3.54f1's type tree
 # as AssetRipper's TypeTreeDumps records it (StructsDump/release/2022.3.54f1.dump). Each kernel variant's code is a program code of one stage, compute (the layout of a Shader's subprogram code)
 COMPUTE_2022_3 = '''ComputeShaderResource: string name; string generatedName; int bindPoint; int samplerBindPoint; int texDimension
@@ -222,6 +254,15 @@ KNOWN_TREES = {(CLASS_SHADER, bytes.fromhex('ea424a5fc1e48db62144df956f9e1005'))
                (CLASS_SHADER, bytes.fromhex('8db760073e1392061e4a36995f0735af')): ('Shader', SHADER_2018_3),
                (CLASS_COMPUTE_SHADER, bytes.fromhex('bfdf63ab0ce84d5a2c765ee560d90fe7')): ('ComputeShader', COMPUTE_2022_3),
                (CLASS_COMPUTE_SHADER, bytes.fromhex('1a95529ac2eb1a97cd9d2a4356bd722f')): ('ComputeShader', COMPUTE_2019_4)}
+# Layouts for a class whose type hash is in no bundle and not in KNOWN_TREES, chosen by the Unity version in the serialized file's header (major.minor). The layout of a class does not change
+# within a Unity release line (2019.4.22f1 and 2019.4.27f1 dump the same Shader tree), but a guess must still read every object to its exact end, or the file is left without a tree
+KNOWN_BY_VERSION = {(CLASS_SHADER, '2019.4'): ('Shader', SHADER_2019_4)}
+def version_key(cid, unity): return (cid, 'unity ' + unity)
+
+def known_version_tree(cid, unity):
+    k = version_key(cid, unity)
+    if k not in _KNOWN: _KNOWN[k] = tree_from_layout(*KNOWN_BY_VERSION[cid, unity])
+    return _KNOWN[k]
 
 def _split_top(s, sep):   # s split at sep outside <> and ()
     out, depth, cur = [], 0, ''
@@ -270,11 +311,16 @@ def serialized_objects(d, common, want=None, trees=None):
     trees = {(class ID, type hash): type tree}: files with type trees record theirs, files without (the game's own data.unity3d and so on) borrow one of the same class and hash -- the same hash means the same layout"""
     le, doff, tlist, objs = _tables(d, common, want, trees)
     for pid, start, size, ti in objs:
-        cid, h, root = tlist[ti]
+        cid, h, root, unity = tlist[ti]
         if want and cid not in want: continue
         if root is None: raise NoTree(f'class {cid} (type hash {h.hex()}) has no type tree available')
         o = Reader(d, le); o.d = d[doff + start:doff + start + size]
-        yield cid, pid, _read(o, root)
+        if not unity: yield cid, pid, _read(o, root); continue
+        # a layout chosen by the Unity version (KNOWN_BY_VERSION), not by the hash: kept only if the object reads to its exact end
+        try: v = _read(o, root); o.align(); fits = o.p == len(o.d)
+        except (struct.error, IndexError, KeyError, ValueError, UnicodeDecodeError, MemoryError, OverflowError): fits = False
+        if not fits: raise NoTree(f'class {cid} (type hash {h.hex()}): the Unity {unity} layout does not read object {pid} to its end')
+        yield cid, pid, v
 
 CLASS_TEXT_ASSET = 49
 
@@ -297,19 +343,21 @@ def text_assets(d, common):
         yield pid, name, r.d[r.p:r.p + ln]
 
 def _tables(d, common, want, trees):
-    """serialized file → (little-endian, data offset, [(class ID, type hash, type tree or None)], [(path ID, start, size, type index)]): its type table and object table"""
+    """serialized file → (little-endian, data offset, [(class ID, type hash, type tree or None, Unity release line if the tree is a guess by version)], [(path ID, start, size, type index)]):
+    its type table and object table"""
     msz, fsz, ver, doff = struct.unpack_from('>IIII', d, 0)
     if not 17 <= ver <= 22: raise ValueError(f'serialized file format {ver} is not supported')
     p = 16; le = d[p] == 0; p += 4
     if ver >= 22: msz, fsz, doff, _ = struct.unpack_from('>Iqqq', d, p); p += 28
     r = Reader(d, le); r.p = p
-    _, r.p = _cstr(d, r.p); r.u('i'); tt = r.u('?')
+    uver, r.p = _cstr(d, r.p); r.u('i'); tt = r.u('?')
+    line = '.'.join(uver.split('.')[:2])
     tlist = []
     for _ in range(r.u('i')):
         cid = r.u('i'); r.u('B'); r.u('h')
         if cid == 114: r.p += 16   # script ID
         h = d[r.p:r.p + 16]; r.p += 16
-        root = None
+        root = guess = None
         if tt:
             nn, sb = r.u('i'), r.u('i'); raw = [r.u('HBBIIiiiQ' if ver >= 19 else 'HBBIIiii') for _ in range(nn)]   # refTypeHash from format 19
             buf = d[r.p:r.p + sb]; r.p += sb
@@ -325,8 +373,12 @@ def _tables(d, common, want, trees):
                 stack.append(nd)
             if ver >= 21: n = r.u('i'); r.p += 4 * n   # type dependencies
             if trees is not None and (want is None or cid in want): trees.setdefault((cid, h), root)
-        elif trees is not None: root = trees.get((cid, h))
-        tlist.append((cid, h, root))
+        elif trees is not None:
+            root = trees.get((cid, h))
+            if root is None:
+                root = trees.get(version_key(cid, line))
+                if root is not None: guess = line
+        tlist.append((cid, h, root, guess))
     objs = []
     for _ in range(r.u('i')):
         r.align(); pid = r.u('q'); start = r.u('q') if ver >= 22 else r.u('I'); size = r.u('I'); ti = r.u('i')

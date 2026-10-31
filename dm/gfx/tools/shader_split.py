@@ -1792,7 +1792,9 @@ def scan_file(args):
     if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and __import__('unityfs').is_serialized(d)):
         import unityfs
         try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
-        except unityfs.NoTree: return rel, {}, set(), 'defer'
+        except unityfs.NoTree as e:
+            if TREES: print(f'/{rel}: {e}', flush=True)   # the second pass: say which class and type hash had no tree, so the layout can be added to unityfs.py
+            return rel, {}, set(), 'defer'
     elif b'BNSH\0\0\0\0' not in d and b'BAHS' not in d and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and b'Yaz0' in d) and b'\x91\x68\x86\x19' not in d and MGFX not in d and NEEDLE not in d: return rel, {}, set(), {}   # a SARC may hold Yaz0 members
     else:
         scan_blob(d, '/' + rel, found)
@@ -1881,6 +1883,8 @@ def main():
         # a hash no bundle supplied takes the layout unityfs.py has for it (KNOWN_TREES); only here, so files a bundle lends a tree to keep their place in the tables (Ace Attorney's built-ins)
         import unityfs
         for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
+        # and a hash none of those has takes the layout of the file's Unity release line, if unityfs.py has one (KNOWN_BY_VERSION) and it reads every object to its end (Unspottable, Unity 2019.4.22f1)
+        for cid, line in unityfs.KNOWN_BY_VERSION: trees.setdefault(unityfs.version_key(cid, line), unityfs.known_version_tree(cid, line))
         byrel = {r: p for p, r in files}
         with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
         for rel, uniq, pr, extra in again:
