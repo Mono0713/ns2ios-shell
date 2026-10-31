@@ -5,6 +5,7 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include <os/proc.h>
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
@@ -15,6 +16,7 @@ void dm_gamepad_reset(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
 static void loading_show(UIView *root);
+static void run_watch_start(void);   // the launcher's automatic memory: how this run goes
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 int front_ios_pick_needed(void);   // main.m: a package of several games, none chosen yet
 void dm_show_picker(void *view_controller, void (*done)(void));   // GamePicker.swift: calls done once main.m has the chosen game's files in place
@@ -93,6 +95,7 @@ void front_ios_back_to_picker(void) {
     loading_show(self.view);   // under the shader-preparation screen, which front_progress adds on top when it runs
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
+    run_watch_start();
     front_ios_boot();
 }
 - (void)viewDidLayoutSubviews {
@@ -195,6 +198,28 @@ void front_ios_loading_text(NSString *zh, NSString *en) {
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
     BOOL z = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
     ((UILabel *)[g_loading viewWithTag:1]).text = z ? zh : en; LOG("front end: loading screen: %s", en.UTF8String);
+}
+// The launcher's automatic memory (hle_runmark.c): the run counts as working once frames have kept coming for 40 s after the first, in the foreground, and as
+// memory pressure when iOS warns or under 256 MB is left for this process (iOS kills a process at its limit with no crash log, so the pressure is recorded before it)
+void dm_run_mark(char c);
+uint64_t mtl_present_count(void);
+static void run_watch_start(void) {
+    static dispatch_source_t t; if (t) return;
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidReceiveMemoryWarningNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+        (void)n; LOG("front end: iOS memory warning (%llu MB left)", (unsigned long long)(os_proc_available_memory() >> 20)); dm_run_mark('w'); }];
+    t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 4);
+    __block int playing = 0, ok = 0, low = 0; __block uint64_t last = 0;
+    dispatch_source_set_event_handler(t, ^{
+        size_t av = os_proc_available_memory();
+        if (av && av < (256u << 20) && !low++) { LOG("front end: %zu MB left for this process: memory pressure", av >> 20); dm_run_mark('w'); }
+        if (ok) return;
+        uint64_t n = mtl_present_count();
+        if (n > last && UIApplication.sharedApplication.applicationState == UIApplicationStateActive) playing++;   // a second with frames, in the foreground
+        last = n;
+        if (n && playing >= 40) { ok = 1; dm_run_mark('k'); LOG("front end: 40 s of frames: this run's memory pool works"); }
+    });
+    dispatch_resume(t);
 }
 void front_first_frame(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; LOG("front end: first frame, loading screen hidden"); });
@@ -313,8 +338,8 @@ void front_ios_focus_event(int ev) {
     if (!g_layer) return;
     switch (ev) {
         case 0: dm_gamepad_reset(); dm_focus_set(2); break;
-        case 1: UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); break;
-        case 2: dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); front_ios_audio_session(); g_audio_bg = 0; front_ios_audio_apply(); dm_focus_set(2); break;
+        case 1: dm_run_mark('g'); UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); break;
+        case 2: dm_run_mark('b'); dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); front_ios_audio_session(); g_audio_bg = 0; front_ios_audio_apply(); dm_focus_set(2); break;
         case 3:   // Becoming active again also ends an interruption whose "ended" never came (not every one sends it), and retries a session that would not activate on the way back
             UIApplication.sharedApplication.idleTimerDisabled = YES;
             if (g_audio_intr) { LOG("audio session: active again with no interruption-ended notice; resuming"); g_audio_intr = 0; g_session_off = 1; }

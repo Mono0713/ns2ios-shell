@@ -47,6 +47,9 @@ static uint8_t *g_stack; static size_t g_stack_cap;
 int dm_guest_as_contains(uintptr_t a) { uintptr_t b = (uintptr_t)g_as; return g_as && a >= b && a - b < RESERVE; }
 
 static void *alias_windows_thread(void *arg);
+// hle_runmark.c: the launcher's automatic memory learns why a run ended (weak: the memory unit tests link this file alone)
+__attribute__((weak)) void dm_run_mark(char c); __attribute__((weak)) void dm_run_mark_memory_refused(void);
+#define RUN_MARK_MEM() do { if (dm_run_mark_memory_refused) dm_run_mark_memory_refused(); } while (0)
 static void mem_init_once(void) {
     // Read the profile's memory layout, overridable per game (see the comment above RESERVE). Before the boundary
     // check below, which has to judge the values this run actually uses.
@@ -54,6 +57,7 @@ static void mem_init_once(void) {
     g_mem_alias = env_u64("DM_MEM_ALIAS",   DM_GAME_MEM_ALIAS);
     g_mem_stack = env_u64("DM_MEM_STACK",   DM_GAME_MEM_STACK);
     (void)app_pool(); (void)mem_used();
+    if (dm_run_mark) dm_run_mark('b');   // the game has started: from here a kill counts for the launcher's automatic memory
     size_t pg = (size_t)getpagesize();
     if (RESERVE < 0x10000000 || g_mem_alias > RESERVE - 0x10000000 ||
         g_mem_stack > RESERVE - 0x10000000 - g_mem_alias ||
@@ -285,7 +289,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     switch (num) {
     case 0x01: {  // SetHeapSize(out_addr*, size)  → x1 = heap base
         size_t size = regs[1];
-        if (size > g_heap_cap) { LOG("SetHeapSize OOM: req %#zx > cap %#zx", size, g_heap_cap); regs[0] = 0xD401; return 0; }
+        if (size > g_heap_cap) { LOG("SetHeapSize OOM: req %#zx > cap %#zx", size, g_heap_cap); RUN_MARK_MEM(); regs[0] = 0xD401; return 0; }
         pthread_mutex_lock(&g_map_lock);
         size_t previous = g_heap_cur, image = image_bytes();
         if (size < previous && map_source_busy((uintptr_t)g_heap + size, previous - size)) {
@@ -296,10 +300,12 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             // (profile mem_used; the NSP script's probe boot reads this line, and sets mem_used when no SetHeapSize succeeds afterwards)
             static int once; if (!once++) LOG("[mem] SetHeapSize %#zx + modules %#zx > app pool %#llx (used memory reported %#llx + bss %#zx)", size, image_bytes() - big_bss_bytes(),
                                               (unsigned long long)APP_POOL, (unsigned long long)MEM_USED, big_bss_bytes());
+            RUN_MARK_MEM();   // only a flag: a game that retries smaller and goes on is not counted (the launcher looks at it only when the run then fails)
             pthread_mutex_unlock(&g_map_lock); regs[0] = 0x10801; return 0;
         }
         uint64_t charged = (uint64_t)MEM_USED + big_bss_bytes() + atomic_load(&g_alias_mapped);
         if (mem_map_limit() && (charged > APP_POOL || size > APP_POOL - charged)) {
+            RUN_MARK_MEM();
             pthread_mutex_unlock(&g_map_lock); regs[0] = 0x10801; return 0;
         }
         int rc = 0;
@@ -445,7 +451,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         if (mem_map_limit() && num == 0x2C) {
             int64_t room = (int64_t)APP_POOL - (int64_t)(g_heap_cur + MEM_USED + big_bss_bytes()) - atomic_load(&g_alias_mapped);
             if (need && need > room) {
-                pthread_mutex_unlock(&g_map_lock);
+                pthread_mutex_unlock(&g_map_lock); RUN_MARK_MEM();
                 static _Atomic int nref; if (atomic_fetch_add(&nref, 1) < 8) LOG("[mem] MapPhysicalMemory +%#zx refused: %.2f GB mapped, the application pool is full (ResultLimitReached, the SDK frees cached pages and retries)",
                                                                        size, atomic_load(&g_alias_mapped) / 1073741824.0);
                 regs[0] = 0x10801; return 0;
@@ -487,6 +493,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         LOG("Break#%d reason=%#llx Result=%#x svc at %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
         dm_backtrace(regs[29]);
         if (regs[0] & 0x80000000ull) return 0;   // notification only, can continue
+        if (dm_run_mark) dm_run_mark('x');
         _exit(42);
     }
     case 0x1E: guest_clock_read_wait(); regs[0] = 0; regs[1] = guest_ns() * 12 / 625; return 0;   // GetSystemTick
