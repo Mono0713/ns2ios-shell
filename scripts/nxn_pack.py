@@ -659,6 +659,15 @@ def capture_wanted(gdir):
     return keys or None
 
 
+def is_love(game):
+    """Whether the game is LÖVE, whose shaders gl_prebuilt.py can make from the game files (it carries its wrapper in main)."""
+    sys.path.insert(0, str(GFX))
+    import gl_prebuilt
+    try: gl_prebuilt.lover_wrapper(game / 'ExeFS' / 'main')
+    except SystemExit: return False
+    return True
+
+
 def capture_have(d):
     try: names = os.listdir(d)
     except OSError: return set()
@@ -1434,10 +1443,23 @@ def main():
     # and draws nothing -- which is exactly the state DM_GL_CAPTURE needs to collect the sources (Documents/env.txt).
     route = graphics_route(gdir, reg)
     gl_out = None
+    gl_record = False   # the package records the GLSL the game compiles, on the phone (Documents/gl_capture/<title ID>)
     if route == 'gl':
         gl_out = work / 'build' / 'gl'
         if a.gl_capture:
             cap = Path(a.gl_capture).resolve()
+            gl_record = not is_love(game)
+            if not capture_have(cap):
+                say('no GLSL in %s yet: building without shaders, the phone records them while the game runs' % cap)
+                cap = gl_out = None
+        elif not is_love(game):
+            # Not LÖVE (Roof Rage: its own engine assembles each shader in code), so no game file and no wrapper holds the
+            # GLSL, and no Mac is at hand to boot it in. The package records them instead: it boots without a picture, the
+            # host writes every shader the game compiles to Documents/gl_capture/<title ID>, and the next pack takes that
+            # folder back with --gl-capture. The recording stays on, so a later level's shaders are taken the same way.
+            say('OpenGL game whose shaders exist only at run time: building without shaders; play it once on the phone, '
+                'which records them, then pack again with --gl-capture <the recorded folder>')
+            gl_record, cap, gl_out = True, None, None
         else:
             # Nothing to capture: dm/gfx/tools/gl_prebuilt.py runs the game's own LÖVE wrapper (the Lua source a LÖVE
             # binary carries) over its .fs files, which produces exactly the GLSL the game would have compiled, byte for
@@ -1448,7 +1470,7 @@ def main():
             tab = gdir / 'gl_capture.tsv'
             if tab.is_file(): args += ['--expect', tab]
             run(args, log=work / 'logs' / 'gl_prebuilt.log', what='generating the GLSL from the game files')
-        step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
+        if cap is not None: step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
     vk_out = None
     if route == 'vulkan' and not a.no_shaders:   # --no-shaders is the capture run: a game that builds its SPIR-V at run
                                                  # time has none in the RomFS, and a missing folder is not an error there
@@ -1465,7 +1487,7 @@ def main():
         tbl = [l for l in (vk_out / 'vk_shaders.tsv').read_text(encoding='utf-8').splitlines() if l and not l.startswith('#')]
         say('Vulkan shaders: %d translated (%d sources) -> %s' % (len(tbl), len(list((vk_out / 'src').glob('*.metal'))), vk_out))
     # A GL game with a capture needs neither: its shaders came from the capture, and there is nothing left to refuse.
-    if route != 'nvn' and not a.no_shaders and gl_out is None and vk_out is None:
+    if route != 'nvn' and not a.no_shaders and not gl_record and gl_out is None and vk_out is None:
         # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
         # would only see a black screen with no explanation. The flag exists for the capture run that produces the shaders.
         die('%s game: its shaders are %s, so no game file holds them; upstream captures them by booting the game on a Mac.\n'
@@ -1542,6 +1564,12 @@ def main():
         shutil.copytree(vk_out, dst)
         say('Vulkan shader table and %d sources → msl/vk (the phone compiles them at first launch)'
             % len(list((dst / 'src').glob('*.metal'))))
+    if gl_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_GL_CAPTURE=')] + ['DM_GL_CAPTURE=gl_capture/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_GL_CAPTURE=gl_capture/%s (the phone records the GLSL the game compiles there)' % tid)
     if gl_out is not None:
         # <App>/msl/gl: hle_gl.m reads gl_shaders.tsv and gl/src from DM_MSL_DIR itself, not from the chain version's directory.
         dst = A / 'msl' / 'gl'
