@@ -363,8 +363,8 @@ def known_version_tree(cid, unity):
     return _KNOWN[k]
 
 
-# Every Unity release from 2017.1: the Shader and ComputeShader trees of AssetRipper's TypeTreeDumps (unity_layouts.txt, written by unity_layouts_gen.py), for a stripped file whose
-# hash no bundle, KNOWN_TREES or KNOWN_BY_VERSION has. 817 releases give 21 Shader and 8 ComputeShader trees. The candidates are tried in turn, the file's exact version first, then its
+# Every Unity release from 5.5 (the first with serialized format 17): the Shader and ComputeShader trees of AssetRipper's TypeTreeDumps (unity_layouts.txt, written by unity_layouts_gen.py), for a stripped file whose
+# hash no bundle, KNOWN_TREES or KNOWN_BY_VERSION has. 836 releases give 23 Shader and 10 ComputeShader trees. The candidates are tried in turn, the file's exact version first, then its
 # release line, then the nearest versions, and a tree is kept only if it reads every object of that class in the file to its exact end. They are only used when the trees passed to
 # serialized_objects hold the GENERATED key (shader_split's second pass), so a bundle's own tree of the same hash still wins
 GENERATED = ('unity layouts',)

@@ -1,4 +1,4 @@
-"""unity_layouts.txt: the Shader and ComputeShader trees of every Unity release from 2017.1 (AssetRipper's TypeTreeDumps), tried in turn for a stripped file whose hash no bundle and
+"""unity_layouts.txt: the Shader and ComputeShader trees of every Unity release from 5.5 (AssetRipper's TypeTreeDumps), tried in turn for a stripped file whose hash no bundle and
 no hand-written layout has, each kept only if it reads every object to its end."""
 from pathlib import Path
 import struct
@@ -47,9 +47,9 @@ def generated():
 
 
 class UnityLayoutTests(unittest.TestCase):
-    def test_every_release_line_from_2017_1_is_covered(self):
+    def test_every_release_line_from_5_5_is_covered(self):
         have = {(cid, '.'.join(v.split('.')[:2])) for cid, vs, _ in unityfs._layouts() for v in vs}
-        lines = ['2017.%d' % i for i in range(1, 5)] + ['2018.%d' % i for i in range(1, 5)] + ['2019.%d' % i for i in range(1, 5)] + \
+        lines = ['5.5', '5.6'] + ['2017.%d' % i for i in range(1, 5)] + ['2018.%d' % i for i in range(1, 5)] + ['2019.%d' % i for i in range(1, 5)] + \
                 ['2020.%d' % i for i in range(1, 4)] + ['2021.%d' % i for i in range(1, 4)] + ['2022.%d' % i for i in range(1, 4)] + ['2023.1', '2023.2', '6000.0']
         for cid in (unityfs.CLASS_SHADER, unityfs.CLASS_COMPUTE_SHADER):
             for line in lines: self.assertIn((cid, line), have)
