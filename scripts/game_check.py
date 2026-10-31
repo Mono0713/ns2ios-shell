@@ -48,6 +48,11 @@ def check(game, prof_dir=None):
     if is64 is False:
         add('bad', 'aarch32', '32 位元的遊戲，還不支援（殼只能跑 64 位元的 Switch 遊戲）')
         return items
+    if (game / 'ExeFS' / 'main').is_file() and not (game / 'ExeFS' / 'sdk').is_file():
+        # Every game made with Nintendo's SDK has ExeFS/sdk. Without it the program is homebrew (libnx): a forwarder that starts something else from the SD card
+        # ("Mario Kart: Double Dash!! (recomp)", a 21 KB main), which the shell cannot run
+        add('bad', 'homebrew', '這是 homebrew（例如啟動 SD 卡上模擬器或移植版的捷徑），不是用 Nintendo SDK 做的遊戲，殼跑不了')
+        return items
     romfs = game / 'romfs_manifest.tsv'
     if not romfs.is_file(): romfs = game / 'RomFS'
     try:
