@@ -12,7 +12,7 @@
 #   · TextAsset (class 49): name and bytes (text_assets), for games that keep whole GLSLC outputs of their own in one (FINAL FANTASY CRYSTAL CHRONICLES Remastered Edition, Unity 2018.4)
 #   The pre-2019.3 layouts were found by armyja on Cuphead (Unity 2017.4.9f1, serialized format 17), GitHub pull request #2
 # Only depends on lz4 (the same package shader_split uses for NSOs)
-import lzma, struct
+import lzma, os, re, struct
 
 CLASS_SHADER = 48
 
@@ -85,23 +85,29 @@ PRIM = {'SInt8': 'b', 'UInt8': 'B', 'char': 'B', 'bool': '?', 'SInt16': 'h', 'sh
         'SInt32': 'i', 'int': 'i', 'UInt32': 'I', 'unsigned int': 'I', 'Type*': 'i', 'SInt64': 'q', 'long long': 'q', 'UInt64': 'Q',
         'unsigned long long': 'Q', 'FileSize': 'Q', 'float': 'f', 'double': 'd'}
 
+def _count(r):
+    """a string's or an array's length; one past the data's end is a wrong tree (a layout being tried) or a damaged file, and stops here instead of building a list of billions"""
+    cnt = r.u('i')
+    if not 0 <= cnt <= len(r.d) - r.p: raise ValueError(f'length {cnt} at {r.p - 4} runs past the end ({len(r.d)})')
+    return cnt
+
 def _read(r, n):
     if n.type in PRIM and not n.kids:
         v = r.u(PRIM[n.type])
     elif n.type == 'string':
-        ln = r.u('i'); v = r.d[r.p:r.p + ln]; r.p += ln
+        ln = _count(r); v = r.d[r.p:r.p + ln]; r.p += ln
         try: v = v.decode('utf-8')
         except UnicodeDecodeError: pass
         if n.kids and n.kids[0].flags & 0x4000: r.align()
     elif n.kids and n.kids[0].type == 'Array':
-        arr = n.kids[0]; cnt = r.u('i'); el = arr.kids[1]
+        arr = n.kids[0]; cnt = _count(r); el = arr.kids[1]
         if el.type in ('UInt8', 'char', 'SInt8') and not el.kids: v = r.d[r.p:r.p + cnt]; r.p += cnt
         elif el.type in PRIM and not el.kids:
             f = PRIM[el.type]; w = struct.calcsize(f); v = list(struct.unpack_from(r.e + f * cnt, r.d, r.p)); r.p += w * cnt
         else: v = [_read(r, el) for _ in range(cnt)]
         if arr.flags & 0x4000: r.align()
     elif n.type == 'TypelessData':
-        cnt = r.u('i'); v = r.d[r.p:r.p + cnt]; r.p += cnt
+        cnt = _count(r); v = r.d[r.p:r.p + cnt]; r.p += cnt
     else:
         v = {k.name: _read(r, k) for k in n.kids}
     if n.flags & 0x4000: r.align()
@@ -151,6 +157,11 @@ PPtr<Shader>: int m_FileID; SInt64 m_PathID
 PPtr<Texture>: int m_FileID; SInt64 m_PathID
 Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> platforms; vector<data:vector<data:unsigned int>> offsets; vector<data:vector<data:unsigned int>> compressedLengths; vector<data:vector<data:unsigned int>> decompressedLengths; vector<data:UInt8> compressedBlob; vector<data:unsigned int> stageCounts; vector<data:PPtr<Shader>> m_Dependencies; map<data:pair(string,PPtr<Texture>)>~ m_NonModifiableTextures; bool! m_ShaderIsBaked
 '''
+# The Unity 2021.3 Shader (Ultimate Chicken Horse, Unity 2021.3.45f1: Data/*.assets and Data/Resources without type trees and no bundle; type hash f0c184272a05e54447e36366ec4876a6),
+# from AssetRipper's TypeTreeDumps (StructsDump/release/2021.3.45f1.dump; 2021.3.15f1 and 2021.3.33f1 are node for node the same, 2021.3.10f1 and older are not), checked against it
+# with the flags: 2022.3's, with the keyword state mask kept once per pass instead of once per program
+SHADER_2021_3 = (SHADER_2022_3.replace('m_CommonParameters; vector<data:UInt16> m_SerializedKeywordStateMask\n', 'm_CommonParameters\n')
+                 .replace('SerializedTagMap m_Tags\nSerializedSubShader', 'SerializedTagMap m_Tags; vector<data:UInt16> m_SerializedKeywordStateMask\nSerializedSubShader'))
 # The Unity 2020.3 Shader (Patrick's Parabox, Unity 2020.3.30f1: only Data/*.assets, its shaders the built-in ones in Data/Resources) matches the type tree in Fire Emblem Engage's bundles
 # (Unity 2020.3.18f1), whose hash is the same: global and local keyword indices per subprogram, every subprogram in m_SubPrograms, no parameter blobs, keyword names or stage counts
 SHADER_2020_3 = _SHADER_COMMON + '''SerializedSubProgram: unsigned int m_BlobIndex; ParserBindChannels m_Channels; vector<data:UInt16> m_GlobalKeywordIndices; vector<data:UInt16> m_LocalKeywordIndices; SInt8 m_ShaderHardwareTier; SInt8! m_GpuProgramType; SerializedProgramParameters m_Parameters; int m_ShaderRequirements
@@ -259,6 +270,7 @@ ComputeShader: string m_Name; vector<data:ComputeShaderVariant> variants
 '''
 CLASS_COMPUTE_SHADER = 72
 KNOWN_TREES = {(CLASS_SHADER, bytes.fromhex('ea424a5fc1e48db62144df956f9e1005')): ('Shader', SHADER_2022_3),
+               (CLASS_SHADER, bytes.fromhex('f0c184272a05e54447e36366ec4876a6')): ('Shader', SHADER_2021_3),
                (CLASS_SHADER, bytes.fromhex('a30e3dcf6c6d25153d6f64e5e41caf4e')): ('Shader', SHADER_2020_3),
                (CLASS_SHADER, bytes.fromhex('8db760073e1392061e4a36995f0735af')): ('Shader', SHADER_2018_3),
                (CLASS_SHADER, bytes.fromhex('266d53113fa30d2b858f2768f92eaa14')): ('Shader', SHADER_2017_4),
@@ -342,7 +354,7 @@ Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> 
 '''
 # Layouts for a class whose type hash is in no bundle and not in KNOWN_TREES, chosen by the Unity version in the serialized file's header (major.minor). The layout of a class does not change
 # within a Unity release line (2019.4.22f1 and 2019.4.27f1 dump the same Shader tree), but a guess must still read every object to its exact end, or the file is left without a tree
-KNOWN_BY_VERSION = {(CLASS_SHADER, '2019.4'): ('Shader', SHADER_2019_4)}
+KNOWN_BY_VERSION = {(CLASS_SHADER, '2019.4'): ('Shader', SHADER_2019_4), (CLASS_SHADER, '2021.3'): ('Shader', SHADER_2021_3)}
 def version_key(cid, unity): return (cid, 'unity ' + unity)
 
 def known_version_tree(cid, unity):
@@ -351,21 +363,74 @@ def known_version_tree(cid, unity):
     return _KNOWN[k]
 
 
+# Every Unity release from 5.5 (the first with serialized format 17): the Shader and ComputeShader trees of AssetRipper's TypeTreeDumps (unity_layouts.txt, written by unity_layouts_gen.py), for a stripped file whose
+# hash no bundle, KNOWN_TREES or KNOWN_BY_VERSION has. 836 releases give 23 Shader and 10 ComputeShader trees. The candidates are tried in turn, the file's exact version first, then its
+# release line, then the nearest versions, and a tree is kept only if it reads every object of that class in the file to its exact end. They are only used when the trees passed to
+# serialized_objects hold the GENERATED key (shader_split's second pass), so a bundle's own tree of the same hash still wins
+GENERATED = ('unity layouts',)
+LAYOUTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'unity_layouts.txt')
+_LAYOUTS = None
+def _layouts():
+    """→ [(class ID, [versions], root Node)] from unity_layouts.txt"""
+    global _LAYOUTS
+    if _LAYOUTS is None:
+        nodes, out = {}, []
+        try:
+            with open(LAYOUTS_FILE, encoding='utf-8') as f: lines = f.read().splitlines()
+        except OSError: lines = []
+        for ln in lines:
+            f = ln.split(' ')
+            if f[0] == 'N':
+                t, n = f[3].replace('%20', ' '), f[4].replace('%20', ' ')
+                nd = Node(t, n, struct.calcsize(PRIM[t]) if t in PRIM else -1, 0x4000 if f[2] == '1' else 0)
+                nd.kids = [nodes[int(k)] for k in f[5:]]; nodes[int(f[1])] = nd
+            elif f[0] == 'L': out.append((int(f[1]), f[3:], nodes[int(f[2])]))
+        _LAYOUTS = out
+    return _LAYOUTS
+
+def _vnum(v):
+    """'2021.3.45f1' → (2021, 3, 45, 1), for distances between versions; None if it is not a release version"""
+    m = re.match(r'^(\d+)\.(\d+)\.(\d+)[a-z]*(\d*)', v or '')
+    return (int(m[1]), int(m[2]), int(m[3]), int(m[4] or 0)) if m else None
+
+def layout_candidates(cid, unity):
+    """the trees of class cid to try for a file of Unity version unity, most likely first: the one dumped for that exact version, then the rest of its release line, then by distance"""
+    v = _vnum(unity)
+    def rank(entry):
+        vs = entry[1]
+        if unity in vs: return (0, 0)
+        nums = [_vnum(x) for x in vs]
+        if v is None: return (2, 0)
+        same = [x for x in nums if x[:2] == v[:2]]
+        dist = lambda x: abs((x[0] * 100 + x[1]) - (v[0] * 100 + v[1])) * 10000 + abs(x[2] - v[2])
+        return (1, min(dist(x) for x in same)) if same else (2, min(dist(x) for x in nums))
+    return [e[2] for e in sorted((e for e in _layouts() if e[0] == cid), key=rank)]
+
+def _fits(o, root):
+    """does the object's data read with this tree to its exact end"""
+    try: v = _read(o, root); o.align(); return v if o.p == len(o.d) else None
+    except (struct.error, IndexError, KeyError, ValueError, UnicodeDecodeError, MemoryError, OverflowError, RecursionError): return None
+
+
 def serialized_objects(d, common, want=None, trees=None):
     """serialized file → yields (class ID, path ID, object dict); want = only decode these class IDs.
     trees = {(class ID, type hash): type tree}: files with type trees record theirs, files without (the game's own data.unity3d and so on) borrow one of the same class and hash -- the same hash means the same layout"""
     le, doff, tlist, objs = _tables(d, common, want, trees)
+    def data(start, size):
+        o = Reader(d, le); o.d = d[doff + start:doff + start + size]; return o
+    # a type whose tree is a guess by Unity version (KNOWN_BY_VERSION, then unity_layouts.txt) takes the first candidate that reads every object of that type to its exact end
+    for ti, (cid, h, root, unity) in enumerate(tlist):
+        if not unity or (want and cid not in want): continue
+        mine = [(start, size) for _pid, start, size, t in objs if t == ti]
+        pick = next((c for c in root if all(_fits(data(*x), c) is not None for x in mine)), None)
+        if pick is None:
+            raise NoTree(f'class {cid} (type hash {h.hex()}): none of the {len(root)} layouts unityfs.py has for Unity {unity} reads its {len(mine)} object(s) to their end')
+        tlist[ti] = (cid, h, pick, None)
     for pid, start, size, ti in objs:
         cid, h, root, unity = tlist[ti]
         if want and cid not in want: continue
         if root is None: raise NoTree(f'class {cid} (type hash {h.hex()}) has no type tree available')
-        o = Reader(d, le); o.d = d[doff + start:doff + start + size]
-        if not unity: yield cid, pid, _read(o, root); continue
-        # a layout chosen by the Unity version (KNOWN_BY_VERSION), not by the hash: kept only if the object reads to its exact end
-        try: v = _read(o, root); o.align(); fits = o.p == len(o.d)
-        except (struct.error, IndexError, KeyError, ValueError, UnicodeDecodeError, MemoryError, OverflowError): fits = False
-        if not fits: raise NoTree(f'class {cid} (type hash {h.hex()}): the Unity {unity} layout does not read object {pid} to its end')
-        yield cid, pid, v
+        yield cid, pid, _read(data(start, size), root)
 
 CLASS_TEXT_ASSET = 49
 
@@ -388,7 +453,7 @@ def text_assets(d, common):
         yield pid, name, r.d[r.p:r.p + ln]
 
 def _tables(d, common, want, trees):
-    """serialized file → (little-endian, data offset, [(class ID, type hash, type tree or None, Unity release line if the tree is a guess by version)], [(path ID, start, size, type index)]):
+    """serialized file → (little-endian, data offset, [(class ID, type hash, type tree or None, or [candidate trees] with the file's Unity version when the tree is a guess by version)], [(path ID, start, size, type index)]):
     its type table and object table"""
     msz, fsz, ver, doff = struct.unpack_from('>IIII', d, 0)
     if not 17 <= ver <= 22: raise ValueError(f'serialized file format {ver} is not supported')
@@ -421,8 +486,9 @@ def _tables(d, common, want, trees):
         elif trees is not None:
             root = trees.get((cid, h))
             if root is None:
-                root = trees.get(version_key(cid, line))
-                if root is not None: guess = line
+                cand = [trees[version_key(cid, line)]] if version_key(cid, line) in trees else []
+                if GENERATED in trees and (want is None or cid in want): cand += [c for c in layout_candidates(cid, uver) if c not in cand]
+                if cand: root, guess = cand, uver
         tlist.append((cid, h, root, guess))
     objs = []
     for _ in range(r.u('i')):

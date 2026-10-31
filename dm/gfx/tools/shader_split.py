@@ -1821,13 +1821,22 @@ def nso_image(path):
         img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
     return bytes(img)
 
+def path_list(arg):
+    """a comma-separated list of paths whose names may hold commas themselves (Snipperclips Plus - Cut It Out, Together): pieces are joined back while the
+    joined path does not exist and a longer join does, so a path that exists is never split"""
+    parts, out, i = arg.split(','), [], 0
+    while i < len(parts):
+        j = next((j for j in range(len(parts), i, -1) if os.path.exists(','.join(parts[i:j]))), i + 1)
+        out.append(','.join(parts[i:j])); i = j
+    return out
+
 def main():
     romfs_l, main_l, pkg, mapout, factsout = sys.argv[1:6]
     pairsout = sys.argv[6] if len(sys.argv) > 6 else None
     psopairsout = sys.argv[7] if len(sys.argv) > 7 else None   # pso_pairs.tsv: the pairs the pipeline prebuild takes besides shader_pairs.tsv (the BAHS program variations)
     # Several versions (base game + update): the RomFS and main arguments are comma-separated and paired one to one; the output is their union (keys are content hashes, shaders shared by versions appear once).
     # The first version's source column is unchanged; later versions are prefixed with their workspace directory name (e.g. v327680): /v327680/Shader/…, main@v327680. They sort after the first version, so existing rows keep their package indices.
-    romfs_v, main_v = romfs_l.split(','), main_l.split(',')
+    romfs_v, main_v = path_list(romfs_l), path_list(main_l)
     if len(romfs_v) != len(main_v): red(f'{len(romfs_v)} RomFS and {len(main_v)} main: they must pair one to one')
     files, results, common = [], [], None
     for i, (romfs, mainnso) in enumerate(zip(romfs_v, main_v)):
@@ -1885,10 +1894,12 @@ def main():
         for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
         # and a hash none of those has takes the layout of the file's Unity release line, if unityfs.py has one (KNOWN_BY_VERSION) and it reads every object to its end (Unspottable, Unity 2019.4.22f1)
         for cid, line in unityfs.KNOWN_BY_VERSION: trees.setdefault(unityfs.version_key(cid, line), unityfs.known_version_tree(cid, line))
+        # and after those, every Shader and ComputeShader tree of the Unity releases from 2017.1 (unity_layouts.txt), tried in turn from the file's own version, each kept only if it reads every object to its end
+        trees[unityfs.GENERATED] = True
         byrel = {r: p for p, r in files}
         with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
         for rel, uniq, pr, extra in again:
-            if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow')
+            if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow, nor does any Unity release layout unityfs.py has read it')
         results = [r for r in results if r[3] != 'defer'] + again
     per_src = collections.Counter(); pairs = set()
     for rel, uniq, pr, _ in results:
