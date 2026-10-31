@@ -269,10 +269,18 @@ def main():
     if info.get('MULTI') != '1':
         die('the shell in %s cannot run several games (dm/shell_info.txt has no MULTI=1): use a shell from %s or later, '
             'with --shell or by packing the first game with it' % (sz.filename, 'the multi-game build'))
+    # PACK_ABI (dm/tools/pack_abi.py): the package format. A game packed with another shell of the same format goes in as
+    # it is; one of another format would load modules the host cannot read, so it is refused here rather than on the phone
+    stale = []
     for z in zs:
-        o = shell_info(z, app_dir(z)).get('SOURCE_SHA')
-        if o and o != info.get('SOURCE_SHA'):
+        zi = shell_info(z, app_dir(z))
+        o, oa, sa = zi.get('SOURCE_SHA'), zi.get('PACK_ABI'), info.get('PACK_ABI')
+        if not o or o == info.get('SOURCE_SHA'): continue
+        if oa and sa and oa != sa: stale.append(os.path.basename(z.filename))
+        elif not (oa and sa):
             say('note: %s was packed with shell %s, the merged IPA uses %s; repack it if it does not start' % (os.path.basename(z.filename), o[:7], info.get('SOURCE_SHA', '?')[:7]))
+    if stale:
+        die('packed for another package format than this shell (PACK_ABI %s), convert them again: %s' % (info.get('PACK_ABI'), ', '.join(stale)))
 
     out_A = 'Payload/DmIOS.app/'
     part = a.out + '.partial'
