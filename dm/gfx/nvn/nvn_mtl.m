@@ -2172,6 +2172,32 @@ static id<MTLBuffer> zero_buf(size_t need) {
     }
     return zb;
 }
+// Block-compressed formats: block width / height and bytes per block (0 = not block-compressed); astc set for ASTC. Metal's raw values: BC 130–143, ASTC LDR sRGB 186–200,
+// LDR 204–218, HDR 222–236 (each ASTC run in the order 4x4 5x4 5x5 6x5 6x6 - 8x5 8x6 8x8 10x5 10x6 10x8 10x10 12x10 12x12, the sixth value unused)
+static size_t mtl_pf_block(MTLPixelFormat pf, int *bw, int *bh, int *astc) {
+    static const uint8_t k_astc[15][2] = {{4,4},{5,4},{5,5},{6,5},{6,6},{0,0},{8,5},{8,6},{8,8},{10,5},{10,6},{10,8},{10,10},{12,10},{12,12}};
+    int v = (int)pf; *astc = 0;
+    if (v >= 130 && v <= 143) { *bw = *bh = 4; return v <= 131 || (v >= 140 && v <= 141) ? 8 : 16; }   // BC1 and BC4 are 8 bytes a block, the rest 16
+    int base = v >= 222 && v <= 236 ? 222 : v >= 204 && v <= 218 ? 204 : v >= 186 && v <= 200 ? 186 : -1;
+    if (base < 0 || !k_astc[v - base][0]) return 0;
+    *bw = k_astc[v - base][0]; *bh = k_astc[v - base][1]; *astc = 1; return 16;
+}
+// Initial content of a new ASTC texture: a void-extent block of transparent black in every block. Zeros (what a new texture's memory usually holds) are not a valid ASTC block and
+// decode as the error colour, magenta: Heave Ho flashed full magenta for a frame on entering a level, where it samples its new ASTC textures before their content is copied in
+static id<MTLBuffer> astc_clear_buf(size_t need) {
+    static id<MTLBuffer> ab; static size_t an;
+    if (need > an) {
+        size_t n = MAX((need + 15) & ~(size_t)15, (size_t)1 << 20);
+        id<MTLBuffer> b = [g_dev newBufferWithLength:n options:MTLResourceStorageModeShared];
+        if (!b) return nil;
+        static const uint8_t blk[16] = {0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0};   // void extent, LDR, extent ignored; RGBA16 = 0
+        for (size_t o = 0; o < n; o += 16) memcpy((uint8_t *)b.contents + o, blk, 16);
+        res_add(b);
+        if (ab) defer_obj_release(ab);
+        ab = b; an = n;
+    }
+    return ab;
+}
 static uint64_t g_tex_zeroed;
 static void tex_zero_fill(id<MTLTexture> mt) {
     static int warned;
@@ -2201,8 +2227,24 @@ static void tex_zero_fill(id<MTLTexture> mt) {
     }
     if (tt == MTLTextureType2DMultisample || tt == MTLTextureType2DMultisampleArray || tt == MTLTextureTypeTextureBuffer) return;
     size_t bpp = mtl_pf_bytes(mt.pixelFormat);
-    if (!bpp) { if (!warned++) MLOG("new-texture zeroing: pixel format %lu not cleared (compressed / unsupported)", (unsigned long)mt.pixelFormat); return; }
     NSUInteger slices = mt.arrayLength * (tt == MTLTextureTypeCube || tt == MTLTextureTypeCubeArray ? 6 : 1);
+    if (!bpp) {   // block-compressed: BC from zeros (a valid block of black), ASTC from void-extent blocks
+        int bw, bh, astc; size_t bb = mtl_pf_block(mt.pixelFormat, &bw, &bh, &astc);
+        if (!bb) { if (!warned++) MLOG("new-texture zeroing: pixel format %lu not cleared (unsupported)", (unsigned long)mt.pixelFormat); return; }
+        size_t row0 = (mt.width + bw - 1) / bw * bb, need = row0 * ((mt.height + bh - 1) / bh) * mt.depth;
+        if (need > (64u << 20)) return;
+        id<MTLBuffer> src = astc ? astc_clear_buf(need) : zero_buf(need); if (!src) return;
+        up_begin();
+        for (NSUInteger l = 0; l < mt.mipmapLevelCount; l++) {
+            NSUInteger w = MAX(mt.width >> l, 1u), h = MAX(mt.height >> l, 1u), z = tt == MTLTextureType3D ? MAX(mt.depth >> l, 1u) : 1;
+            size_t row = (w + bw - 1) / bw * bb, image = row * ((h + bh - 1) / bh);
+            for (NSUInteger y = 0; y < slices; y++) up_blit_add(src, 0, row, image, MTLSizeMake(w, h, z), mt, y, l);
+        }
+        [g_up_texs addObject:mt];
+        if (!g_cb) up_flush();
+        { static int nl; if (!nl++) MLOG("new-texture zeroing: block-compressed textures cleared too (ASTC as transparent black void-extent blocks)"); }
+        return;
+    }
     size_t need = (size_t)mt.width * bpp * mt.height * mt.depth;   // level 0, one slice is the largest
     if (need > (64u << 20)) { static int big; if (!big++) MLOG("new-texture zeroing: %lux%lux%lu exceeds 64 MB, not cleared", (unsigned long)mt.width, (unsigned long)mt.height, (unsigned long)mt.depth); return; }
     id<MTLBuffer> zb = zero_buf(need); if (!zb) return;
