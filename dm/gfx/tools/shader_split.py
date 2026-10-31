@@ -1894,10 +1894,12 @@ def main():
         for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
         # and a hash none of those has takes the layout of the file's Unity release line, if unityfs.py has one (KNOWN_BY_VERSION) and it reads every object to its end (Unspottable, Unity 2019.4.22f1)
         for cid, line in unityfs.KNOWN_BY_VERSION: trees.setdefault(unityfs.version_key(cid, line), unityfs.known_version_tree(cid, line))
+        # and after those, every Shader and ComputeShader tree of the Unity releases from 2017.1 (unity_layouts.txt), tried in turn from the file's own version, each kept only if it reads every object to its end
+        trees[unityfs.GENERATED] = True
         byrel = {r: p for p, r in files}
         with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
         for rel, uniq, pr, extra in again:
-            if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow')
+            if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow, nor does any Unity release layout unityfs.py has read it')
         results = [r for r in results if r[3] != 'defer'] + again
     per_src = collections.Counter(); pairs = set()
     for rel, uniq, pr, _ in results:
