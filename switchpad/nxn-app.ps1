@@ -122,7 +122,8 @@ $updater = Join-Path $here 'nxn-update.ps1'
 # 圖示：更新後放在 工具\，剛解壓的下載檔在最上層
 $appIcon = Join-Path $here '工具\SwitchPad.ico'
 if (-not (Test-Path $appIcon)) { $appIcon = Join-Path $here 'SwitchPad.ico' }
-$repo = 'Mono0713/ns2ios-shell'      # 殼、打包器和 Switch Pad 的新版都從這個 repo 的 release 拿
+$repo = 'Mono0713/ns2ios-shell'      # 殼和打包器的新版從這個 repo 的 release 拿
+$appRepo = 'Mono0713/Switch-Pad'     # Switch Pad 自己的新版從這個 repo 的 release 拿
 New-Item -ItemType Directory -Force -Path $logDir, $coverDir, $gamesDir | Out-Null
 
 # ---------------------------------------------------------------- 設定（殼、UDID、要不要蓋舊 IPA），存在 work\app-settings.json
@@ -1045,7 +1046,8 @@ function Show-Pack($p) {
 }
 
 # ---------------------------------------------------------------- 安裝和更新（nxn-update.ps1 做事；這裡只看缺什麼、問 GitHub 有沒有新版）
-$latest = $null       # GitHub 上最新的 release（背景問到之後才有）
+$latest = $null       # GitHub 上最新的殼 release（背景問到之後才有）
+$latestApp = $null    # Switch Pad 最新的 release
 function Setup-Missing {
     $m = @()
     if (-not (Test-Path (Join-Path $work 'shell.zip'))) { $m += '殼' }
@@ -1060,7 +1062,9 @@ function Update-Available {
     $have = if (Test-Path $rel) { (Get-Content $rel -Raw).Trim() } else { '' }
     $what = @()
     if ($have -and $have -ne $latest.tag_name) { $what += '殼和打包器' }
-    $app = $latest.assets | Where-Object { $_.name -eq 'SwitchPad.zip' } | Select-Object -First 1
+    $app = $null
+    if ($latestApp) { $app = $latestApp.assets | Where-Object { $_.name -eq 'SwitchPad.zip' } | Select-Object -First 1 }
+    if (-not $app) { $app = $latest.assets | Where-Object { $_.name -eq 'SwitchPad.zip' } | Select-Object -First 1 }
     $ver = Join-Path $work 'app-version.txt'
     $appHave = if (Test-Path $ver) { (Get-Content $ver -Raw).Trim() } else { '' }
     if ($app -and $appHave -ne $app.updated_at) { $what += 'Switch Pad' }
@@ -1089,12 +1093,18 @@ function Update-UpdateBtn {
 }
 # 背景問 GitHub（不卡住畫面）；問不到就算了，下次開再問
 $checkTask = $null
+$checkAppTask = $null
 function Check-Updates {
     try {
         $wc = New-Object Net.WebClient
         $wc.Headers.Add('User-Agent', 'SwitchPad')
         $wc.Encoding = [Text.Encoding]::UTF8
         $script:checkTask = $wc.DownloadStringTaskAsync("https://api.github.com/repos/$repo/releases/latest")
+        # 一個 WebClient 同時只能下載一個，Switch Pad 自己的 release 另開一個問
+        $wa = New-Object Net.WebClient
+        $wa.Headers.Add('User-Agent', 'SwitchPad')
+        $wa.Encoding = [Text.Encoding]::UTF8
+        $script:checkAppTask = $wa.DownloadStringTaskAsync("https://api.github.com/repos/$appRepo/releases/latest")
         $checkTimer.Start()
     } catch { }
 }
@@ -1102,9 +1112,12 @@ $checkTimer = New-Object Windows.Threading.DispatcherTimer
 $checkTimer.Interval = [TimeSpan]::FromMilliseconds(500)
 $checkTimer.Add_Tick({
     if (-not $checkTask -or -not $checkTask.IsCompleted) { return }
+    if ($checkAppTask -and -not $checkAppTask.IsCompleted) { return }
     $checkTimer.Stop()
     if ($checkTask.Status -eq 'RanToCompletion') { try { $script:latest = $checkTask.Result | ConvertFrom-Json } catch { } }
+    if ($checkAppTask -and $checkAppTask.Status -eq 'RanToCompletion') { try { $script:latestApp = $checkAppTask.Result | ConvertFrom-Json } catch { } }
     $script:checkTask = $null
+    $script:checkAppTask = $null
     if (-not $state.Running) { Update-Notice }
 })
 function Set-Keys($path) {

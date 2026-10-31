@@ -1,5 +1,6 @@
 ﻿# nxn-update.ps1 - Switch Pad 的安裝和更新：Python、Python 套件、打包器（殼、Windows 工具、原始碼）、plumesign、Switch Pad 自己。
-# 全部從 GitHub 下載：殼和打包器取 Mono0713/ns2ios-shell 最新的 release，plumesign 取 Impactor 最新的 release。
+# 全部從 GitHub 下載：殼和打包器取 Mono0713/ns2ios-shell 最新的 release，Switch Pad 取 Mono0713/Switch-Pad 最新的 release，
+# plumesign 取 Impactor 最新的 release。
 # 已經是最新的部分會跳過，所以重複執行沒關係。Switch Pad 的「安裝」「更新」按鈕就是跑這個。
 #
 # 用法：
@@ -13,6 +14,7 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Repo = 'Mono0713/ns2ios-shell'
+$AppRepo = 'Mono0713/Switch-Pad'
 $PlumeRepo = 'khcrysalis/Impactor'
 $here = $PSScriptRoot
 # 程式檔、work、工具 在 nxn\程式\，遊戲在上一層（舊版全部在同一層，Switch Pad 開起來會自己搬）
@@ -170,7 +172,13 @@ try {
 
     # ---- Switch Pad 自己 ----
     Step '檢查 Switch Pad'
-    $appA = $rel.assets | Where-Object { $_.name -eq 'SwitchPad.zip' } | Select-Object -First 1
+    # Switch Pad 有自己的 repo；問不到（或還沒有 release）就用殼 release 附的那份
+    $appA = $null
+    try {
+        $ar = Invoke-RestMethod -Uri "https://api.github.com/repos/$AppRepo/releases/latest" -Headers $headers
+        $appA = $ar.assets | Where-Object { $_.name -eq 'SwitchPad.zip' } | Select-Object -First 1
+    } catch { }
+    if (-not $appA) { $appA = $rel.assets | Where-Object { $_.name -eq 'SwitchPad.zip' } | Select-Object -First 1 }
     $verFile = Join-Path $work 'app-version.txt'
     $appHave = if (Test-Path $verFile) { (Get-Content $verFile -Raw).Trim() } else { '' }
     if (-not $appA) { Write-Host '這個 release 沒有附 Switch Pad，跳過' }
