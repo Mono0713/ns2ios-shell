@@ -69,8 +69,60 @@ def sources(roots):
 #   · the GLSL ES 1.0 texture functions (89 of Digimon's fragment shaders call textureCube; with -V glslang reads textureCube as Vulkan's texture type, so a macro cannot rename it);
 #   · a redeclaration of gl_Position as a plain output (the built-in sprite shader of main declares `out float4 vPosition;` with vPosition defined as gl_Position);
 #   · textureOffset with an offset that is not a constant (the built-in FXAA shader): Metal's sample offsets are constants too, so it becomes texture at P + offset / level 0 size
-OLD_TEX = [(r'\btexture2DLod\s*\(', 'textureLod('), (r'\btextureCubeLod\s*\(', 'textureLod('), (r'\btexture2DProj\s*\(', 'textureProj('),
-           (r'\btexture2D\s*\(', 'texture('), (r'\btextureCube\s*\(', 'texture(')]
+OLD_TEX = [(r'\btexture2DLod(?:EXT)?\s*\(', 'textureLod('), (r'\btextureCubeLod(?:EXT)?\s*\(', 'textureLod('), (r'\btexture2DProjLod(?:EXT)?\s*\(', 'textureProjLod('),
+           (r'\btexture2DProj\s*\(', 'textureProj('), (r'\btexture2DGradEXT\s*\(', 'textureGrad('), (r'\btextureCubeGradEXT\s*\(', 'textureGrad('),
+           (r'\btexture2D\s*\(', 'texture('), (r'\btextureCube\s*\(', 'texture('), (r'\btexture3D\s*\(', 'texture('), (r'\bshadow2DEXT\s*\(', 'texture('),
+           (r'\bgl_FragDepthEXT\b', 'gl_FragDepth')]
+
+# GLSL ES 1.00 (OpenGL ES 2 games: Roof Rage) and the old desktop versions (none, 110, 120) have no SPIR-V route: glslang takes ES shaders from 3.10 and desktop
+# ones from 1.40. They are rewritten as GLSL ES 3.10 before the preprocessor runs, which keeps what they mean (GL_ES is defined, default precisions apply):
+#   · attribute → in, varying → out / in, gl_FragColor / gl_FragData[0] → an output of colour 0 (dm_FragColor);
+#   · #extension lines go (ES 3.10 has derivatives, texture LOD and frag depth of its own) and #ifdef / defined() of those extensions read as true;
+#   · names a newer GLSL took for itself (a uniform called texture, a function called round or inverse) are renamed dm_<name>, which the table turns back
+#     (LEGACY_RENAMED), since the game asks GL for them by their own names;
+#   · a default float / int precision of highp first, which the shader's own precision statement overrides (ES 1.00 fragment shaders must declare one; desktop ones never do).
+LEGACY_RENAMED = {'texture', 'textureLod', 'textureProj', 'textureProjLod', 'textureGrad', 'textureSize', 'textureOffset', 'textureGather', 'texelFetch',
+                  'round', 'roundEven', 'trunc', 'inverse', 'transpose', 'determinant', 'outerProduct', 'isnan', 'isinf', 'sinh', 'cosh', 'tanh', 'asinh',
+                  'acosh', 'atanh', 'modf', 'frexp', 'ldexp', 'fma', 'floatBitsToInt', 'floatBitsToUint', 'intBitsToFloat', 'uintBitsToFloat',
+                  'packUnorm2x16', 'packSnorm2x16', 'packHalf2x16', 'unpackUnorm2x16', 'unpackSnorm2x16', 'unpackHalf2x16', 'packUnorm4x8', 'unpackUnorm4x8',
+                  'bitfieldExtract', 'bitfieldInsert', 'bitfieldReverse', 'bitCount', 'findLSB', 'findMSB', 'uaddCarry', 'usubBorrow', 'umulExtended', 'imulExtended',
+                  'barrier', 'memoryBarrier', 'imageLoad', 'imageStore', 'imageSize', 'atomicAdd', 'atomicMin', 'atomicMax', 'atomicAnd', 'atomicOr', 'atomicXor',
+                  'atomicExchange', 'atomicCompSwap', 'atomicCounter',
+                  'centroid', 'smooth', 'layout', 'uint', 'uvec2', 'uvec3', 'uvec4', 'sample', 'patch', 'buffer', 'shared', 'coherent', 'restrict', 'readonly',
+                  'writeonly', 'precise', 'subroutine', 'noperspective', 'resource', 'common', 'partition', 'active', 'filter', 'image2D', 'isampler2D', 'usampler2D'}
+LEGACY_EXTS = ('GL_OES_standard_derivatives', 'GL_EXT_shader_texture_lod', 'GL_EXT_frag_depth', 'GL_EXT_shadow_samplers', 'GL_OES_texture_3D')
+
+def legacy_version(src):
+    """the #version of a source that needs legacy() (None for one without), or False for one glslang takes as it is"""
+    t = re.sub(r'/\*.*?\*/|//[^\n]*', ' ', src, flags=re.S)
+    m = re.match(r'\s*#\s*version\s+(\d+)(?:\s+(\w+))?', t)
+    if not m: return None
+    return int(m.group(1)) if int(m.group(1)) in (100, 110, 120) else False
+
+def legacy(src, stage, version):
+    """GLSL ES 1.00 / desktop GLSL 1.10–1.20 → GLSL ES 3.10 (see above); None for a shader that cannot be"""
+    renamed = LEGACY_RENAMED - ({'transpose', 'outerProduct'} if version == 120 else set())   # GLSL 1.20 has these two built in
+    t = re.sub(r'^[ \t]*#[ \t]*version[^\n]*', '', src, count=1, flags=re.M)
+    t = re.sub(r'^[ \t]*#[ \t]*extension[^\n]*', '', t, flags=re.M)
+    for e in LEGACY_EXTS:
+        t = re.sub(r'^([ \t]*#[ \t]*)ifdef[ \t]+' + e + r'\b', r'\1if 1', t, flags=re.M)
+        t = re.sub(r'^([ \t]*#[ \t]*)ifndef[ \t]+' + e + r'\b', r'\1if 0', t, flags=re.M)
+        t = re.sub(r'\bdefined\s*\(\s*' + e + r'\s*\)|\bdefined\s+' + e + r'\b', '1', t)
+    t = re.sub(r'\b(' + '|'.join(sorted(renamed, key=len, reverse=True)) + r')\b', r'dm_\1', t)
+    t = re.sub(r'\bsamplerExternalOES\b', 'sampler2D', t)
+    head = '#version 310 es\nprecision highp float;\nprecision highp int;\n'
+    if stage == 'vert':
+        t = re.sub(r'\battribute\b', 'in', t); t = re.sub(r'\bvarying\b', 'out', t)
+    else:
+        t = re.sub(r'\bvarying\b', 'in', t)
+        if re.search(r'\bgl_Frag(?:Color|Data)\b', t):
+            if re.search(r'\bgl_FragData\s*\[\s*[1-9]', t): return None   # several colour outputs: the layer draws into one
+            t = re.sub(r'\bgl_FragData\s*\[\s*0\s*\]|\bgl_FragColor\b', 'dm_FragColor', t)
+            head += 'layout(location = 0) out highp vec4 dm_FragColor;\n'
+    return head + '#line 1\n' + t
+
+def legacy_name(n):
+    return n[3:] if n.startswith('dm_') and n[3:] in LEGACY_RENAMED else n
 
 def call_args(t, i):
     """the arguments of the call whose '(' is at t[i], and the index after its ')'"""
@@ -102,6 +154,11 @@ def glsl_type(t, refl):
 def translate(src, stage, key, tmp):
     """GLSL → MSL; returns (msl path, table fields) or an error string"""
     g = os.path.join(tmp, f'{key}.{stage}'); spv = g + '.spv'; msl = os.path.join(tmp, f'{key}_{stage[0]}.metal')
+    ver = legacy_version(src.decode('utf-8', 'replace'))
+    if ver is not False:
+        src = legacy(src.decode('utf-8', 'replace'), stage, ver)
+        if src is None: return 'gl_FragData beyond [0]: several colour outputs are not implemented'
+        src = src.encode()
     open(g + '.in', 'wb').write(src)
     r = subprocess.run(['glslangValidator', '-E', '-S', stage, g + '.in'], capture_output=True, text=True)
     if r.returncode: return 'glslang -E: ' + ' | '.join(l for l in (r.stdout + r.stderr).splitlines() if 'ERROR' in l and 'compilation' not in l)[:400]
@@ -121,7 +178,7 @@ def translate(src, stage, key, tmp):
     open(msl, 'w').write(m)
     f = []
     if stage == 'vert':
-        for v in refl.get('inputs', []): f.append(f'a:{v["name"]}={v["location"]}:{v["type"]}')
+        for v in refl.get('inputs', []): f.append(f'a:{legacy_name(v["name"])}={v["location"]}:{v["type"]}')
     else:
         for v in refl.get('outputs', []): f.append(f'o:{v["name"]}={v["location"]}')
     # a bool uniform is a uint in the SPIR-V block (it has no bool members), but the game asks GL for its declared type: LÖVE's Shader:send takes only a boolean for a GLSL bool
@@ -136,10 +193,10 @@ def translate(src, stage, key, tmp):
             ty = glsl_type(mb['type'], refl)
             if ty == 'uint' and mb['name'] in bools: ty = 'bool'
             if ty not in VEC_TYPES: return f'uniform {mb["name"]}: type {ty} (structs are not implemented)'
-            f.append(f'u:{mb["name"]}={mb["offset"]}:{ty}:{arr[0] if arr else 0}:{mb.get("array_stride", 0)}')
+            f.append(f'u:{legacy_name(mb["name"])}={mb["offset"]}:{ty}:{arr[0] if arr else 0}:{mb.get("array_stride", 0)}')
     for t in refl.get('textures', []):
         if t.get('array'): return f'sampler array {t["name"]}'
-        f.append(f't:{t["name"]}={t["binding"]}:{t["type"]}')
+        f.append(f't:{legacy_name(t["name"])}={t["binding"]}:{t["type"]}')
     for k in ('separate_images', 'separate_samplers', 'images', 'ssbos', 'push_constants'):
         if refl.get(k): return f'{k} are not implemented'
     if any(int(x) > 15 for x in re.findall(r'\[\[(?:sampler|buffer)\((\d+)\)\]\]', m)): return 'a buffer or sampler slot above 15'

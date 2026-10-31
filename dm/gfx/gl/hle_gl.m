@@ -2,6 +2,10 @@
 // driver, subsdk0, which the host does not load; Balatro: LÖVE 11.4 on SDL, the same driver). main imports the EGL functions, which bind to the ones here through the host's import
 // table (hle.h swhle); it gets every GL function through eglGetProcAddress (a glad loader asks for 2,956 names; Digimon's code calls 79 of them, LÖVE's about 150, counted with
 // dm/tools/loader_census.py). Only those are implemented; every other name gets a null pointer (DM_GL_STUBS=1: a stub that reports its first call).
+// OpenGL ES 2 (Roof Rage: Haxe / Lime / OpenFL on SDL) is the same layer: eglBindAPI(EGL_OPENGL_ES_API) makes the context an ES one, which changes only what the queries
+// report (glGetString's "OpenGL ES 2.0", the ES extension names); such a game imports its GL functions by name from NintendoSDK_OpenGL (subsdk0) instead of asking
+// eglGetProcAddress, and the host's import resolution takes them from this layer's table (hle.c gl_import, dm_gl_proc). Its GLSL ES 1.00 shaders are rewritten as
+// GLSL ES 3.10 by gl_shaders.py before they are translated. Vertex arrays in client memory (no buffer bound, which ES 2 allows) are copied into transient memory per draw.
 // LÖVE takes the core profile's paths (GL_CONTEXT_PROFILE_MASK): its vertex streams are persistently mapped buffers (glBufferStorage, glMapBufferRange) that fences
 // (glFenceSync / glClientWaitSync) keep the CPU from rewriting while a frame reads them; with a compatibility profile it would draw from client memory, which Metal cannot.
 // Model:
@@ -405,9 +409,10 @@ static struct {
     int unpack_align, unpack_row, pack_align;
     uint32_t palette[256]; int npalette, color_table, index_shift, index_offset;
     int swap_interval;
+    float dnear, dfar, bcolor[4];
 } S = {.cmask = 0xf, .dmask = 1, .dfunc = 0x201, .cull_face = GL_BACK, .front = GL_CCW, .bsrc = 1, .bdst = 0, .bsa = 1, .bda = 0, .eqc = GL_FUNC_ADD, .eqa = GL_FUNC_ADD,
        .sfunc = 0x207, .sfail = GL_KEEP, .szfail = GL_KEEP, .spass = GL_KEEP, .smask = 0xffffffff, .swmask = 0xffffffff, .clear_d = 1, .unpack_align = 4, .pack_align = 4,
-       .swap_interval = 1, .psize = 1,
+       .swap_interval = 1, .psize = 1, .dfar = 1,
        .va = {{0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1},
               {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}}};
 static vao_t *cur_vao(void) { return S.vao && S.vao < g_nvaos && g_vaos[S.vao] ? g_vaos[S.vao] : &g_vao0; }
@@ -697,7 +702,7 @@ static void tex_image(GLenum target, GLint level, int f, int cv, uint32_t w, uin
 // The pass being encoded: framebuffer name, its attachments' generation (a changed attachment ends the pass), clears waiting for the pass to begin
 static struct { GLuint fb; uint64_t gen; int open; uint32_t w, h; MTLPixelFormat cpf, dpf, spf; } P;
 static struct { int bits; float c[4]; double d; int s; GLuint fb; } g_pend_clear;
-static struct { void *pso; void *dss; int cull, wind, vp[4], sc[4], sref; float pf, pu; GLuint prog; uint64_t ub_gen[2]; } E;   // encoder state set so far (NULL / -1 = unset)
+static struct { void *pso; void *dss; int cull, wind, vp[4], sc[4], sref; float pf, pu, dz[2], bc[4]; GLuint prog; uint64_t ub_gen[2]; } E;   // encoder state set so far (NULL / -1 = unset)
 
 static id<MTLTexture> att_tex(const att_t *a, uint64_t *gen) {
     if (a->kind == 1) { tex_t *t = tex_of(a->name); if (!t) return nil; if (!t->made) tex_make(t, 1); *gen += t->gen; t->use = g_serial; return t->tex; }
@@ -717,7 +722,7 @@ static void pass_end(void) {
     if (g_enc) { [g_enc endEncoding]; g_enc = nil; }
     P.open = 0;
 }
-static void enc_reset(void) { memset(&E, 0, sizeof E); E.cull = E.wind = E.sref = -1; E.vp[2] = E.sc[2] = -1; E.pf = E.pu = NAN; }
+static void enc_reset(void) { memset(&E, 0, sizeof E); E.cull = E.wind = E.sref = -1; E.vp[2] = E.sc[2] = -1; E.pf = E.pu = E.dz[0] = E.bc[0] = NAN; }
 static void pass_begin(void) {
     @autoreleasepool {
         id<MTLCommandBuffer> cb = cb_get();
@@ -900,7 +905,10 @@ static void enc_state(void) {
     // GL viewport (lower-left origin) → flipped Metal viewport (see the file header); the scissor rectangle is the same rows
     int vp[4] = {S.vp[0], S.vp[1], S.vp[2], S.vp[3]};
     if (!vp[2] && !vp[3]) { vp[2] = P.w; vp[3] = P.h; }
-    if (memcmp(vp, E.vp, sizeof vp)) { memcpy(E.vp, vp, sizeof vp); [e setViewport:(MTLViewport){vp[0], vp[1] + vp[3], vp[2], -vp[3], 0, 1}]; }
+    if (memcmp(vp, E.vp, sizeof vp) || E.dz[0] != S.dnear || E.dz[1] != S.dfar) {   // glDepthRange: the window's depth range, as Metal's viewport znear / zfar
+        memcpy(E.vp, vp, sizeof vp); E.dz[0] = S.dnear; E.dz[1] = S.dfar; [e setViewport:(MTLViewport){vp[0], vp[1] + vp[3], vp[2], -vp[3], S.dnear, S.dfar}];
+    }
+    if (S.blend && memcmp(E.bc, S.bcolor, sizeof E.bc)) { memcpy(E.bc, S.bcolor, sizeof E.bc); [e setBlendColorRed:S.bcolor[0] green:S.bcolor[1] blue:S.bcolor[2] alpha:S.bcolor[3]]; }
     int sc[4] = {0, 0, (int)P.w, (int)P.h};
     if (S.scissor) {
         int x0 = S.sc[0] < 0 ? 0 : S.sc[0], y0 = S.sc[1] < 0 ? 0 : S.sc[1], x1 = S.sc[0] + S.sc[2], y1 = S.sc[1] + S.sc[3];
@@ -950,8 +958,21 @@ static void bind_uniforms_textures(prog_t *p) {
     }
     E.prog = p->serial;
 }
-// Everything a draw needs; 0 = skip it
-static int draw_setup(void) {
+// Whether an enabled vertex array of the bound vertex array object reads client memory (glVertexAttribPointer with no buffer bound: ES 2 games may)
+static int client_arrays(void) { vao_t *v = cur_vao(); for (int i = 0; i < 16; i++) if (v->a[i].on && !v->a[i].buf) return 1; return 0; }
+// A client array's vertices lo … hi (instances 0 … inst − 1 for one with a divisor) copied into transient memory, each element at a stride that is a multiple of 4 as Metal
+// wants (the game's may not be); the copy is bound so that vertex index i reads element i
+static id<MTLBuffer> client_copy(const vattr_t *a, uint32_t lo, uint32_t hi, uint32_t inst, uint32_t stride4, size_t *boff) {
+    uint32_t esz = (uint32_t)(a->size * vtype_bytes(a->type)), st = a->stride ? (uint32_t)a->stride : esz;
+    if (a->div) { lo = 0; hi = (inst ? inst - 1 : 0) / a->div; }
+    size_t off; id<MTLBuffer> b = arena_alloc((size_t)(hi + 1) * stride4, &off);
+    const uint8_t *src = (const uint8_t *)(uintptr_t)a->off; uint8_t *dst = (uint8_t *)b.contents + off;
+    if (st == stride4) memcpy(dst + (size_t)lo * st, src + (size_t)lo * st, (size_t)(hi - lo) * st + esz);
+    else for (uint32_t i = lo; i <= hi; i++) memcpy(dst + (size_t)i * stride4, src + (size_t)i * st, esz);
+    *boff = off; return b;
+}
+// Everything a draw needs; 0 = skip it. lo … hi: the vertex indices it reads, inst: its instances (what client arrays copy)
+static int draw_setup(uint32_t lo, uint32_t hi, uint32_t inst) {
     prog_t *p = prog_of(S.prog);
     if (!p || !p->linked) { RED1("draw with no usable program (%u)", S.prog); return 0; }
     if (!pass_ensure()) return 0;
@@ -961,9 +982,10 @@ static int draw_setup(void) {
         int s = vs->a[i].slot; vattr_t *a = &v->a[p->amap[s]];
         if (!a->on) continue;
         buf_t *b = buf_of(a->buf);
-        if (!b || !b->mb) { RED1("vertex attribute %d reads client memory or a buffer with no data (not implemented)", p->amap[s]); return 0; }
+        if (a->buf && (!b || !b->mb)) { RED1("vertex attribute %d reads a buffer with no data", p->amap[s]); return 0; }
+        if (!a->buf && !a->off) { RED1("vertex attribute %d reads client memory at address 0", p->amap[s]); return 0; }
         k.vf[s] = (uint32_t)vfmt_of(a);
-        k.stride[s] = a->stride ? a->stride : a->size * vtype_bytes(a->type); k.div[s] = a->div;
+        k.stride[s] = !a->buf ? (a->size * vtype_bytes(a->type) + 3) & ~3 : a->stride ? a->stride : a->size * vtype_bytes(a->type); k.div[s] = a->div;
         if (!k.vf[s] || (k.stride[s] & 3)) { RED1("vertex attribute %d: type %#x size %d stride %d not mapped", p->amap[s], a->type, a->size, a->stride); return 0; }
     }
     k.cpf = P.cpf; k.dpf = P.dpf; k.spf = P.spf; k.mask = S.cmask;
@@ -975,7 +997,8 @@ static int draw_setup(void) {
     enc_state();
     for (int i = 0; i < vs->na; i++) {
         int s = vs->a[i].slot, gi = p->amap[s]; vattr_t *a = &v->a[gi];
-        if (a->on) { buf_t *b = buf_of(a->buf); b->use = g_serial; [e setVertexBuffer:b->mb offset:a->off atIndex:30 - s]; }
+        if (a->on && !a->buf) { size_t o; id<MTLBuffer> cb = client_copy(a, lo, hi, inst, k.stride[s], &o); [e setVertexBuffer:cb offset:o atIndex:30 - s]; }
+        else if (a->on) { buf_t *b = buf_of(a->buf); b->use = g_serial; [e setVertexBuffer:b->mb offset:a->off atIndex:30 - s]; }
         else [e setVertexBytes:S.va[gi] length:16 atIndex:30 - s];
     }
     bind_uniforms_textures(p);
@@ -1007,7 +1030,7 @@ static void draw_arrays(GLenum mode, GLint first, GLsizei count, GLsizei inst) {
     if (count <= 0 || inst <= 0) return;
     @autoreleasepool {
         int conv; MTLPrimitiveType pt = prim_of(mode, &conv);
-        if (conv < 0 || !draw_setup()) return;
+        if (conv < 0 || !draw_setup((uint32_t)first, (uint32_t)(first + count - 1), (uint32_t)inst)) return;
         if (!conv) { [g_enc drawPrimitives:pt vertexStart:first vertexCount:count instanceCount:inst]; return; }
         size_t off; id<MTLBuffer> b = arena_alloc((size_t)count * 6 * 4 + 16, &off);
         uint32_t n = idx_convert(conv, NULL, count, first, (uint32_t *)((uint8_t *)b.contents + off));
@@ -1024,7 +1047,13 @@ static void draw_elements(GLenum mode, GLsizei count, GLenum type, const void *i
         uintptr_t io = (uintptr_t)indices; int isz = type == GL_UNSIGNED_INT ? 4 : type == GL_UNSIGNED_SHORT ? 2 : 1;
         const uint8_t *src = eb ? (eb->mb ? (const uint8_t *)eb->mb.contents + io : NULL) : (const uint8_t *)indices;
         if (!src || (eb && io + (size_t)count * isz > eb->size)) { RED1("glDrawElements: indices outside their buffer"); return; }
-        if (!draw_setup()) return;
+        uint32_t lo = 0, hi = 0;
+        if (client_arrays()) {   // the vertices the indices name, which client arrays copy
+            lo = UINT32_MAX;
+            for (GLsizei i = 0; i < count; i++) { uint32_t x = isz == 4 ? ((const uint32_t *)src)[i] : isz == 2 ? ((const uint16_t *)src)[i] : src[i]; if (x < lo) lo = x; if (x > hi) hi = x; }
+            lo += base; hi += base;
+        }
+        if (!draw_setup(lo, hi, (uint32_t)inst)) return;
         if (!conv && isz > 1 && eb && io % 4 == 0) {   // the game's own index buffer
             eb->use = g_serial;
             [g_enc drawIndexedPrimitives:pt indexCount:count indexType:isz == 4 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16 indexBuffer:eb->mb indexBufferOffset:io
@@ -1184,6 +1213,14 @@ GL(glPopGroupMarkerEXT, void, void) {}
 GL(glObjectLabel, void, GLenum id, GLuint name, GLsizei len, const GLchar *label) { (void)id; (void)name; (void)len; (void)label; }
 
 // ---------- Queries ----------
+// g_es: the context is an OpenGL ES one (eglBindAPI(EGL_OPENGL_ES_API) before eglCreateContext), of this major version; 0 for desktop OpenGL. Only the queries differ
+static int g_es;
+// The ES extensions: what an ES 2 game looks for and the layer does (24-bit depth and packed depth / stencil renderbuffers, 32-bit indices, any texture size,
+// derivatives in shaders, vertex array objects through their OES names, DXT textures)
+static const char *const g_es_exts[] = {"GL_OES_rgb8_rgba8", "GL_OES_depth24", "GL_OES_packed_depth_stencil", "GL_OES_element_index_uint", "GL_OES_texture_npot",
+    "GL_OES_standard_derivatives", "GL_OES_vertex_array_object", "GL_EXT_texture_compression_s3tc", "GL_EXT_texture_filter_anisotropic", "GL_EXT_blend_minmax",
+    "GL_EXT_discard_framebuffer", "GL_EXT_shader_texture_lod", "GL_EXT_frag_depth"};
+#define NESEXTS (int)(sizeof g_es_exts / sizeof *g_es_exts)
 static const char *const g_exts[] = {"GL_ARB_ES3_2_compatibility", "GL_ARB_ES3_compatibility", "GL_ARB_texture_compression_bptc", "GL_ARB_texture_compression_rgtc",
     "GL_EXT_texture_compression_s3tc", "GL_EXT_texture_filter_anisotropic", "GL_ARB_vertex_array_object", "GL_ARB_direct_state_access", "GL_ARB_half_float_vertex",
     "GL_ARB_framebuffer_object", "GL_ARB_texture_float", "GL_EXT_texture_sRGB", "GL_KHR_texture_compression_astc_ldr", "GL_NV_shadow_samplers_cube"};
@@ -1192,22 +1229,47 @@ GL(glGetString, const char *, GLenum n) {
     switch (n) {
         case GL_VENDOR: return "NVIDIA Corporation";
         case GL_RENDERER: return "NVIDIA Tegra X1 (nvgpu)/integrated (Metal)";
-        case GL_VERSION: return "4.5.0 NVIDIA 349.00";
-        case GL_SHADING_LANGUAGE_VERSION: return "4.50 NVIDIA";
-        case GL_EXTENSIONS: {   // the compatibility profile's one string
-            static char all[1024]; if (!all[0]) for (int i = 0; i < NEXTS; i++) { strlcat(all, g_exts[i], sizeof all); strlcat(all, " ", sizeof all); }
-            return all;
+        // an ES context reports the version it was made for, as NVIDIA's driver does for its ES 2 contexts: the game picks its GLSL ES 1.00 paths by it
+        case GL_VERSION: return !g_es ? "4.5.0 NVIDIA 349.00" : g_es < 3 ? "OpenGL ES 2.0 NVIDIA 349.00" : "OpenGL ES 3.2 NVIDIA 349.00";
+        case GL_SHADING_LANGUAGE_VERSION: return !g_es ? "4.50 NVIDIA" : g_es < 3 ? "OpenGL ES GLSL ES 1.00" : "OpenGL ES GLSL ES 3.20";
+        case GL_EXTENSIONS: {   // the compatibility profile's (or ES's) one string
+            static char all[1024], es[1024];
+            if (!all[0]) for (int i = 0; i < NEXTS; i++) { strlcat(all, g_exts[i], sizeof all); strlcat(all, " ", sizeof all); }
+            if (!es[0]) for (int i = 0; i < NESEXTS; i++) { strlcat(es, g_es_exts[i], sizeof es); strlcat(es, " ", sizeof es); }
+            return g_es ? es : all;
         }
     }
     RED1("glGetString(%#x) not implemented", n); return "";
 }
-GL(glGetStringi, const char *, GLenum n, GLuint i) { return n == GL_EXTENSIONS && i < (GLuint)NEXTS ? g_exts[i] : NULL; }
+GL(glGetStringi, const char *, GLenum n, GLuint i) { return n != GL_EXTENSIONS ? NULL : g_es ? (i < (GLuint)NESEXTS ? g_es_exts[i] : NULL) : i < (GLuint)NEXTS ? g_exts[i] : NULL; }
 GL(glGetIntegerv, void, GLenum p, GLint *v) {
     switch (p) {
-        case GL_NUM_EXTENSIONS: *v = NEXTS; return;
-        case GL_MAJOR_VERSION: *v = 4; return;
-        case GL_MINOR_VERSION: *v = 5; return;
-        case GL_CONTEXT_PROFILE_MASK: *v = 1; return;   // CONTEXT_CORE_PROFILE_BIT: what the games asked for (Digimon a 4.5 core context); LÖVE takes its core paths (the file header)
+        case GL_NUM_EXTENSIONS: *v = g_es ? NESEXTS : NEXTS; return;
+        case GL_MAJOR_VERSION: *v = !g_es ? 4 : g_es < 3 ? 2 : 3; return;
+        case GL_MINOR_VERSION: *v = !g_es ? 5 : g_es < 3 ? 0 : 2; return;
+        case GL_CONTEXT_PROFILE_MASK: *v = g_es ? 0 : 1; return;   // CONTEXT_CORE_PROFILE_BIT: what the games asked for (Digimon a 4.5 core context); LÖVE takes its core paths (the file header)
+        // ES 2's queries of the window surface and the implementation (RGBA8, depth 24, stencil 8, 32-bit floats; no compressed formats listed: a game asks for those by extension)
+        case 0xd52: case 0xd53: case 0xd54: case 0xd55: case 0xd57: *v = 8; return;   // RED / GREEN / BLUE / ALPHA / STENCIL_BITS
+        case 0xd56: *v = 24; return;   // DEPTH_BITS
+        case 0xd50: *v = 4; return;   // SUBPIXEL_BITS
+        case 0x86a2: *v = 0; return;   // NUM_COMPRESSED_TEXTURE_FORMATS (COMPRESSED_TEXTURE_FORMATS then writes nothing)
+        case 0x86a3: return;
+        case 0x8df9: *v = 0; return;   // NUM_SHADER_BINARY_FORMATS
+        case 0x8dfa: *v = 1; return;   // SHADER_COMPILER
+        case 0x8b9a: *v = GL_UNSIGNED_BYTE; return;   // IMPLEMENTATION_COLOR_READ_TYPE
+        case 0x8b9b: *v = GL_RGBA; return;   // IMPLEMENTATION_COLOR_READ_FORMAT
+        case 0x8b4c: *v = 16; return;   // MAX_VERTEX_TEXTURE_IMAGE_UNITS
+        case 0xb74: *v = S.dfunc; return;   // DEPTH_FUNC
+        case 0xb92: *v = S.sfunc; return;   // STENCIL_FUNC
+        case 0xb93: *v = S.smask; return;   // STENCIL_VALUE_MASK
+        case 0xb97: *v = S.sref; return;   // STENCIL_REF
+        case 0xb98: *v = S.swmask; return;   // STENCIL_WRITEMASK
+        case 0xb94: *v = S.sfail; return; case 0xb95: *v = S.szfail; return; case 0xb96: *v = S.spass; return;   // STENCIL_FAIL / PASS_DEPTH_FAIL / PASS_DEPTH_PASS
+        case 0x80c8: *v = S.bdst; return; case 0x80c9: *v = S.bsrc; return; case 0x80ca: *v = S.bda; return; case 0x80cb: *v = S.bsa; return;   // BLEND_DST_RGB / SRC_RGB / DST_ALPHA / SRC_ALPHA
+        case 0x8009: *v = S.eqc; return; case 0x883d: *v = S.eqa; return;   // BLEND_EQUATION_RGB / ALPHA
+        case 0xc23: v[0] = S.cmask & 1; v[1] = S.cmask >> 1 & 1; v[2] = S.cmask >> 2 & 1; v[3] = S.cmask >> 3 & 1; return;   // COLOR_WRITEMASK
+        case 0xb72: *v = S.dmask; return;   // DEPTH_WRITEMASK
+        case 0xb71: case 0xbe2: case 0xb44: case 0xc11: case 0xb90: case 0x8037: { uint8_t *c = cap_of(p); *v = c ? *c : 0; return; }   // the capabilities glIsEnabled tells
         case GL_CONTEXT_FLAGS: *v = 0; return;
         case GL_MAX_TEXTURE_SIZE: case GL_MAX_RENDERBUFFER_SIZE: case GL_MAX_CUBE_MAP_TEXTURE_SIZE: *v = 16384; return;
         case GL_MAX_3D_TEXTURE_SIZE: case GL_MAX_ARRAY_TEXTURE_LAYERS: *v = 2048; return;
@@ -1251,6 +1313,13 @@ GL(glGetFloatv, void, GLenum p, GLfloat *v) {
         case GL_VIEWPORT: for (int i = 0; i < 4; i++) v[i] = (float)S.vp[i]; return;
         case GL_POINT_SIZE: *v = S.psize; return;
         case GL_POINT_SIZE_RANGE: case GL_ALIASED_POINT_SIZE_RANGE: v[0] = 1; v[1] = 511; return;   // Metal's largest point
+        case 0xc22: memcpy(v, S.clear_c, sizeof S.clear_c); return;   // COLOR_CLEAR_VALUE
+        case 0xb73: *v = (float)S.clear_d; return;   // DEPTH_CLEAR_VALUE
+        case 0xb70: v[0] = S.dnear; v[1] = S.dfar; return;   // DEPTH_RANGE
+        case 0x8005: memcpy(v, S.bcolor, sizeof S.bcolor); return;   // BLEND_COLOR
+        case 0xb21: *v = 1; return;   // LINE_WIDTH
+        case 0x846e: v[0] = v[1] = 1; return;   // ALIASED_LINE_WIDTH_RANGE: Metal's lines are one pixel wide
+        case 0x8038: *v = S.pfactor; return; case 0x2a00: *v = S.punits; return;   // POLYGON_OFFSET_FACTOR / UNITS
     }
     RED1("glGetFloatv(%#x) not implemented (0)", p); *v = 0;
 }
@@ -1877,6 +1946,176 @@ GL(glGetUniformfv, void, GLuint pr, GLint loc, GLfloat *v) { uni_read(pr, loc, v
 GL(glGetUniformiv, void, GLuint pr, GLint loc, GLint *v) { uni_read(pr, loc, v, 1); }
 GL(glGetUniformuiv, void, GLuint pr, GLint loc, GLuint *v) { uni_read(pr, loc, v, 1); }
 
+// ---------- The rest of OpenGL ES 2 ----------
+// What an ES 2 game may call beyond the functions above: state the layer keeps or has no use for, the queries that read it back, and the copies from a framebuffer
+GL(glBlendColor, void, GLfloat r, GLfloat g, GLfloat b, GLfloat a) { S.bcolor[0] = r; S.bcolor[1] = g; S.bcolor[2] = b; S.bcolor[3] = a; }
+GL(glDepthRangef, void, GLfloat n, GLfloat f) { S.dnear = n < 0 ? 0 : n > 1 ? 1 : n; S.dfar = f < 0 ? 0 : f > 1 ? 1 : f; }
+GL(glDepthRange, void, GLdouble n, GLdouble f) { h_glDepthRangef((GLfloat)n, (GLfloat)f); }
+GL(glLineWidth, void, GLfloat w) { if (w != 1) RED1("glLineWidth(%g): Metal draws lines one pixel wide", w); }
+GL(glSampleCoverage, void, GLfloat v, uint32_t invert) { (void)v; (void)invert; }   // the window surface is not multisampled
+GL(glFlush, void, void) {}   // the frame's commands go to the GPU at eglSwapBuffers
+GL(glReleaseShaderCompiler, void, void) {}
+GL(glShaderBinary, void, GLsizei n, const GLuint *sh, GLenum fmt, const void *bin, GLsizei len) { (void)n; (void)sh; (void)bin; (void)len; RED1("glShaderBinary(format %#x): no binary formats (NUM_SHADER_BINARY_FORMATS is 0)", fmt); }
+GL(glValidateProgram, void, GLuint pr) { (void)pr; }   // VALIDATE_STATUS is always true
+// One stencil state for both faces (Metal could take two; no game has needed them): a separate back-face state is reported, the front one (or both) is the state
+GL(glStencilFuncSeparate, void, GLenum face, GLenum f, GLint ref, GLuint mask) { if (face == GL_BACK) RED1("glStencilFuncSeparate(GL_BACK): one stencil state for both faces"); else h_glStencilFunc(f, ref, mask); }
+GL(glStencilOpSeparate, void, GLenum face, GLenum sf, GLenum zf, GLenum zp) { if (face == GL_BACK) RED1("glStencilOpSeparate(GL_BACK): one stencil state for both faces"); else h_glStencilOp(sf, zf, zp); }
+GL(glStencilMaskSeparate, void, GLenum face, GLuint m) { if (face == GL_BACK) RED1("glStencilMaskSeparate(GL_BACK): one stencil state for both faces"); else h_glStencilMask(m); }
+GL(glIsEnabled, uint32_t, GLenum cap) { uint8_t *c = cap_of(cap); return c ? *c : 0; }
+GL(glGetBooleanv, void, GLenum p, uint8_t *v) {
+    GLint t[4] = {0}; h_glGetIntegerv(p, t);
+    int n = p == 0xc23 /* COLOR_WRITEMASK */ || p == GL_VIEWPORT || p == GL_SCISSOR_BOX ? 4 : 1;
+    for (int i = 0; i < n; i++) v[i] = t[i] != 0;
+}
+GL(glIsBuffer, uint32_t, GLuint b) { return buf_of(b) != NULL; }
+GL(glIsTexture, uint32_t, GLuint t) { return tex_of(t) != NULL; }
+GL(glIsFramebuffer, uint32_t, GLuint f) { return fb_of(f) != NULL; }
+GL(glIsRenderbuffer, uint32_t, GLuint r) { return rb_of(r) != NULL; }
+GL(glIsShader, uint32_t, GLuint sh) { return shader_of(sh) != NULL; }
+GL(glIsProgram, uint32_t, GLuint pr) { return prog_of(pr) != NULL; }
+GL(glIsVertexArray, uint32_t, GLuint v) { return v && v < g_nvaos && g_vaos[v]; }
+GL(glGetBufferParameteriv, void, GLenum target, GLenum p, GLint *v) {
+    buf_t *b = bound_buf(target);
+    switch (p) {
+        case 0x8764: *v = b ? (GLint)b->size : 0; return;   // BUFFER_SIZE
+        case 0x8765: *v = 0x88e8; return;   // BUFFER_USAGE: DYNAMIC_DRAW (shared memory whatever the hint)
+        case 0x88bc: *v = 0; return;   // BUFFER_MAPPED
+    }
+    RED1("glGetBufferParameteriv(%#x) not implemented", p); *v = 0;
+}
+static int tex_param_get(GLenum target, GLenum p, GLint *iv, GLfloat *fv) {
+    tex_t *t = bound_tex(target); if (!t) return 0;
+    switch (p) {
+        case GL_TEXTURE_MIN_FILTER: *iv = t->minf; return 1; case GL_TEXTURE_MAG_FILTER: *iv = t->magf; return 1;
+        case GL_TEXTURE_WRAP_S: *iv = t->ws; return 1; case GL_TEXTURE_WRAP_T: *iv = t->wt; return 1; case GL_TEXTURE_WRAP_R: *iv = t->wr; return 1;
+        case GL_TEXTURE_MAX_LEVEL: *iv = t->maxlv; return 1;
+        case GL_TEXTURE_MAX_ANISOTROPY: *fv = t->aniso; return 2;
+        case GL_TEXTURE_BORDER_COLOR: memcpy(fv, t->border, sizeof t->border); return 5;
+    }
+    RED1("glGetTexParameter(%#x) not implemented", p); *iv = 0; return 1;
+}
+GL(glGetTexParameteriv, void, GLenum target, GLenum p, GLint *v) {
+    GLint i = 0; GLfloat f[4] = {0}; int k = tex_param_get(target, p, &i, f);
+    if (k == 1) *v = i; else if (k == 2) *v = (GLint)f[0]; else if (k == 5) for (int c = 0; c < 4; c++) v[c] = (GLint)(f[c] * 2147483647.0f);
+}
+GL(glGetTexParameterfv, void, GLenum target, GLenum p, GLfloat *v) {
+    GLint i = 0; GLfloat f[4] = {0}; int k = tex_param_get(target, p, &i, f);
+    if (k == 1) *v = (GLfloat)i; else if (k == 2) *v = f[0]; else if (k == 5) memcpy(v, f, sizeof f);
+}
+GL(glTexParameteriv, void, GLenum target, GLenum p, const GLint *v) {
+    if (p == GL_TEXTURE_BORDER_COLOR) { GLfloat f[4]; for (int c = 0; c < 4; c++) f[c] = v[c] / 2147483647.0f; h_glTexParameterfv(target, p, f); return; }
+    tex_param(target, p, (float)v[0], v[0]);
+}
+GL(glGetVertexAttribiv, void, GLuint i, GLenum p, GLint *v) {
+    if (i >= 16) { *v = 0; return; }
+    const vattr_t *a = &cur_vao()->a[i];
+    switch (p) {
+        case 0x8622: *v = a->on; return;   // ENABLED
+        case 0x8623: *v = a->size ? a->size : 4; return;   // SIZE
+        case 0x8624: *v = a->stride; return;   // STRIDE
+        case 0x8625: *v = a->type ? (GLint)a->type : GL_FLOAT; return;   // TYPE
+        case 0x886a: *v = a->norm; return;   // NORMALIZED
+        case 0x889f: *v = (GLint)a->buf; return;   // BUFFER_BINDING
+        case 0x88fe: *v = a->div; return;   // DIVISOR
+        case 0x8626: for (int c = 0; c < 4; c++) v[c] = (GLint)S.va[i][c]; return;   // CURRENT_VERTEX_ATTRIB
+    }
+    RED1("glGetVertexAttribiv(%#x) not implemented", p); *v = 0;
+}
+GL(glGetVertexAttribfv, void, GLuint i, GLenum p, GLfloat *v) {
+    if (p == 0x8626 && i < 16) { memcpy(v, S.va[i], sizeof S.va[i]); return; }
+    GLint x = 0; h_glGetVertexAttribiv(i, p, &x); *v = (GLfloat)x;
+}
+GL(glGetVertexAttribPointerv, void, GLuint i, GLenum p, void **v) { (void)p; *v = i < 16 ? (void *)(uintptr_t)cur_vao()->a[i].off : NULL; }   // VERTEX_ATTRIB_ARRAY_POINTER
+GL(glVertexAttrib1f, void, GLuint i, GLfloat x) { h_glVertexAttrib4f(i, x, 0, 0, 1); }
+GL(glVertexAttrib2f, void, GLuint i, GLfloat x, GLfloat y) { h_glVertexAttrib4f(i, x, y, 0, 1); }
+GL(glVertexAttrib3f, void, GLuint i, GLfloat x, GLfloat y, GLfloat z) { h_glVertexAttrib4f(i, x, y, z, 1); }
+GL(glVertexAttrib1fv, void, GLuint i, const GLfloat *v) { h_glVertexAttrib4f(i, v[0], 0, 0, 1); }
+GL(glVertexAttrib2fv, void, GLuint i, const GLfloat *v) { h_glVertexAttrib4f(i, v[0], v[1], 0, 1); }
+GL(glVertexAttrib3fv, void, GLuint i, const GLfloat *v) { h_glVertexAttrib4f(i, v[0], v[1], v[2], 1); }
+GL(glUniform2i, void, GLint loc, GLint x, GLint y) { const GLint v[] = {x, y}; uni_ints(loc, 1, v, 2); }
+GL(glUniform3i, void, GLint loc, GLint x, GLint y, GLint z) { const GLint v[] = {x, y, z}; uni_ints(loc, 1, v, 3); }
+GL(glUniform4i, void, GLint loc, GLint x, GLint y, GLint z, GLint w) { const GLint v[] = {x, y, z, w}; uni_ints(loc, 1, v, 4); }
+GL(glDetachShader, void, GLuint pr, GLuint sh) { prog_t *p = prog_of(pr); if (!p) return; if (p->vs == sh) p->vs = 0; if (p->fs == sh) p->fs = 0; }
+GL(glGetAttachedShaders, void, GLuint pr, GLsizei max, GLsizei *count, GLuint *out) {
+    prog_t *p = prog_of(pr); GLsizei n = 0;
+    if (p) { if (p->vs && n < max) out[n++] = p->vs; if (p->fs && n < max) out[n++] = p->fs; }
+    if (count) *count = n;
+}
+GL(glGetShaderSource, void, GLuint sh, GLsizei size, GLsizei *len, GLchar *out) {
+    shader_t *s = shader_of(sh); size_t n = s && s->src ? s->len : 0;
+    if (out && size > 0) { if (n > (size_t)size - 1) n = (size_t)size - 1; if (n) memcpy(out, s->src, n); out[n] = 0; } else n = 0;
+    if (len) *len = (GLsizei)n;
+}
+// The vertex inputs in the order of the shader's table, with their Metal types as GL's
+GL(glGetActiveAttrib, void, GLuint pr, GLuint index, GLsizei size, GLsizei *len, GLint *count, GLenum *type, GLchar *name) {
+    prog_t *p = prog_of(pr);
+    if (!p || !p->linked || index >= (GLuint)p->si[0]->na) { if (len) *len = 0; if (name && size > 0) name[0] = 0; return; }
+    const shattr *a = &p->si[0]->a[index];
+    if (name && size > 0) strlcpy(name, a->name, (size_t)size);
+    if (len) *len = name && size > 0 ? (GLsizei)umin((uint32_t)strlen(a->name), (uint32_t)size - 1) : 0;
+    if (count) *count = 1;
+    if (type) *type = a->type < T_OTHER ? g_tenums[a->type] : GL_FLOAT;
+}
+GL(glGetFramebufferAttachmentParameteriv, void, GLenum target, GLenum att, GLenum p, GLint *v) {
+    GLuint fb = target == GL_READ_FRAMEBUFFER ? S.read_fb : S.fb;
+    fb_t *f = fb_of(fb);
+    if (!fb) {   // the window surface: RGBA8, depth 24, stencil 8
+        switch (p) { case 0x8cd0: *v = 0x8218; return;   // OBJECT_TYPE: FRAMEBUFFER_DEFAULT
+                     case 0x8212: case 0x8213: case 0x8214: case 0x8215: *v = 8; return;   // RED / GREEN / BLUE / ALPHA_SIZE
+                     case 0x8216: *v = 24; return; case 0x8217: *v = 8; return; }   // DEPTH / STENCIL_SIZE
+        *v = 0; return;
+    }
+    const att_t *a = !f ? NULL : att == GL_COLOR_ATTACHMENT0 ? &f->col : att == GL_DEPTH_ATTACHMENT || att == GL_DEPTH_STENCIL_ATTACHMENT ? &f->depth : att == GL_STENCIL_ATTACHMENT ? &f->stencil : NULL;
+    switch (p) {
+        case 0x8cd0: *v = !a || !a->kind ? 0 : a->kind == 1 ? 0x1702 /* TEXTURE */ : GL_RENDERBUFFER; return;   // OBJECT_TYPE
+        case 0x8cd1: *v = a && a->kind ? (GLint)a->name : 0; return;   // OBJECT_NAME
+        case 0x8cd2: *v = a ? a->level : 0; return;   // TEXTURE_LEVEL
+        case 0x8cd3: *v = a ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + a->face : 0; return;   // TEXTURE_CUBE_MAP_FACE
+    }
+    RED1("glGetFramebufferAttachmentParameteriv(%#x) not implemented", p); *v = 0;
+}
+GL(glCompressedTexSubImage2D, void, GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum fmt, GLsizei size, const void *data) {
+    (void)fmt; teximg_args a = {target, level, 0, x, y, w, h, 0, 0, data, size, 1, 1}; ((void (*)(const teximg_args *))(const void *)teximg_impl_bs)(&a);
+}
+// glCopyTexImage2D / glCopyTexSubImage2D: a blit from the read framebuffer's colour image, in command order, both stored bottom row first so the rows need no flip.
+// sub = 0: the level is (re)defined first, in the format the internal format names
+typedef struct { GLenum target; GLint level, ifmt, dx, dy, x, y; GLsizei w, h; int sub; } copytex_args;
+static void copytex_impl(const copytex_args *a) __attribute__((used));
+BIGSTUB(copytex_impl);
+static void copytex_impl(const copytex_args *a) {
+    @autoreleasepool {
+        if (a->w <= 0 || a->h <= 0) return;
+        tex_t *t = bound_tex(a->target);
+        int face = a->target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X && a->target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z ? (int)(a->target - GL_TEXTURE_CUBE_MAP_POSITIVE_X) : 0;
+        if (!t) { RED1("glCopyTexImage2D with no texture bound"); return; }
+        if (!a->sub) {
+            int cv, f = fmt_pick(a->ifmt, GL_RGBA, GL_UNSIGNED_BYTE, &cv);
+            if (f < 0) { RED1("glCopyTexImage2D into internal format %#x not mapped", a->ifmt); return; }
+            size_t pitch; void *z = pixels_convert(NULL, a->w, a->h, 0, 0, f, CV_COPY, &pitch);
+            tex_image(a->target, a->level, f, cv, a->w, a->h, a->level ? z : (free(z), (void *)NULL), pitch);
+        }
+        if (!t->made) tex_make(t, 1);
+        if (g_pend_clear.bits) clears_flush();
+        int sl, ss; id<MTLTexture> src = fb_color(S.read_fb, &sl, &ss);
+        if (!src || !t->tex || a->level >= t->levels) { RED1("glCopyTexImage2D: no colour image to read or no texture level to write"); return; }
+        if (src.pixelFormat != t->tex.pixelFormat) { RED1("glCopyTexImage2D from pixel format %lu into %lu (a conversion) not implemented", (unsigned long)src.pixelFormat, (unsigned long)t->tex.pixelFormat); return; }
+        uint32_t sw = umax(1, (uint32_t)src.width >> sl), sh = umax(1, (uint32_t)src.height >> sl);
+        int x = a->x < 0 ? 0 : a->x, y = a->y < 0 ? 0 : a->y, w = (int)umin((uint32_t)a->w, sw > (uint32_t)x ? sw - x : 0), h = (int)umin((uint32_t)a->h, sh > (uint32_t)y ? sh - y : 0);
+        if (w <= 0 || h <= 0) return;
+        pass_end();
+        id<MTLBlitCommandEncoder> b = [cb_get() blitCommandEncoder];
+        [b copyFromTexture:src sourceSlice:ss sourceLevel:sl sourceOrigin:MTLOriginMake(x, y, 0) sourceSize:MTLSizeMake(w, h, 1)
+                 toTexture:t->tex destinationSlice:face destinationLevel:a->level destinationOrigin:MTLOriginMake(a->dx + (x - a->x), a->dy + (y - a->y), 0)];
+        [b endEncoding]; g_n_blit++; t->use = g_serial;
+    }
+}
+GL(glCopyTexImage2D, void, GLenum target, GLint level, GLenum ifmt, GLint x, GLint y, GLsizei w, GLsizei h, GLint border) {
+    (void)border; copytex_args a = {target, level, (GLint)ifmt, 0, 0, x, y, w, h, 0}; ((void (*)(const copytex_args *))(const void *)copytex_impl_bs)(&a);
+}
+GL(glCopyTexSubImage2D, void, GLenum target, GLint level, GLint dx, GLint dy, GLint x, GLint y, GLsizei w, GLsizei h) {
+    copytex_args a = {target, level, 0, dx, dy, x, y, w, h, 1}; ((void (*)(const copytex_args *))(const void *)copytex_impl_bs)(&a);
+}
+
 // ---------- EGL ----------
 #define EGL_TRUE 1
 static struct { int init; int surface; uint32_t w, h; } g_egl;
@@ -1906,9 +2145,15 @@ EGL(eglGetDisplay, EGLDisplay, void *native) { (void)native; dev_init(); return 
 EGL(eglInitialize, EGLBoolean, EGLDisplay d, EGLint *major, EGLint *minor) { (void)d; dev_init(); g_egl.init = 1; if (major) *major = 1; if (minor) *minor = 5; return EGL_TRUE; }
 EGL(eglTerminate, EGLBoolean, EGLDisplay d) { (void)d; return EGL_TRUE; }
 EGL(eglReleaseThread, EGLBoolean, void) { return EGL_TRUE; }
-// SDL binds 0 (its API before it has chosen one) when it makes the window again (Balatro's love.window.setMode): nothing to change
-EGL(eglBindAPI, EGLBoolean, EGLenum api) { if (api && api != 0x30a2) RED1("eglBindAPI(%#x): only desktop OpenGL (0x30a2) is implemented", api); return EGL_TRUE; }
-// One configuration: RGBA8, depth 24 (32F here), stencil 8, a window surface, desktop OpenGL; it matches the game's attributes
+// The API the next context is made for: OPENGL_API (0x30a2) or OPENGL_ES_API (0x30a0, Roof Rage). SDL binds 0 (its API before it has chosen one) when it makes the window
+// again (Balatro's love.window.setMode): nothing to change
+static EGLenum g_api = 0x30a2;
+EGL(eglBindAPI, EGLBoolean, EGLenum api) {
+    if (api == 0x30a2 || api == 0x30a0) { if (api != g_api) GLOG("eglBindAPI: %s", api == 0x30a0 ? "OpenGL ES" : "OpenGL"); g_api = api; }
+    else if (api) { RED1("eglBindAPI(%#x): only OpenGL (0x30a2) and OpenGL ES (0x30a0) are implemented", api); return 0; }
+    return EGL_TRUE;
+}
+// One configuration: RGBA8, depth 24 (32F here), stencil 8, a window surface, OpenGL and OpenGL ES 2 / 3; it matches the game's attributes
 EGL(eglChooseConfig, EGLBoolean, EGLDisplay d, const EGLint *attr, EGLConfig *cfg, EGLint n, EGLint *num) {
     (void)d; (void)attr;
     if (cfg && n > 0) cfg[0] = (EGLConfig)(uintptr_t)1;
@@ -1927,7 +2172,7 @@ EGL(eglGetConfigAttrib, EGLBoolean, EGLDisplay d, EGLConfig cfg, EGLint attr, EG
         case 0x3031: case 0x3032: *v = 0; break;   // SAMPLES, SAMPLE_BUFFERS
         case 0x302e: *v = 0; break;   // NATIVE_VISUAL_ID
         case 0x3033: *v = 0x5; break;   // SURFACE_TYPE: PBUFFER | WINDOW
-        case 0x3040: case 0x3042: *v = 0x8; break;   // RENDERABLE_TYPE, CONFORMANT: OPENGL_BIT
+        case 0x3040: case 0x3042: *v = 0x8 | 0x4 | 0x40; break;   // RENDERABLE_TYPE, CONFORMANT: OPENGL_BIT | OPENGL_ES2_BIT | OPENGL_ES3_BIT
         case 0x3027: *v = 0x3038; break;   // CONFIG_CAVEAT: NONE
         default: RED1("eglGetConfigAttrib(%#x) not implemented (0)", attr); *v = 0; break;
     }
@@ -1935,11 +2180,11 @@ EGL(eglGetConfigAttrib, EGLBoolean, EGLDisplay d, EGLConfig cfg, EGLint attr, EG
 }
 EGL(eglQueryString, const char *, EGLDisplay d, EGLint name) {
     (void)d;
-    switch (name) { case 0x3053: return "NVIDIA"; case 0x3054: return "1.5"; case 0x3055: return "EGL_KHR_create_context"; case 0x308d: return "OpenGL"; }   // VENDOR, VERSION, EXTENSIONS, CLIENT_APIS
+    switch (name) { case 0x3053: return "NVIDIA"; case 0x3054: return "1.5"; case 0x3055: return "EGL_KHR_create_context"; case 0x308d: return "OpenGL OpenGL_ES"; }   // VENDOR, VERSION, EXTENSIONS, CLIENT_APIS
     return NULL;
 }
 EGL(eglGetError, EGLint, void) { return 0x3000; }   // SUCCESS
-EGL(eglQueryAPI, EGLenum, void) { return 0x30a2; }   // OPENGL_API
+EGL(eglQueryAPI, EGLenum, void) { return g_api; }
 EGL(eglWaitNative, EGLBoolean, EGLint engine) { (void)engine; return EGL_TRUE; }
 EGL(eglWaitGL, EGLBoolean, void) { return EGL_TRUE; }
 EGL(eglDestroyContext, EGLBoolean, EGLDisplay d, EGLContext c) { (void)d; (void)c; return EGL_TRUE; }
@@ -1948,7 +2193,10 @@ EGL(eglCreateContext, EGLContext, EGLDisplay d, EGLConfig cfg, EGLContext share,
     (void)d; (void)cfg;
     int major = 0, minor = 0; for (int i = 0; attr && attr[i] != 0x3038 && i < 32; i += 2) { if (attr[i] == 0x3098) major = attr[i + 1]; else if (attr[i] == 0x30fb) minor = attr[i + 1]; }
     if (share) RED1("shared EGL contexts are not implemented (one context)");
-    GLOG("EGL context: OpenGL %d.%d", major, minor);
+    // EGL_CONTEXT_CLIENT_VERSION is the same attribute as MAJOR_VERSION (0x3098); an ES context without it is ES 1, which the layer does not have (no fixed function)
+    g_es = g_api == 0x30a0 ? (major ? major : 1) : 0;
+    if (g_es == 1) RED1("OpenGL ES 1 context: only ES 2 and later (programmable) are implemented");
+    GLOG("EGL context: OpenGL%s %d.%d", g_es ? " ES" : "", major, minor);
     return (EGLContext)(uintptr_t)2;
 }
 EGL(eglCreateWindowSurface, EGLSurface, EGLDisplay d, EGLConfig cfg, void *win, const EGLint *attr) {
@@ -1995,13 +2243,25 @@ EGL(eglSwapBuffers, EGLBoolean, EGLDisplay d, EGLSurface s) {
     frame_end();
     return EGL_TRUE;
 }
-// eglGetProcAddress: GL names from this layer's table, EGL names from the host's import table; anything else is null (the game's loader asks for every GL name it knows)
+// eglGetProcAddress: GL names from this layer's table, EGL names from the host's import table; anything else is null (the game's loader asks for every GL name it knows).
+// The OES / EXT names of what ES 2 has as an extension and the layer has under its core name (GL_OES_vertex_array_object) are the core functions
 static void *gl_lookup(const char *name) {
     static const gl_ent *sec; static unsigned long sz;
     if (!sec) sec = (const gl_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swgl", &sz);
     for (unsigned long i = 0; i < sz / sizeof *sec; i++) if (!strcmp(sec[i].name, name)) return sec[i].fn;
+    size_t n = strlen(name);
+    if (n > 3 && n < 64 && (!strcmp(name + n - 3, "OES") || !strcmp(name + n - 3, "EXT") || !strcmp(name + n - 3, "ARB"))) {
+        char core[64]; memcpy(core, name, n - 3); core[n - 3] = 0;
+        static const char *const ok[] = {"glGenVertexArrays", "glBindVertexArray", "glDeleteVertexArrays", "glIsVertexArray", "glBlendEquation", "glBlendEquationSeparate",
+                                         "glBlendFuncSeparate", "glDrawBuffers", "glVertexAttribDivisor", "glDrawArraysInstanced", "glDrawElementsInstanced",
+                                         "glRenderbufferStorageMultisample", "glBlitFramebuffer", "glMapBufferRange", "glFlushMappedBufferRange", "glUnmapBuffer",
+                                         "glTexStorage2D", "glGenerateMipmap"};
+        for (size_t k = 0; k < sizeof ok / sizeof *ok; k++) if (!strcmp(core, ok[k])) return gl_lookup(core);
+    }
     return NULL;
 }
+// A GL function main imports by name (hle.c resolve_import): the same table
+void *dm_gl_proc(const char *name) { return gl_lookup(name); }
 // DM_GL_STUBS=1 (bring-up): a GL name the layer does not implement gets a stub of its own instead of a null pointer, which reports its first call and returns 0; a game that calls
 // such a function then says which one instead of jumping to address 0. Off by default: a loader may take a name's null pointer to mean "not there"
 #define NSTUB 4096
