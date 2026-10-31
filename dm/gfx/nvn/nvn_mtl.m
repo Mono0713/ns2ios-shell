@@ -1081,32 +1081,96 @@ static void ubd_read(uint64_t lo, size_t n, void *out) {
 // Breath of the Wild updates part of a bound block about 226 times a frame outdoors and ended a pass for nearly every one (about 900 MB of attachment loads and stores a frame on an iPhone).
 // DM_NVN_UB_PARTIAL=0 turns it off
 static int ub_partial_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UB_PARTIAL"); v = !(e && !strcmp(e, "0")); if (!v) MLOG("DM_NVN_UB_PARTIAL=0: a binding the deferred uniform updates cover only in part ends the pass as before"); } return v; }
-enum { GW_N = 4096, GW_PAGES = 4096 };
+// Writes over more than GW_WIDE_PAGES pages go into a short list by range instead: put page by page they filled the table's slots with pages of their own and every page of every
+// other block then met a shared slot (counted as written), and one over 16 MB counted every page as written. Either way every partial uniform shadow was refused while it ran:
+// Oddballers' pre-match lobby ended every pass that read a partly updated block (about 250 a frame, 3.7 GB of attachment loads and as much stored a frame, GPU 32 ms, 30 fps).
+enum { GW_N = 4096, GW_WIDE_PAGES = 64, GW_WIDE = 64 };
 static struct { uint64_t page, fence; } g_gw[GW_N];   // page ~0: two live pages met in the slot, so any page there counts as written until fence completes
+typedef struct { uint64_t lo, hi, fence; } gww_ent; static gww_ent g_gww[GW_WIDE]; static int g_gww_n;   // wide writes by range
 static uint64_t g_gw_all;                            // every page counts as written until this fence completes (a submission whose writes could not all be listed)
+static int g_gw_all_why;                             // what set g_gw_all: 0 this submission's queued writes overflowed, 1 its other-writes table overflowed, 2 the wide list was full
+static uint64_t g_gw_why[6];   // shadows refused for an earlier submission's writes, by what matched: every page (g_gw_all_why 0, 1, 2), a wide write, a written page, a shared slot
+static uint64_t g_gww_logged;
 static uint64_t g_ubp_made, g_ubp_reused, g_ubp_refused;   // partial shadows made / taken from the cache / refused (the pass ended), for the residency set line
 static uint64_t g_ubp_why[5];   // why ubp_get refused: 0 too large or off, 1 other GPU writes in this submission (sbw), 2 GPU writes of an earlier submission still running, 3 a copy, fill or feedback write queued, 4 unreadable or too many writes
 static inline unsigned gw_slot(uint64_t pg) { return (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 52) & (GW_N - 1); }
-static void gw_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done) {
+static void gw_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done, int kind) {
     if (hi <= lo) return;
     uint64_t p0 = lo >> 12, p1 = (hi - 1) >> 12;
-    if (p1 - p0 >= GW_PAGES) { if (fence > g_gw_all) g_gw_all = fence; return; }
+    if (p1 - p0 >= GW_WIDE_PAGES) {
+        int k = 0; for (int i = 0; i < g_gww_n; i++) if (g_gww[i].fence > done) g_gww[k++] = g_gww[i];
+        g_gww_n = k;
+        for (int i = 0; i < g_gww_n; i++) if (g_gww[i].lo <= lo && hi <= g_gww[i].hi) { if (fence > g_gww[i].fence) g_gww[i].fence = fence; return; }   // the same target again (a clear every frame)
+        if (g_gww_n < GW_WIDE) {
+            g_gww[g_gww_n++] = (gww_ent){lo, hi, fence};
+            if (g_gww_logged++ < 8) MLOG("GPU write tracking: wide write %#llx+%llu KB (kind %d) kept by range", (unsigned long long)lo, (unsigned long long)((hi - lo) >> 10), kind);
+        } else { if (fence > g_gw_all) { g_gw_all = fence; g_gw_all_why = 2; } }
+        return; }
     for (uint64_t pg = p0; pg <= p1; pg++) { unsigned s = gw_slot(pg);
         g_gw[s].page = g_gw[s].page == pg || g_gw[s].fence <= done ? pg : ~0ull;
         if (fence > g_gw[s].fence) g_gw[s].fence = fence; }
 }
-static int gw_live(uint64_t lo, uint64_t hi) {
+static int ubh_hits(uint64_t lo, uint64_t hi);
+// GPU writes other than inline updates of earlier submissions still running over [lo, hi) (ubp_get lays those updates over memory itself)
+// 0 for none, otherwise 1 + the g_gw_why index of what matched
+static int gw_live_why(uint64_t lo, uint64_t hi) {
     uint64_t done = g_done;   // read without the lock as elsewhere: a stale value only refuses more
-    if (g_gw_all > done) return 1;
-    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gw[s].page == pg || g_gw[s].page == ~0ull) && g_gw[s].fence > done) return 1; }
+    if (g_gw_all > done) return 1 + g_gw_all_why;
+    for (int i = 0; i < g_gww_n; i++) if (g_gww[i].fence > done && lo < g_gww[i].hi && g_gww[i].lo < hi) return 4;
+    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if (g_gw[s].fence > done && (g_gw[s].page == pg || g_gw[s].page == ~0ull)) return g_gw[s].page == pg ? 5 : 6; }
     return 0;
 }
-// The submission's GPU writes go into the page table with its fence (mtl_sub_commit)
+static int gw_live_writes(uint64_t lo, uint64_t hi) { return gw_live_why(lo, hi) != 0; }
+void mtl_gw_why(uint64_t w[6]) { memcpy(w, g_gw_why, sizeof g_gw_why); }
+// Any GPU write still running over [lo, hi), the running inline updates too (a CPU read of the bytes, nvn_geometry.inc geo_cpu_hazard)
+static int gw_live(uint64_t lo, uint64_t hi) { return gw_live_writes(lo, hi) || ubh_hits(lo, hi); }
+// Inline updates of submissions still running (ubp_get). Their bytes are known (the update ring), so a shadow made while one runs lays it over memory instead of ending the pass:
+// memory holds it or the update before it, and either way the bytes the next draws read are memory with the running updates laid over in order. They used to go into the page table
+// like any GPU write, and a game that rewrites part of the same uniform blocks every frame then found every block "written by an earlier submission still running": Oddballers
+// (Unity) ended about 250 passes a frame for it in a match, about 3.7 GB of attachment loads and as much stored a frame on an iPad, GPU 32 ms (30 fps) against 5 ms in its menus.
+// Each entry holds its ring block (retained) until its submission completes; kept in submission order. Only the encode thread reads and changes the list
+typedef struct { uint64_t lo, hi, fence; const uint8_t *src; void *ring; } ubh_ent;
+enum { UBH_MAX = 16384 };
+static ubh_ent g_ubh[UBH_MAX]; static int g_ubh_n; static int g_ubh_idx[UBH_MAX];
+static uint64_t g_ubh_lo = ~0ull, g_ubh_hi;   // the span the list covers: most lookups (geometry read on the CPU) fall outside it
+static uint64_t g_ubh_laid;   // shadows that laid running updates over memory (the residency set line)
+uint64_t mtl_ubh_laid(void) { return g_ubh_laid; }
+static void ubh_prune(uint64_t done) {
+    int k = 0;
+    g_ubh_lo = ~0ull; g_ubh_hi = 0;
+    for (int i = 0; i < g_ubh_n; i++) {
+        if (g_ubh[i].fence <= done) { CFRelease(g_ubh[i].ring); continue; }
+        g_ubh[k++] = g_ubh[i]; if (g_ubh[i].lo < g_ubh_lo) g_ubh_lo = g_ubh[i].lo; if (g_ubh[i].hi > g_ubh_hi) g_ubh_hi = g_ubh[i].hi; }
+    g_ubh_n = k;
+}
+// The running updates over [lo, hi), oldest first, into g_ubh_idx; their count
+static int ubh_find(uint64_t lo, uint64_t hi) {
+    uint64_t done = g_done; int n = 0;
+    if (hi <= g_ubh_lo || lo >= g_ubh_hi) return 0;
+    for (int i = 0; i < g_ubh_n; i++) if (g_ubh[i].fence > done && lo < g_ubh[i].hi && g_ubh[i].lo < hi) g_ubh_idx[n++] = i;
+    return n;
+}
+static int ubh_hits(uint64_t lo, uint64_t hi) {
+    uint64_t done = g_done;
+    if (hi <= g_ubh_lo || lo >= g_ubh_hi) return 0;
+    for (int i = 0; i < g_ubh_n; i++) if (g_ubh[i].fence > done && lo < g_ubh[i].hi && g_ubh[i].lo < hi) return 1;
+    return 0;
+}
+// The submission's GPU writes go into the page table with its fence (mtl_sub_commit); its inline updates into the list above
 static void gw_commit(uint64_t fence) {
     uint64_t done = g_done;
-    if ((g_pend_over || g_sbw_over) && fence > g_gw_all) g_gw_all = fence;
-    for (int e = 0; e < g_npend; e++) gw_put(g_pend_lo[e], g_pend_hi[e], fence, done);
-    if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done);
+    if ((g_pend_over || g_sbw_over) && fence > g_gw_all) { g_gw_all = fence; g_gw_all_why = g_pend_over ? 0 : 1; }
+    ubh_prune(done);
+    for (int e = 0; e < g_npend; e++) {
+        if (g_pend_kind[e] == 1 && g_pend_upd[e] && g_ubh_n < UBH_MAX && ub_partial_on()) {
+            const upd_ent *u = &g_upd[g_pend_upd[e] - 1];
+            g_ubh[g_ubh_n++] = (ubh_ent){g_pend_lo[e], g_pend_hi[e], fence, (const uint8_t *)u->buf.contents + u->off, (void *)CFBridgingRetain(u->buf)};
+            if (g_pend_lo[e] < g_ubh_lo) g_ubh_lo = g_pend_lo[e]; if (g_pend_hi[e] > g_ubh_hi) g_ubh_hi = g_pend_hi[e];
+            continue;
+        }
+        gw_put(g_pend_lo[e], g_pend_hi[e], fence, done, g_pend_kind[e]);
+    }
+    if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done, 9);
 }
 // The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
 static int pend_since(uint64_t a, uint64_t b, int since, int *out) {
@@ -1137,8 +1201,9 @@ static int ubp_get(uint64_t lo, uint64_t hi, uint64_t *gpu, const uint8_t **cpu)
     for (int i = 0; i < UBP_CACHE; i++) if (g_ubpc[i].lo == lo && g_ubpc[i].hi == hi && g_ubpc[i].gen == g_pend_gen) { c = &g_ubpc[i]; break; }
     if (!c || c->sbw != g_sbw_gen) { if (g_sbw_over || sbw_hits(lo, hi)) { g_ubp_why[1]++; return 0; } if (c) c->sbw = g_sbw_gen; }
     if (c && c->npend == g_npend) { g_ubp_reused++; *gpu = c->gpu; *cpu = c->cpu; g_ubp_ready = c->ready; return 1; }
-    int since = c ? c->npend : 0;
-    if (!c && gw_live(lo, hi)) { g_ubp_why[2]++; return 0; }
+    int since = c ? c->npend : 0, nh = 0;
+    int gwy = c ? 0 : gw_live_why(lo, hi); if (gwy) { g_ubp_why[2]++; g_gw_why[gwy - 1]++; return 0; }
+    if (!c) nh = ubh_find(lo, hi);   // inline updates of earlier submissions still running: laid over memory below
     if (!c && !nvn_host_readable(lo, hi - lo)) { g_ubp_why[4]++; return 0; }
     int n = pend_since(lo, hi, since, g_ubp_idx); if (n < 0) { g_ubp_why[4]++; return 0; }
     // Newest first, keep the writes that still show through somewhere (a write only newer ones cover is never read, whatever wrote it); stop once they cover the range
@@ -1157,9 +1222,14 @@ static int ubp_get(uint64_t lo, uint64_t hi, uint64_t *gpu, const uint8_t **cpu)
                    if (nc == 1 && cl[0] == lo && ch[0] == hi) break; } } }
     uint64_t len = hi - lo;
     id<MTLBuffer> ab; size_t o = arena_alloc((size_t)len, &ab); uint8_t *d = (uint8_t *)ab.contents + o;
-    int defer = len >= 512 && ubc_on(); uint64_t ready = 0;   // small ones (bindless handles read on the CPU) are copied here
+    int defer = len >= 512 && ubc_on() && !nh; uint64_t ready = 0;   // small ones (bindless handles read on the CPU) are copied here; so is one with running updates (their ring blocks are held only until they complete)
     if (defer) ready = ubc_push(d, c ? c->cpu : (const uint8_t *)(uintptr_t)lo, (size_t)len);   // the previous shadow's own copies are queued before these
     else { if (c) ubc_wait(c->ready); memcpy(d, c ? c->cpu : (const uint8_t *)(uintptr_t)lo, (size_t)len); }
+    for (int i = 0; i < nh; i++) { const ubh_ent *h = &g_ubh[g_ubh_idx[i]];   // oldest first, before this submission's writes
+        uint64_t x = h->lo > lo ? h->lo : lo, y = h->hi < hi ? h->hi : hi;
+        memcpy(d + (x - lo), h->src + (x - h->lo), (size_t)(y - x)); }
+    if (nh && !g_ubh_laid++) MLOG("uniform shadow: inline updates of a submission still running laid over memory (first case %#llx+%llu, %d updates): the pass goes on", (unsigned long long)lo, (unsigned long long)len, nh);
+    else if (nh && g_ubh_laid % 100000 == 0) MLOG("uniform shadow: %llu shadows made with running inline updates laid over memory", (unsigned long long)g_ubh_laid);
     for (int i = nk - 1; i >= 0; i--) { int e = g_ubp_idx[i]; const upd_ent *u = &g_upd[g_pend_upd[e] - 1];   // oldest first: each byte ends with the newest write
         uint64_t x = g_pend_lo[e] > lo ? g_pend_lo[e] : lo, y = g_pend_hi[e] < hi ? g_pend_hi[e] : hi;
         const uint8_t *src = (const uint8_t *)u->buf.contents + u->off + (x - u->lo);

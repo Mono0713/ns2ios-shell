@@ -20,6 +20,7 @@ var gameDefaults: SettingsStore {   // LauncherSettings.swift; earlier builds ke
     return SettingsStore.named(g ?? "app", from: g.flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard)
 }
 @_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
+@_silgen_name("dm_run_mark_open") private func dmRunMarkOpen(_ path: UnsafePointer<CChar>)   // hle_runmark.c: the host records how this run ends
 
 // The launcher and the game picker move with player 1's controller themselves (DMLauncherInput). Without this, iPadOS also moves its own focus over their
 // buttons with it, and A then pressed whichever button that focus was left on (Open game folder, once tapped) as well as the highlighted row
@@ -57,7 +58,7 @@ private let zhText: [String: String] = [
     "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
     "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
     "Portuguese": "葡萄牙文", "Russian": "俄文", "Korean": "韓文", "Traditional Chinese": "繁體中文", "Simplified Chinese": "簡體中文", "Brazilian Portuguese": "葡萄牙文（巴西）",
-    "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設",
+    "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設", "Auto": "自動",
     "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "僅在畫面或聲音異常時調整；設定錯誤可能導致遊戲無法啟動。",
     // the launcher's own
     "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
@@ -348,12 +349,36 @@ private struct SettingRow: View {
     private var memoryGB: Binding<Double> {
         Binding(get: {
                     let v = m.values[s.env] ?? s.def
+                    if v == "-", let a = m.memory { return Double(a.pick) / 1073741824 }   // automatic: the size the launcher picked
                     return gb(v == "-" ? (ProcessInfo.processInfo.environment[s.env] ?? "") : v) ?? s.max ?? 3.2
                 },
                 set: { m.values[s.env] = String(format: "0x%llX", UInt64(($0 * 1024).rounded()) << 20) })
     }
     private var memoryIsDefault: Bool { (m.values[s.env] ?? s.def) == "-" }
-    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + tr("Game default") : "") }   // VoiceOver's value
+    private var memoryDefaultLabel: String { tr(m.memory != nil ? "Auto" : "Game default") }   // "-" is automatic when the launcher can pick (MemoryAuto)
+    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + memoryDefaultLabel : "") }   // VoiceOver's value
+    // What automatic memory knows, under the slider: what the last run told and why the size is what it is
+    private var memoryAutoNote: (text: String, warn: Bool)? {
+        guard memoryIsDefault, !locked, let a = m.memory else { return nil }
+        func g(_ v: UInt64) -> String { String(format: "%.1f GB", Double(v) / 1073741824) }
+        let now = g(a.pick)
+        if a.exhausted {
+            return (zhHant ? "各種記憶體大小都試過了還是打不開，應該不是記憶體的問題；先用回遊戲預設 \(now)。"
+                           : "Every memory size failed, so memory is likely not the problem; back to the game's default \(now).", true)
+        }
+        if let l = a.last {
+            let was = g(l.pool)
+            switch l.outcome {
+            case .worked: return (zhHant ? "\(now) 已確認可以正常執行。" : "\(now) is confirmed to work.", false)
+            case .tooBig: return (zhHant ? "上次 \(was) 被 iOS 以記憶體不足關掉，這次自動改用 \(now)。" : "Last time iOS closed the game at \(was) for lack of memory; trying \(now) now.", true)
+            case .tooSmall: return (zhHant ? "上次 \(was) 遊戲要不到記憶體而中止，這次自動改用 \(now)。" : "Last time the game ran out of memory at \(was); trying \(now) now.", true)
+            case .maybeSmall: return (zhHant ? "上次 \(was) 遊戲自己中止，可能是記憶體不夠，這次先試 \(now)。" : "Last time the game stopped itself at \(was), maybe for memory; trying \(now) now.", true)
+            case .notMemory: return (zhHant ? "上次 \(was) 閃退，但看起來不是記憶體造成的，所以記憶體不變。" : "Last time the game crashed at \(was), but not for memory, so the size stays.", true)
+            }
+        }
+        if a.confirmed { return (zhHant ? "\(now) 已確認可以正常執行。" : "\(now) is confirmed to work.", false) }
+        return (zhHant ? "打不開而且是記憶體造成的話，下次會自動換一個大小。" : "If the game fails to start for memory, the next start tries another size.", false)
+    }
 
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -390,12 +415,13 @@ private struct SettingRow: View {
                         Spacer()
                         // the size, then "Game default" in the same place: a label at the default, a button that goes back to it otherwise
                         Text(String(format: "%.1f GB", memoryGB.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
-                        if memoryIsDefault || locked { Text(tr("Game default")).foregroundStyle(.secondary).opacity(memoryIsDefault ? 1 : 0) }
-                        else { Button(tr("Game default")) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
+                        if memoryIsDefault || locked { Text(memoryDefaultLabel).foregroundStyle(.secondary).opacity(memoryIsDefault ? 1 : 0) }
+                        else { Button(memoryDefaultLabel) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
                     }
                     Slider(value: memoryGB, in: (s.min ?? 0.5)...(s.max ?? 3.2), step: s.step ?? 0.1)
                         .accessibilityLabel(tr(s.label))
                         .accessibilityValue(memoryText)
+                    if let n = memoryAutoNote { Text(n.text).font(.footnote).foregroundStyle(n.warn ? Color.orange : Color.secondary) }
                 }
             default:
                 Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
@@ -455,8 +481,8 @@ private extension LauncherModel {
         case "range":
             let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
             values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, (Double(v) ?? hi) + Double(d) * st)))
-        case "memory":   // "-" moves from the package's own value
-            let t = (v == "-" ? ProcessInfo.processInfo.environment[s.env] ?? "" : v).lowercased()
+        case "memory":   // "-" moves from the automatic size, else the package's own value
+            let t = (v == "-" ? memory.map { MemoryAuto.hex($0.pick) } ?? ProcessInfo.processInfo.environment[s.env] ?? "" : v).lowercased()
             let lo = s.min ?? 0.5, hi = s.max ?? 3.2, st = s.step ?? 0.1
             let g = (t.hasPrefix("0x") ? UInt64(t.dropFirst(2), radix: 16) : UInt64(t)).map { Double($0) / 1073741824 } ?? hi
             let n = Swift.min(hi, Swift.max(lo, (g / st).rounded() * st + Double(d) * st))
@@ -786,6 +812,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         host = nil
         model.apply()
         shell.apply()
+        if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
         h.dismiss(animated: true) { done() }
     }, back: severalGames ? {
         guard let h = host else { return }
