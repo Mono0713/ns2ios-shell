@@ -51,11 +51,21 @@ static const hle_ent *hle_find(const char *name) {
     return NULL;
 }
 
+// A GL function main imports by name (an OpenGL ES game linked against NintendoSDK_OpenGL, Roof Rage: its 257 gl* imports bind to subsdk0, which the host does not
+// load) instead of asking eglGetProcAddress for it: the GL layer's own table (dm/gfx/gl/hle_gl.m), the same functions a loader gets
+void *dm_gl_proc(const char *name);
+static void *gl_import(const char *name) { return name[0] == 'g' && name[1] == 'l' && name[2] >= 'A' && name[2] <= 'Z' ? dm_gl_proc(name) : NULL; }
+
 uint64_t resolve_import(module_t *m, const char *name) {
     const hle_ent *e = hle_find(name);
     if (e) {
         if (g_flag.imports) { Dl_info di; dladdr(e->fn, &di); LOG("import %s -> %s", name, di.dli_sname); }
         void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("HLE", name, e->fn);   // With DM_HLECOUNT it is a counting stub (including the libc passthrough table)
+    }
+    void *gl = gl_import(name);
+    if (gl) {
+        if (g_flag.imports) LOG("import %s -> the GL layer", name);
+        void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("GL", name, gl);
     }
     // Reuse the stub if one was already allocated for the same name (its own hash: the reuse scan over every stub was quadratic in the stub count)
     void *hlecount_wrap(const char *, const char *, void *);
@@ -81,8 +91,8 @@ uint64_t resolve_import(module_t *m, const char *name) {
     return (uint64_t)hlecount_wrap("STUB", name, (void *)&unimpl_stubs[k]);
 }
 
-// The host implements this import (the swhle table), without allocating a stub for it
-int hle_implements(const char *name) { return hle_find(name) != NULL; }
+// The host implements this import (the swhle table or the GL layer's), without allocating a stub for it
+int hle_implements(const char *name) { return hle_find(name) != NULL || gl_import(name) != NULL; }
 
 void stubs_report(void) { LOG("stubs=%u", g_nstub); }
 

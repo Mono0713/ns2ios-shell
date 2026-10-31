@@ -56,7 +56,13 @@ def check(game, prof_dir=None):
         add('info', 'unread', '沒辦法先檢查這款（%s），照常轉換' % e)
         return items
     main = F.get('main_markers', set())
-    if F.get('gl_src') or (('EGL / OpenGL' in main) and 'NVN' not in main):
+    imp = F['mods'].get('main', {}).get('imports', set())
+    if any(s in imp for s in ('glDrawElements', 'glDrawArrays', 'glShaderSource')):
+        # GL functions imported by name (from NintendoSDK_OpenGL) rather than through eglGetProcAddress: an OpenGL ES game (Roof Rage);
+        # a shell older than the GL layer's import resolution leaves every call unimplemented (sound, a magenta screen)
+        add('warn', 'gles', 'OpenGL ES 遊戲：要用支援 OpenGL ES 的殼。第一次在 iPad 上玩時畫面會是紫色，殼在錄著色器；'
+                            '玩過一輪後再按一次「裝到 iPad」才會有畫面')
+    elif F.get('gl_src') or (('EGL / OpenGL' in main) and 'NVN' not in main):
         add('warn', 'gl', 'OpenGL 遊戲：第一次在 iPad 上玩時殼會錄下畫面要用的著色器，再按一次「裝到 iPad」才會有完整畫面')
     elif 'Vulkan' in main and 'NVN' not in main:
         add('warn', 'vulkan', 'Vulkan 遊戲：著色器是執行時才產生的，可能需要先在 iPad 上錄一次')
