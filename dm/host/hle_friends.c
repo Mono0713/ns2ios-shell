@@ -60,7 +60,9 @@ HLE_FORCE("_ZN2nn7friends18GetBlockedUserListEPiPNS_7account23NetworkServiceAcco
 // Online play sessions (DRAGON QUEST XI S)
 HLE_FORCE("_ZN2nn7friends28DeclareOpenOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_OpenSession, const void *uid) { (void)uid; return RES_FAIL; }
 HLE_FORCE("_ZN2nn7friends29DeclareCloseOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_CloseSession, const void *uid) { (void)uid; return RES_FAIL; }
-// Presence
-HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeERKNS_7account3UidE", "presence unavailable (cut)", Result, h_fr_UpInit, void *self, const void *uid) { (void)self; (void)uid; return RES_FAIL; }
-HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence unavailable (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; return RES_FAIL; }
-HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence unavailable (cut)", Result, h_fr_UpCommit, void *self) { (void)self; return RES_FAIL; }
+// Presence: success. A UserPresence lives in the game's own object, and on a console without a network these still succeed (the friends service is local),
+// so a game may take a failure as fatal: Heave Ho's SwitchAccountManager (GameSystems.Awake) is the suspect -- GameManager.Awake later loads its fonts
+// through a ResourceManager that was never made (main+0x1077f28). Nothing is sent anywhere
+HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeERKNS_7account3UidE", "presence kept locally (cut)", Result, h_fr_UpInit, void *self, const void *uid) { (void)self; (void)uid; return RES_OK; }
+HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence kept locally (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; return RES_OK; }
+HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence kept locally (cut)", Result, h_fr_UpCommit, void *self) { (void)self; return RES_OK; }
