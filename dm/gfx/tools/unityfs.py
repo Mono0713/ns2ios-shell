@@ -151,6 +151,11 @@ PPtr<Shader>: int m_FileID; SInt64 m_PathID
 PPtr<Texture>: int m_FileID; SInt64 m_PathID
 Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> platforms; vector<data:vector<data:unsigned int>> offsets; vector<data:vector<data:unsigned int>> compressedLengths; vector<data:vector<data:unsigned int>> decompressedLengths; vector<data:UInt8> compressedBlob; vector<data:unsigned int> stageCounts; vector<data:PPtr<Shader>> m_Dependencies; map<data:pair(string,PPtr<Texture>)>~ m_NonModifiableTextures; bool! m_ShaderIsBaked
 '''
+# The Unity 2021.3 Shader (Ultimate Chicken Horse, Unity 2021.3.45f1: Data/*.assets and Data/Resources without type trees and no bundle; type hash f0c184272a05e54447e36366ec4876a6),
+# from AssetRipper's TypeTreeDumps (StructsDump/release/2021.3.45f1.dump; 2021.3.15f1 and 2021.3.33f1 are node for node the same, 2021.3.10f1 and older are not), checked against it
+# with the flags: 2022.3's, with the keyword state mask kept once per pass instead of once per program
+SHADER_2021_3 = (SHADER_2022_3.replace('m_CommonParameters; vector<data:UInt16> m_SerializedKeywordStateMask\n', 'm_CommonParameters\n')
+                 .replace('SerializedTagMap m_Tags\nSerializedSubShader', 'SerializedTagMap m_Tags; vector<data:UInt16> m_SerializedKeywordStateMask\nSerializedSubShader'))
 # The Unity 2020.3 Shader (Patrick's Parabox, Unity 2020.3.30f1: only Data/*.assets, its shaders the built-in ones in Data/Resources) matches the type tree in Fire Emblem Engage's bundles
 # (Unity 2020.3.18f1), whose hash is the same: global and local keyword indices per subprogram, every subprogram in m_SubPrograms, no parameter blobs, keyword names or stage counts
 SHADER_2020_3 = _SHADER_COMMON + '''SerializedSubProgram: unsigned int m_BlobIndex; ParserBindChannels m_Channels; vector<data:UInt16> m_GlobalKeywordIndices; vector<data:UInt16> m_LocalKeywordIndices; SInt8 m_ShaderHardwareTier; SInt8! m_GpuProgramType; SerializedProgramParameters m_Parameters; int m_ShaderRequirements
@@ -259,6 +264,7 @@ ComputeShader: string m_Name; vector<data:ComputeShaderVariant> variants
 '''
 CLASS_COMPUTE_SHADER = 72
 KNOWN_TREES = {(CLASS_SHADER, bytes.fromhex('ea424a5fc1e48db62144df956f9e1005')): ('Shader', SHADER_2022_3),
+               (CLASS_SHADER, bytes.fromhex('f0c184272a05e54447e36366ec4876a6')): ('Shader', SHADER_2021_3),
                (CLASS_SHADER, bytes.fromhex('a30e3dcf6c6d25153d6f64e5e41caf4e')): ('Shader', SHADER_2020_3),
                (CLASS_SHADER, bytes.fromhex('8db760073e1392061e4a36995f0735af')): ('Shader', SHADER_2018_3),
                (CLASS_SHADER, bytes.fromhex('266d53113fa30d2b858f2768f92eaa14')): ('Shader', SHADER_2017_4),
@@ -342,7 +348,7 @@ Shader: string m_Name; SerializedShader m_ParsedForm; vector<data:unsigned int> 
 '''
 # Layouts for a class whose type hash is in no bundle and not in KNOWN_TREES, chosen by the Unity version in the serialized file's header (major.minor). The layout of a class does not change
 # within a Unity release line (2019.4.22f1 and 2019.4.27f1 dump the same Shader tree), but a guess must still read every object to its exact end, or the file is left without a tree
-KNOWN_BY_VERSION = {(CLASS_SHADER, '2019.4'): ('Shader', SHADER_2019_4)}
+KNOWN_BY_VERSION = {(CLASS_SHADER, '2019.4'): ('Shader', SHADER_2019_4), (CLASS_SHADER, '2021.3'): ('Shader', SHADER_2021_3)}
 def version_key(cid, unity): return (cid, 'unity ' + unity)
 
 def known_version_tree(cid, unity):
