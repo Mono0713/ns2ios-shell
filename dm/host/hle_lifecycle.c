@@ -7,9 +7,10 @@
 #include <signal.h>
 #include <unistd.h>
 void hlecount_flush(void);
+__attribute__((weak)) void dm_run_mark(char c);   // hle_runmark.c
 void dm_host_shutdown(const char *why) {
     static _Atomic int once; if (atomic_exchange(&once, 1)) return;
-    uint64_t t0 = now_ns(); LOG("received %s: graceful exit", why);
+    uint64_t t0 = now_ns(); LOG("received %s: graceful exit", why); if (dm_run_mark) dm_run_mark('g');
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
         LOG("[RED] graceful exit not done in 1.5 seconds, exiting at once"); _exit(0); });
     hlecount_flush();                               // DM_HLECOUNT: _exit does not run atexit, write a copy here
