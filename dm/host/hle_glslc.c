@@ -1,15 +1,20 @@
 // GLSLC at run time. Fire Emblem: Three Houses (KTGL, SDK 6.5.0) compiles 9 built-in GLSL shaders at boot with the game's own runtime compiler (subsdk0, glslcCompile called through a function
 // table from main+0x9c89f8; the sources are plain strings in main, e.g. "in vec3 ktglPosition0; …"). Their outputs are in no game file, and shaders are translated offline only, so the
-// outputs are captured once on the Mac: DM_GLSLC_CAPTURE=<dir> writes every successful compile's GLSLC output (magic 0x19866891, the whole output's length at +0x44) to
+// outputs are captured once on the Mac (or on the phone, where the package's dm/env.txt names Documents/glslc_capture/<title ID> and Switch Pad takes the files back: Unrailed 2): DM_GLSLC_CAPTURE=<dir> writes every successful compile's GLSLC output (magic 0x19866891, the whole output's length at +0x44) to
 // <dir>/<FNV-1a of the output>.glslc. shader_split.py reads that folder like any other source of GLSLC outputs (the NSP script makes it for a game whose main holds GLSL sources and imports glslcCompile).
 // The compile object's first word points at its last results {GLSLCcompilationStatus *, GLSLCoutput *}; the status has "success" at +0xc and "allocation error" at +0xd, which is what the
 // game itself reads after the call (main+0x9c8a04)
 #include "hle.h"
 #include <sys/stat.h>
+#include <unistd.h>
 
 static void capture(const void *obj) {
     static const char *dir; static int init;
-    if (!init) { init = 1; dir = getenv("DM_GLSLC_CAPTURE"); if (dir) { mkdir(dir, 0755); LOG("glslc: run-time compile outputs are saved to %s", dir); } }
+    if (!init) {
+        init = 1; dir = getenv("DM_GLSLC_CAPTURE");
+        // the phone's package names a folder under Documents (glslc_capture/<title ID>, relative to the working directory main.m sets): make every level of it
+        if (dir) { char p[1024]; snprintf(p, sizeof p, "%s", dir); for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; } mkdir(p, 0755); LOG("glslc: run-time compile outputs are saved to %s", dir); }
+    }
     if (!dir) return;
     const uint8_t *const *res = *(const uint8_t *const *const *)obj;
     if (!res || !res[0] || !res[1] || !res[0][0xc] || res[0][0xd]) return;
@@ -18,8 +23,11 @@ static void capture(const void *obj) {
     uint64_t h = 0xcbf29ce484222325ull; for (uint32_t i = 0; i < n; i++) h = (h ^ out[i]) * 0x100000001b3ull;
     char path[1024]; snprintf(path, sizeof path, "%s/%016llx.glslc", dir, (unsigned long long)h);
     struct stat st; if (!stat(path, &st)) return;
-    FILE *f = fopen(path, "wb"); if (!f) { LOG("[RED] glslc: cannot write %s", path); return; }
-    fwrite(out, 1, n, f); fclose(f);
+    // whole files only (a temporary name, then rename): the game may be closed at any time on the phone, and the packer reads each file it finds
+    char tmp[1100]; snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb"); if (!f) { LOG("[RED] glslc: cannot write %s", path); return; }
+    int ok = fwrite(out, 1, n, f) == n; ok &= fclose(f) == 0;
+    if (!ok || rename(tmp, path)) { unlink(tmp); LOG("[RED] glslc: cannot write %s", path); return; }
     LOG("glslc: saved a run-time compile output %s (%u bytes)", path, n);
 }
 

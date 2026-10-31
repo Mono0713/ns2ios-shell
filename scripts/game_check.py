@@ -64,6 +64,11 @@ def check(game, prof_dir=None):
                             '玩過一輪後再按一次「裝到 iPad」才會有畫面')
     elif F.get('gl_src') or (('EGL / OpenGL' in main) and 'NVN' not in main):
         add('warn', 'gl', 'OpenGL 遊戲：第一次在 iPad 上玩時殼會錄下畫面要用的著色器，再按一次「裝到 iPad」才會有完整畫面')
+    elif F.get('glsl_src') and 'glslcCompile' in imp:
+        # GLSL sources in main compiled with the game's own GLSLC at run time (Unrailed 2: Godot; Fire Emblem: Three Houses): no game file holds
+        # those outputs, so the package records them on the phone (DM_GLSLC_CAPTURE) and the next pack translates them
+        add('warn', 'glslc', '遊戲執行時才編譯著色器：第一次在 iPad 上玩時畫面可能是黑的或缺東西，殼在記錄著色器；'
+                             '玩過一輪後再按一次「裝到 iPad」才會有完整畫面')
     elif 'Vulkan' in main and 'NVN' not in main:
         add('warn', 'vulkan', 'Vulkan 遊戲：著色器是執行時才產生的，可能需要先在 iPad 上錄一次')
     if F.get('unity'):
