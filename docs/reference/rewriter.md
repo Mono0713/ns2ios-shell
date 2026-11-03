@@ -223,6 +223,14 @@ To enroll a cut for any game's own module:
 - **Found on:** [Absolum](../../dm/games/0100A83022A22000/README.md) `main` (.NET NativeAOT).
 - **Check:** no module of the 19 other games on hand has a data block, and their rewrites are byte-identical.
 
+### Modules without an eh_frame_hdr table
+
+- **Symptom:** `KeyError: 0` in `rd` in `patch_nso.py`, right after extraction (`rewriting main failed`).
+- **Cause:** `patch_nso.py` read the eh_frame_hdr's binary search table itself, with a table of three pointer formats (`0x3`, `0xB`, `0x4`). A module built without one (homebrew and recompiled ports: MOD0's eh_frame_hdr range empty or pointing at zeros, so the version byte and every pointer encoding read 0) has no such header, and the lookup stopped the pack.
+- **Fix:** the rewriter takes its function starts from `nso_code.fde_table`, which already returns nothing for a missing or invalid header (New Super Mario Bros. U Deluxe's MOD0 points elsewhere) and reads every fixed-size pointer format. Without function starts, `func_of` makes the code between data blocks one function (analysed in pieces when long, as above), as it does for text before the first FDE, instead of one function per instruction; the rewriter logs `[RED] this module has no eh_frame_hdr function table`.
+- **Found on:** Mario Kart: Double Dash (a recompiled port, title ID `056CC3572EAAD000`, provisional profile only).
+- **Check:** a synthetic NSO with an empty eh_frame_hdr raises the same `KeyError: 0` before the change and rewrites after it; `test_patches`, `test_nso_match`, `test_tail_call`, `test_spin_waits` and `test_jump_copies` pass.
+
 ## Stack and system registers
 
 ### Stack pointer writes through x18
