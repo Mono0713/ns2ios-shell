@@ -16,6 +16,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static void pl(NSString *s) { fprintf(stderr, "[dm] %s\n", s.UTF8String); }
 static int lg(void) { NSString *l = NSLocale.preferredLanguages.firstObject; return [l hasPrefix:@"zh"] ? 1 : [l hasPrefix:@"es"] ? 2 : 0; }   // 系统首选语言：1 中文 / 2 西语 / 0 其余英文 | System preferred language: 1 Chinese / 2 Spanish / 0 English otherwise
@@ -127,16 +128,47 @@ static int prep_show(NSArray<NSString *> *src, NSString *mk, void (^done)(void))
     });
     return 1;
 }
+// Every start used to look at every shader file before the game could start (the scan below): for a game with tens of thousands of shaders that kept
+// "Checking shaders" on screen for many seconds at every launch, though only the first launch after an install has anything to do. Once a scan finds nothing
+// to do, this records a key that changes whenever the package's shaders can have changed, and later starts that find the same key skip the scan. The key is
+// built from a few stat calls: each shader directory's modification time (an install that adds, removes or renames a file changes it), the size and time of
+// the package's stamp (inputs.tsv, rewritten by every repack), and the system version (an update drops the Metal cache, which the full marker also follows).
+// It lives in Library/Caches beside the full marker, so a cleared cache brings back the scan.
+static void stat_into(NSMutableString *k, NSString *p) {
+    struct stat st;
+    if (p && stat(p.fileSystemRepresentation, &st) == 0)
+        [k appendFormat:@"%@|%lld.%09ld|%lld\n", p, (long long)st.st_mtimespec.tv_sec, (long)st.st_mtimespec.tv_nsec, (long long)st.st_size];
+    else [k appendFormat:@"%@|-\n", p ?: @"-"];
+}
+static NSString *quick_marker(void) {
+    NSString *msl = msldir(), *lib = libdir();
+    NSMutableString *k = [NSMutableString string];
+    stat_into(k, msl); stat_into(k, lib);
+    stat_into(k, lib ? [lib stringByAppendingPathComponent:@"inputs.tsv"] : nil);
+    for (NSString *sub in @[@"gl", @"gl/src", @"gl/inputs.tsv", @"vk", @"vk/src"]) stat_into(k, [msl stringByAppendingPathComponent:sub]);
+    NSOperatingSystemVersion v = NSProcessInfo.processInfo.operatingSystemVersion;
+    [k appendFormat:@"os %ld.%ld.%ld\n", (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion];
+    uint64_t h = 1469598103934665603ull;   // FNV-1a over the key
+    for (const unsigned char *c = (const unsigned char *)k.UTF8String; *c; c++) { h ^= *c; h *= 1099511628211ull; }
+    NSString *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+    return [caches stringByAppendingPathComponent:[NSString stringWithFormat:@"dm_shader_prep_quick_%016llx.done", (unsigned long long)h]];
+}
 // Finding the source-form shaders opens every .metallib of the package (tens of thousands for a Unity game) and the marker stats each one: on the main
 // thread that held the screen black for many seconds after Play, before the loading screen could draw. The scan runs in the background; then, on the main
 // thread, either the progress page takes over or done runs at once (nothing to compile, or done last time)
 void dm_shader_prep_start(void (^done)(void)) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+        NSString *qk = quick_marker();
+        if ([NSFileManager.defaultManager fileExistsAtPath:qk]) {
+            pl([NSString stringWithFormat:@"shader preparation: package unchanged since the last check, nothing to do (%.3f s)", CFAbsoluteTimeGetCurrent() - t0]);
+            dispatch_async(dispatch_get_main_queue(), ^{ done(); }); return;
+        }
         NSArray<NSString *> *src = shader_sources();   // NVN 的版本目录；GL 包没有，源码在 msl/gl/src | the chain version's directory; a GL package has none, its sources are in msl/gl/src
         NSString *mk = src.count ? marker(src, libdir()) : nil;
         BOOL need = mk && ![NSFileManager.defaultManager fileExistsAtPath:mk];
         pl([NSString stringWithFormat:@"shader preparation: %lu source-form shaders, %@, checked in %.1f s", (unsigned long)src.count, need ? @"to compile" : @"nothing to do", CFAbsoluteTimeGetCurrent() - t0]);
+        if (!need) [@"ok" writeToFile:qk atomically:YES encoding:NSUTF8StringEncoding error:nil];   // the next start skips the scan while the package stays the same
         dispatch_async(dispatch_get_main_queue(), ^{ if (!need || !prep_show(src, mk, done)) done(); });
     });
 }
