@@ -48,6 +48,11 @@ def check(game, prof_dir=None):
     if is64 is False:
         add('bad', 'aarch32', '32 位元的遊戲，還不支援（殼只能跑 64 位元的 Switch 遊戲）')
         return items
+    if (game / 'ExeFS' / 'main').is_file() and not (game / 'ExeFS' / 'sdk').is_file():
+        # Every game made with Nintendo's SDK has ExeFS/sdk. Without it the program is homebrew (libnx): a forwarder that starts something else from the SD card
+        # ("Mario Kart: Double Dash!! (recomp)", a 21 KB main), which the shell cannot run
+        add('bad', 'homebrew', '這是 homebrew（例如啟動 SD 卡上模擬器或移植版的捷徑），不是用 Nintendo SDK 做的遊戲，殼跑不了')
+        return items
     romfs = game / 'romfs_manifest.tsv'
     if not romfs.is_file(): romfs = game / 'RomFS'
     try:
@@ -64,6 +69,11 @@ def check(game, prof_dir=None):
                             '玩過一輪後再按一次「裝到 iPad」才會有畫面')
     elif F.get('gl_src') or (('EGL / OpenGL' in main) and 'NVN' not in main):
         add('warn', 'gl', 'OpenGL 遊戲：第一次在 iPad 上玩時殼會錄下畫面要用的著色器，再按一次「裝到 iPad」才會有完整畫面')
+    elif F.get('glsl_src') and 'glslcCompile' in imp:
+        # GLSL sources in main compiled with the game's own GLSLC at run time (Unrailed 2: Godot; Fire Emblem: Three Houses): no game file holds
+        # those outputs, so the package records them on the phone (DM_GLSLC_CAPTURE) and the next pack translates them
+        add('warn', 'glslc', '遊戲執行時才編譯著色器：第一次在 iPad 上玩時畫面可能是黑的或缺東西，殼在記錄著色器；'
+                             '玩過一輪後再按一次「裝到 iPad」才會有完整畫面')
     elif 'Vulkan' in main and 'NVN' not in main:
         add('warn', 'vulkan', 'Vulkan 遊戲：著色器是執行時才產生的，可能需要先在 iPad 上錄一次')
     if F.get('unity'):

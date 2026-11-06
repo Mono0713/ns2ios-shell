@@ -536,6 +536,13 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         if dst.exists(): shutil.rmtree(dst, ignore_errors=True)
         tmp.replace(dst)
         dirs[ver] = dst
+    # Modules built for system 22 and later may keep their segments ZBIC-compressed (Super Bunny Man 1.3.0's main) where every
+    # tool here reads LZ4: store those segments uncompressed once, before anything reads the modules (dm/tools/nso_zbic.py)
+    sys.path.insert(0, str(TOOLS))
+    import nso_zbic
+    for ver, dst in dirs.items():
+        done = nso_zbic.normalize_exefs(dst / 'ExeFS') if (dst / 'ExeFS').is_dir() else []
+        if done: say('%s: %s had ZBIC-compressed segments (system 22 and later), stored uncompressed' % (ver, ', '.join(done)))
     return dirs
 
 
@@ -929,6 +936,41 @@ def shader_split_hint(text):
     return None
 
 
+GLSLC_MAGIC = b'\x91\x68\x86\x19'
+
+
+def take_glslc_capture(folder, game):
+    """Copy the GLSLC outputs recorded on the phone (<hash>.glslc) to <version dir>/glslc_capture, where shader_split.py reads
+    them. Only whole outputs: the magic, and the length at +0x44 matching the file (a run can be killed while it writes one).
+    Returns how many were taken."""
+    dst = game / 'glslc_capture'
+    if not folder: return 0
+    src = Path(folder).resolve()
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    n = bad = 0
+    for f in sorted(src.glob('*.glslc')) if src.is_dir() else []:
+        d = f.read_bytes()
+        if len(d) < 0x48 or d[:4] != GLSLC_MAGIC or struct.unpack_from('<I', d, 0x44)[0] != len(d): bad += 1; continue
+        (dst / f.name).write_bytes(d); n += 1
+    if bad: warn('%d recorded GLSLC output(s) in %s are cut short or not GLSLC outputs: left out' % (bad, src))
+    return n
+
+
+def glslc_needed(work):
+    """shader_split.py says so: main holds GLSL sources and calls glslcCompile, and nothing recorded what it compiled"""
+    log = work / 'logs' / 'shader_split.log'
+    try: return 'imports glslcCompile, but there are no captured GLSLC outputs' in log.read_text(encoding='utf-8', errors='replace')
+    except OSError: return False
+
+
+def shader_rows(tb):
+    """how many shaders the split found (rows of its shader_map.tsv)"""
+    try: rows = [l for l in (tb / 'shader_map.tsv').read_text(encoding='utf-8', errors='replace').splitlines() if l.strip() and not l.startswith('#')]
+    except OSError: return 0
+    return max(0, len(rows) - 1)
+
+
 def step_shaders(game, prof_dir, tables, work, tid, force=False):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
@@ -1267,6 +1309,10 @@ def main():
                     help="an OpenGL game's captured shaders (<key>.vert / <key>.frag, which DM_GL_CAPTURE writes on the "
                          'phone): translated to Metal sources and packed, so the game draws. Needs glslangValidator and '
                          'spirv-cross on PATH or in --tools.')
+    ap.add_argument('--glslc-capture', default='', metavar='FOLDER',
+                    help="the GLSLC outputs an NVN game compiled at run time on the phone (<hash>.glslc, which DM_GLSLC_CAPTURE "
+                         'writes; Unrailed 2, Godot): split and translated like the shaders the game files hold. Without it '
+                         'such a game is packed with what its files hold and records the rest on the phone.')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
                          'modules and the shaders (it is several times the size of the game)')
@@ -1518,8 +1564,15 @@ def main():
     # the four tables shader_split.py writes (upstream tuple, pso_pairs.tsv included since it is what the pipeline prebuild
     # reads; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
+    glslc_record = False   # the package records the GLSLC outputs the game compiles, on the phone (Documents/glslc_capture/<title ID>)
     if route == 'nvn':
-        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
+        glslc_n = take_glslc_capture(a.glslc_capture, game)
+        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n))
+        glslc_record = bool(a.glslc_capture) or glslc_needed(work)
+        if glslc_record:
+            say('this game compiles shaders at run time with GLSLC: %s; the phone keeps recording the ones it compiles '
+                '(Documents/glslc_capture/%s), and the next pack takes them with --glslc-capture'
+                % ('%d recorded outputs packed' % glslc_n if glslc_n else 'none recorded yet', tid))
         if derived_dir is not None:
             # The shader tool reads its tables from the profile it loads, and a derived profile has none (the split just made
             # them). Without this it falls back to the registered profile's tables, which name shader packs this version lacks.
@@ -1545,7 +1598,7 @@ def main():
             say('profile tables replaced by the ones split from these files: %s' % ov)
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
-    if route != 'nvn':
+    if route != 'nvn' or (glslc_record and not shader_rows(tb)):
         # The b- directory is what the app looks for (main.m points DM_MSL_DIR at <App>/msl, and the chain version names one
         # directory inside it). Beyond the stamp it is empty here: a GL package's shaders are under msl/gl, which is where
         # the GL layer reads them from, and are copied there after assembly.
@@ -1554,6 +1607,7 @@ def main():
         (msl_out / 'inputs.tsv').write_text('game\t%s\n' % tid, encoding='utf-8')
         if gl_out is None and vk_out is None:
             say('no shader library: the app will run without drawing until its shaders are captured')
+            if route == 'nvn': warn('no shader in the game files and none recorded yet: play it once on the phone (no picture), then pack again')
     else:
         # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
         # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
@@ -1586,6 +1640,12 @@ def main():
         lines = [l for l in lines if not l.startswith('DM_GL_CAPTURE=')] + ['DM_GL_CAPTURE=gl_capture/%s' % tid]
         env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         say('dm/env.txt: DM_GL_CAPTURE=gl_capture/%s (the phone records the GLSL the game compiles there)' % tid)
+    if glslc_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_GLSLC_CAPTURE=')] + ['DM_GLSLC_CAPTURE=glslc_capture/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_GLSLC_CAPTURE=glslc_capture/%s (the phone records the GLSLC outputs the game compiles there)' % tid)
     if gl_out is not None:
         # <App>/msl/gl: hle_gl.m reads gl_shaders.tsv and gl/src from DM_MSL_DIR itself, not from the chain version's directory.
         dst = A / 'msl' / 'gl'

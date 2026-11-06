@@ -87,7 +87,8 @@ def facts_of(exefs, romfs):
         for pat, name in MARKERS:
             if pat in img: F['markers'].setdefault(name, []).append(p.name)
         if p.name == 'main':
-            F['unity'] = {v.decode() for v in re.findall(rb'20[12][0-9]\.[0-9]+\.[0-9]+f[0-9]', img)}
+            # Unity 5.5 and 5.6 players too (Snipperclips Plus: 5.5.0p1, a patch build), which were taken for Unreal before
+            F['unity'] = {v.decode() for v in re.findall(rb'20[12][0-9]\.[0-9]+\.[0-9]+f[0-9]|(?<![0-9.])5\.[56]\.[0-9]+[fp][0-9]+', img)}
             F['glslc'], F['glsl_src'], F['gl_names'] = img.count(GLSLC_MAGIC), img.count(b'#version '), img.count(b'glShaderSource')
             F['gl_src'] = len(re.findall(GL_SRC, img))
             F['main_markers'] = {name for pat, name in MARKERS if pat in img}
