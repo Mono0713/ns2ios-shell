@@ -20,6 +20,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md); [Pokémon Brilliant Diamond](../../dm/games/0100000011D90000/README.md): the opening movie's YUV conversion uses GEQUAL against a new 1920×1080 depth texture that the game never clears. Metal supplied depth 1, discarding the movie; zero initialization restores it without a shader override.
 - **Check:** `t_clear_ds` poisons depth and stencil before calling the real initializer and checks both become zero; depth clear, stencil-view and upload-budget tests cover the related paths.
 
+### All-zero ASTC blocks written as transparent black
+
+- **Symptom:** the whole picture, or textured surfaces, flash magenta for an instant at launch or on entering a level, then look right (Ultimate Chicken Horse on an iPad, a Unity game, at every start).
+- **Cause:** a texture sampled before the game has written its content reads storage that is still zero, and Metal decodes an all-zero ASTC block (block mode 0, reserved) as the error colour (1, 0, 1). [New textures start as zero](#new-textures-start-as-zero) covers GPU-only textures; a packaged or CPU-written texture is deswizzled from the game's memory, zeros included.
+- **Fix:** the deswizzle (`deswz` in `dm/gfx/tex/nvn_deswizzle_gpu.m`, and `nvn_astc_zero_patch` after the CPU deswizzle) writes every all-zero 16-byte block of an NVN ASTC format (0x79–0x94) as a transparent-black void-extent block; the upload of the real content replaces it. No valid ASTC block is all zero, so no texture's content changes. `DM_NVN_ASTC_ZERO=0` keeps the zeros; `DM_NVN_ZBLOCK` still counts them (before the fix).
+- **Found on:** Ultimate Chicken Horse (0100FCF002A58000, not in the games table): suspected from the symptom, not yet confirmed with `DM_NVN_ZBLOCK` on the device.
+
 ### Texture swizzle through swizzled Metal views
 
 - **Symptom:** glyphs render as white boxes (the font atlas is `(1, 1, 1, R)`).
