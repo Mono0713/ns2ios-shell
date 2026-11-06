@@ -120,6 +120,10 @@ HLE_FORCE("_ZN2nn4nifm22GetCurrentIpConfigInfoEPNS_6socket6InAddrES3_S3_S3_S3_",
 HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr", "offline: no IP (SDK 10 overload)", Result, h_nifm_GetIp10, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
 // EnvironmentIdentifier = char[8]: retail environment "lp1"
 HLE_FORCE("_ZN2nn3nsd24GetEnvironmentIdentifierEPNS0_21EnvironmentIdentifierE", "server environment name: retail lp1", void, h_nsd_EnvId, char *out) { memset(out, 0, 8); memcpy(out, "lp1", 3); }
+// The server environment the application is told: retail (0, what Ryujinx's nsd answers too). Left to the SDK, it opens nsd:u / nsd:a itself, which the host
+// does not serve, and the game aborts with Result 0xe8d at its first frames (Ultimate Sheep Raccoon: nn::oe::GetServerEnvironmentType, a branch to the nsd one in sdk)
+HLE_FORCE("_ZN2nn3nsd35GetApplicationServerEnvironmentTypeEv", "server environment of the application: retail (0)", int, h_nsd_AppEnvType, void) { return 0; }
+HLE_FORCE("_ZN2nn2oe24GetServerEnvironmentTypeEv", "server environment of the application: retail (0)", int, h_oe_EnvType, void) { return 0; }
 
 // ---------- friends: newer SDK overloads ----------
 HLE_FORCE("_ZN2nn7friends12SetAllocatorEPFPvmEPFvS1_mE", "friends library allocator; no session is created, ignored", void, h_fr_SetAlloc, void *a, void *f) { (void)a; (void)f; }
