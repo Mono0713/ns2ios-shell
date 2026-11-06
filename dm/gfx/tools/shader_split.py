@@ -1821,13 +1821,22 @@ def nso_image(path):
         img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
     return bytes(img)
 
+def path_list(arg):
+    """a comma-separated list of paths whose names may hold commas themselves (Snipperclips Plus - Cut It Out, Together): pieces are joined back while the
+    joined path does not exist and a longer join does, so a path that exists is never split"""
+    parts, out, i = arg.split(','), [], 0
+    while i < len(parts):
+        j = next((j for j in range(len(parts), i, -1) if os.path.exists(','.join(parts[i:j]))), i + 1)
+        out.append(','.join(parts[i:j])); i = j
+    return out
+
 def main():
     romfs_l, main_l, pkg, mapout, factsout = sys.argv[1:6]
     pairsout = sys.argv[6] if len(sys.argv) > 6 else None
     psopairsout = sys.argv[7] if len(sys.argv) > 7 else None   # pso_pairs.tsv: the pairs the pipeline prebuild takes besides shader_pairs.tsv (the BAHS program variations)
     # Several versions (base game + update): the RomFS and main arguments are comma-separated and paired one to one; the output is their union (keys are content hashes, shaders shared by versions appear once).
     # The first version's source column is unchanged; later versions are prefixed with their workspace directory name (e.g. v327680): /v327680/Shader/…, main@v327680. They sort after the first version, so existing rows keep their package indices.
-    romfs_v, main_v = romfs_l.split(','), main_l.split(',')
+    romfs_v, main_v = path_list(romfs_l), path_list(main_l)
     if len(romfs_v) != len(main_v): red(f'{len(romfs_v)} RomFS and {len(main_v)} main: they must pair one to one')
     files, results, common = [], [], None
     for i, (romfs, mainnso) in enumerate(zip(romfs_v, main_v)):
