@@ -71,6 +71,17 @@ def check(game, prof_dir=None):
         add('info', 'unity', 'Unity %s' % v)
     elif 'Unreal' in F['markers'] or 'Unreal 4' in F['markers']:
         add('info', 'unreal', 'Unreal 引擎')
+    # nn::fs calls on an open file or directory that the host does not take over: the SDK's own code takes the host's fd / DIR * in the handle for its
+    # FileAccessor * and faults on the first call (Toasterball: ReadFile with read options and no bytes-read output, as it read its save)
+    try:
+        import nso_syms
+        hooks = nso_syms.host_hooks(str(DM / 'host'))
+        gap = sorted(s for s in imp if s.startswith('_ZN2nn2fs') and ('10FileHandle' in s or '15DirectoryHandle' in s) and s not in hooks)
+    except Exception:
+        gap = []
+    if gap:
+        items.append({'level': 'warn', 'key': 'fs_handle', 'names': gap,
+                      'text': '遊戲用到 %d 個殼還沒接手的檔案讀寫功能，用到時會閃退（多半是讀寫存檔時）：%s' % (len(gap), ', '.join(gap))})
     on = online_signs(F)
     if on:
         add('warn', 'online', '線上遊戲（%s）：殼會回答「沒有網路」，大部分遊戲會改玩本機模式，少數會一直等' % '、'.join(on))
