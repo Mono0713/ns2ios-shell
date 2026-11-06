@@ -197,6 +197,13 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Fix:** with the host allocator installed, a source outside the guest block that the host has mapped readable and writable is taken too (`dm_ue_heap_owns`, `hle_uemalloc.c`; `vm_region_64`, since malloc has no cheap lookup from an interior pointer). A refused map now logs its arguments.
 - **Found on:** [OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md), after the stricter source check of `MapMemory`; [Pikmin 4](../../dm/games/0100B7C00933A000/README.md) boots with the same host.
 
+### Thread stacks that do not fit the stack region
+
+- **Symptom:** `nn::diag` abort with Result 0 at `nnMain`, under `nn::os::CreateThread` → `ThreadManagerImplByHorizon::MapAliasStack`, with no `[RED]` line (the SDK never reaches `MapMemory`).
+- **Cause:** `CreateThread` moves each stack into the stack region at a random address with 64 KB guards (`StackGuardManager::MapAtRandomAddress` → `AllocateSpace`, which gives up after 0x200 tries and makes `MapAliasStack` abort). Godot makes 64 MB thread stacks; the fifth one found no room in the 256 MB stack region provisional profiles used to get.
+- **Fix:** provisional profiles get a 1 GB stack region (`STACK`, `dm/games/profile_guess.py`; Horizon's is 2 GB in a 39-bit address space), with the block grown by the same amount so the heap region keeps its size. A profile already made keeps its `mem_stack` until it is guessed again. Open: not yet run on the device.
+- **Found on:** Unrailed 2: Back on Track (010593A5182E4000, Godot, SDK 20; provisional profile, no note).
+
 ### Unreal 5.6's page allocator never gives address space back
 
 - **Symptom:** `nn::diag` abort from `main+0x11bc`, no message, in the first battle, with about 1 GB mapped (FINAL FANTASY RESONANCE with DRAGON QUEST VII Reimagined's 2 GB region).
