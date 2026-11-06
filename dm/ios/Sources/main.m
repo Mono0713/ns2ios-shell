@@ -88,10 +88,12 @@ static void game_log_keep(NSString *doc) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *dir = [doc stringByAppendingPathComponent:@"logs"];
     // names a shell build that hard-linked them left behind (st_nlink 2) keep log.txt / log.prev.txt unreadable: remove every such name first
-    for (NSString *n in [fm contentsOfDirectoryAtPath:dir error:nil]) {
-        NSString *f = [dir stringByAppendingPathComponent:n]; struct stat st;
-        if (!lstat(f.fileSystemRepresentation, &st) && S_ISREG(st.st_mode) && st.st_nlink > 1) [fm removeItemAtPath:f error:nil];
-    }
+    // (also in Documents/.Trash, where the Files app puts a name deleted by hand: the link stays until the trash is emptied)
+    for (NSString *dd in @[dir, [doc stringByAppendingPathComponent:@".Trash"]])
+        for (NSString *n in [fm contentsOfDirectoryAtPath:dd error:nil]) {
+            NSString *f = [dd stringByAppendingPathComponent:n]; struct stat st;
+            if ([n hasSuffix:@".txt"] && !lstat(f.fileSystemRepresentation, &st) && S_ISREG(st.st_mode) && st.st_nlink > 1) [fm removeItemAtPath:f error:nil];
+        }
     NSData *d = [NSData dataWithContentsOfFile:log options:NSDataReadingMappedIfSafe error:nil];
     if (!d.length) return;
     NSString *txt = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: [[NSString alloc] initWithData:d encoding:NSISOLatin1StringEncoding];
