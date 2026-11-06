@@ -50,6 +50,14 @@ class Cuts(unittest.TestCase):
         img = image(cs); got = sac.cuts(img, len(img))
         self.assertEqual([(o, ob, nb) for o, ob, nb, _ in got], [(o, ob, nb) for o, ob, nb, _ in cs])
 
+    def test_registered_orr_alignment(self):
+        n = 0
+        for bid, cs in SP.CUTS.items():
+            if not any(c[1] == 'ea030232' for c in cs): continue
+            img = image(cs); got = sac.cuts(img, len(img))
+            self.assertEqual([(o, ob, nb) for o, ob, nb, _ in got], [(o, ob, nb) for o, ob, nb, _ in cs], bid); n += 1
+        self.assertGreaterEqual(n, 3)
+
     def test_ambiguous_or_absent(self):
         self.assertEqual(sac.cuts(bytearray(0x10000), 0x10000), [])
         e = [(0x1000, '08fca752'), (0x1080, '09fca752'), (0x8000, '08fca752'), (0x8080, '09fca752')]
