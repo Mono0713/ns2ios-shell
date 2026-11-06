@@ -912,8 +912,12 @@ NVN(nvnCommandBufferSetRenderTargets, void, NVNcommandBuffer *c, int n, const NV
     for (int i = 0; i < n; i++) { r->color[i] = ct ? tex_snap(r, SNAP_OFF(p_set_rt), i, ct[i], (uint64_t)__builtin_return_address(0)) : NULL; copy_view(&r->cview[i], &r->has_cview[i], cv ? cv[i] : NULL); }
     r->depth = tex_snap(r, SNAP_OFF(p_set_rt), n, dt, (uint64_t)__builtin_return_address(0)); copy_view(&r->dview, &r->has_dview, dv);
 }
+static uint64_t g_frame;   // frames presented (defined with the window code below)
 NVN(nvnCommandBufferClearColor, void, NVNcommandBuffer *c, int index, const float *rgba, int mask) {
     p_clear_color *r = REC(c, OP_CLEAR_COLOR, p_clear_color); r->index = index; r->mask = mask; memcpy(r->rgba, rgba, 16);
+    // The first clears a game records, with their colour: a whole-screen flash of one colour at start (Ultimate Chicken Horse: magenta for its first, slow frames) is
+    // either a clear like these or a draw, and this line tells which
+    { static int n; if (n < 12 && g_frame < 30) { n++; LOG("[nvn] early clear: frame %llu target %d mask %#x colour %g, %g, %g, %g", (unsigned long long)g_frame, index, mask, rgba[0], rgba[1], rgba[2], rgba[3]); } }
 }
 // Clears of integer targets (Paper Mario: The Thousand-Year Door): recorded as floats, which both replay paths convert to the attachment's integer type (the load action's MTLClearColor,
 // clear_color_tri); exact up to 2^24 in magnitude, and 0xffffffff rounds to 2^32, which converts back to it
