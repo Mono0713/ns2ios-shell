@@ -838,12 +838,28 @@ def fill_mem_used(patched, mods, gdir, rows):
 def step_rewrite(exe_dir, mods, out, work, force=False):
     # patch_nso.py is pure Python (capstone + lz4): its stubs are hand-assembled machine code, not built at run time,
     # so no C compiler is needed here even though its comments mention clang.
+    # An sdk build no patch file names gets the address-space cuts every registered build takes, found by their
+    # instructions (dm/tools/sdk_auto_cuts.py: the 1 GB node area, pre-SDK 20 size-class alignment). patch_nso.py loads
+    # the file it writes from DM_GAMES_DIR. sdk.auto_cuts beside the output records what the sdk was rewritten with, so
+    # an sdk rewritten before (or with other cuts) is rewritten again on its own.
+    sys.path.insert(0, str(TOOLS))
+    import sdk_auto_cuts
+    games_dirs = [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d]
+    auto_dir, auto_line, auto_text = sdk_auto_cuts.prepare(str(exe_dir), mods, str(work / 'auto_patches'), str(DM.parent), games_dirs)
+    say(auto_line)
+    env = {'DM_GAMES_DIR': os.pathsep.join(games_dirs + [auto_dir])} if auto_dir else None
+    marker = out / 'sdk.auto_cuts'
+    old = marker.read_text(encoding='utf-8') if marker.is_file() else ''
+    todo = list(mods)
     if not force and all((out / (m + '.patched.bin')).is_file() and (out / (m + '.fixups.tsv')).is_file() for m in mods):
-        say('rewritten modules already there'); return
+        if 'sdk' not in mods or old == auto_text:
+            say('rewritten modules already there'); return
+        say('sdk auto cuts changed: rewriting sdk again'); todo = ['sdk']
     out.mkdir(parents=True, exist_ok=True)
-    for m in mods:
-        run([PY, TOOLS / 'patch_nso.py', exe_dir / m, out, m],
+    for m in todo:
+        run([PY, TOOLS / 'patch_nso.py', exe_dir / m, out, m], env=env,
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
+    if 'sdk' in todo: marker.write_text(auto_text, encoding='utf-8', newline='\n')
 
 
 def precheck(game, prof_dir, folder):

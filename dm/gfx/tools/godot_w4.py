@@ -5,10 +5,11 @@ Godot pack, nx.pck (GDPC format 2), whose 1,138 .nvn.w4_shader files are Godot's
 stage's code in it compressed (Godot's Compression, zstd) or stored. Inside the code are GLSLC outputs (magic 0x19866891, the whole output's
 length at +0x44), which shader_split.py reads like the outputs captured from glslcCompile (hle_glslc.c).
 
-This writes every whole GLSLC output found to <out>/<FNV-1a 64 of the output>.glslc, the names hle_glslc.c gives captured ones, so the split
-takes them from the same folder (DM_GLSLC_CAPTURE / the version folder's glslc_capture):
+shader_split.py reads them straight from the RomFS's packs (outputs()), as /<pack>#<container> sources. To look at them on their own, this writes
+every whole GLSLC output found to <out>/<FNV-1a 64 of the output>.glslc, the names hle_glslc.c gives captured ones:
 
     python godot_w4.py <RomFS folder or .pck file> <out folder>         prints what it found per container kind
+    python godot_w4.py <RomFS folder or .pck file> --keys k1,k2,...     the shader keys (dm_ctl_sha16) shader_split.py would give them, and which of k1,k2 are among them
 
 zstd needs Python 3.14's compression.zstd or the zstandard / pyzstd package; without one only stored code is found (it says so).
 """
@@ -107,42 +108,73 @@ def fnv(b):
     return h
 
 
+def packs(src):
+    """The Godot packs under a RomFS folder (or the one .pck file named)."""
+    if os.path.isfile(src): return [src]
+    return sorted(os.path.join(r, f) for r, _, fs in os.walk(src) for f in fs if f.lower().endswith('.pck'))
+
+
+def outputs(pk, unz, stats=None):
+    """(container path, decompression kind, GLSLC output) of every whole output in a pack's .w4_shader containers, each distinct output once."""
+    seen = set()
+    try: files = pck_files(pk)
+    except (ValueError, struct.error) as e:
+        print(f'godot_w4: {e}'); return
+    with open(pk, 'rb') as f:
+        for name, o, size in files:
+            if not name.endswith('.w4_shader'): continue
+            if stats is not None: stats['containers'] += 1
+            f.seek(o); d = f.read(size); got = 0
+            for kind, b in blobs(d, unz):
+                for _, g in glslc_outputs(b):
+                    h = fnv(g)
+                    if h in seen: continue
+                    seen.add(h); got += 1
+                    yield name, kind, g
+            if stats is None: continue
+            if got: stats['with_outputs'] += 1
+            else:
+                stats['unread'] += 1
+                if stats.get('first_unread') is None: stats['first_unread'] = (name, d[:64])
+
+
 def extract(src, out):
-    paks = [src] if os.path.isfile(src) else [os.path.join(r, f) for r, _, fs in os.walk(src) for f in fs if f.lower().endswith('.pck')]
+    paks = packs(src)
     unz = _zstd()
     if not unz: print('godot_w4: no zstd module (Python 3.14, or pip install zstandard): only code stored uncompressed is found')
     os.makedirs(out, exist_ok=True)
-    seen, stats = set(), {'containers': 0, 'with_outputs': 0, 'stored': 0, 'zstd': 0, 'zlib': 0, 'unread': 0}
-    first_unread = None
+    seen, stats = set(), {'containers': 0, 'with_outputs': 0, 'stored': 0, 'zstd': 0, 'zlib': 0, 'unread': 0, 'first_unread': None}
     for pk in paks:
-        try: files = pck_files(pk)
-        except (ValueError, struct.error) as e: print(f'godot_w4: {e}'); continue
-        with open(pk, 'rb') as f:
-            for name, o, size in files:
-                if not name.endswith('.w4_shader'): continue
-                stats['containers'] += 1
-                f.seek(o); d = f.read(size); got = 0
-                for kind, b in blobs(d, unz):
-                    for _, g in glslc_outputs(b):
-                        h = fnv(g)
-                        if h in seen: continue
-                        seen.add(h); got += 1; stats[kind] += 1
-                        p = os.path.join(out, f'{h:016x}.glslc')
-                        if not os.path.exists(p):
-                            with open(p + '.tmp', 'wb') as w: w.write(g)
-                            os.replace(p + '.tmp', p)
-                if got: stats['with_outputs'] += 1
-                else:
-                    stats['unread'] += 1
-                    if first_unread is None: first_unread = (name, d[:64])
+        for name, kind, g in outputs(pk, unz, stats):
+            h = fnv(g)
+            if h in seen: continue
+            seen.add(h); stats[kind] += 1
+            p = os.path.join(out, f'{h:016x}.glslc')
+            if not os.path.exists(p):
+                with open(p + '.tmp', 'wb') as w: w.write(g)
+                os.replace(p + '.tmp', p)
     print(f'godot_w4: {stats["containers"]} shader containers in {len(paks)} pack(s); {stats["with_outputs"]} gave GLSLC outputs: '
           f'{len(seen)} distinct ({stats["stored"]} stored, {stats["zstd"]} zstd, {stats["zlib"]} zlib) → {out}')
     if stats['unread']:
-        n, head = first_unread
+        n, head = stats['first_unread']
         print(f'godot_w4: [RED] {stats["unread"]} containers gave no GLSLC output; the first, {n}, starts {head.hex()}')
     return len(seen)
 
 
+def keys(src, want):
+    os.environ.setdefault('DM_GAME', '0100000000010000')   # shader_split.py loads a profile at import; only its GLSLC reader is used here
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import shader_split
+    unz = _zstd(); got = {}
+    for pk in packs(src):
+        for name, _, g in outputs(pk, unz):
+            for w, st, c, k in shader_split.glslc_shaders(g, name, need=False): got.setdefault(shader_split.skey(c, k), (st, name))
+    print(f'godot_w4: {len(got)} shader keys')
+    for k in want: print(f'  {k}: ' + (f'found, stage {got[k][0]}, {got[k][1]}' if k in got else 'NOT found'))
+    return all(k in got for k in want)
+
+
 if __name__ == '__main__':
+    if len(sys.argv) == 4 and sys.argv[2] == '--keys': sys.exit(0 if keys(sys.argv[1], [k for k in sys.argv[3].split(',') if k]) else 1)
     if len(sys.argv) != 3: sys.exit(__doc__)
     sys.exit(0 if extract(sys.argv[1], sys.argv[2]) else 1)
