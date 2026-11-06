@@ -142,7 +142,7 @@ See [04](04-graphics.md) section 7. Notes: pass dumps are large and may contain 
 
 ## On-device diagnostics (iOS)
 
-The phone runs an unsigned IPA the user sideloads; nothing is attached to a debugger. The loop is: build an IPA with switches, the user plays and sends `Documents/log.txt` (the previous launch is `log.prev.txt`), read it, repeat.
+The phone runs an unsigned IPA the user sideloads; nothing is attached to a debugger. The loop is: build an IPA with switches, the user plays and sends `Documents/log.txt` (the previous launch is `log.prev.txt`; in a package of several games each game also keeps its own last two runs in `Documents/logs/<title ID>.txt` and `<title ID>.prev.txt`), read it, repeat.
 
 - **Switches**: `DM_ENV_FILE=<file> dm/ios/tools/build_ipa.sh` bakes `KEY=VALUE` lines into the app (`dm/env.txt`); `Documents/env.txt` overrides them without a rebuild. Every applied switch is logged at boot (`boot: env KEY=VALUE (source file)`). The app's working directory is `Documents`, so relative output paths (`DM_NVN_SHOT=3600:shot_%d.png`, `DM_NVN_TEXDUMP`) land where the Files app can reach them.
 - **Which build ran**: the first lines name the modules (`main: … patch_off …`), the shader map size (`shader map N entries`) and, for builds that have it, the build-ID gate line. Compare them with the build you sent before reading further; users sometimes send an old log. The save path (`fs mount save:`) shows the data folder, which changes when a sideloading tool gives a reinstall a new one.
