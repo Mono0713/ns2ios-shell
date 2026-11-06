@@ -71,6 +71,9 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             else if ([k isEqualToString:@"samp_ubo"]) { r->kind = NVN_RB_SAMPU; r->off = (uint16_t)[b[@"off"] intValue]; o->bindless = 1;
                 if (n) { if (n > 32) FAIL("B binding %s: array of %d", nm.UTF8String, n); r->n = (uint8_t)n; } }
             else if ([k isEqualToString:@"samp_id"]) r->kind = NVN_RB_SAMPI;
+            // The pools, indexed by the handle's IDs (nvn_refl.h TEXP / SAMPP): which texture is read is known only when the GPU runs the draw
+            else if ([k isEqualToString:@"tex_pool"]) { r->kind = NVN_RB_TEXP; dummy_kind(b[@"elem"], &r->dtt, &r->dpf); o->bindless = o->pool = 1; }
+            else if ([k isEqualToString:@"samp_pool"]) { r->kind = NVN_RB_SAMPP; o->bindless = o->pool = 1; }
             else if ([k isEqualToString:@"tex_c2a"] || [k isEqualToString:@"samp_c2a"]) {   // an array of the driver table's handles (nvn_refl.h TEXA / SAMPA)
                 if (n < 1 || n > 32) FAIL("B binding %s: array of %d", nm.UTF8String, n);
                 r->kind = [k isEqualToString:@"tex_c2a"] ? NVN_RB_TEXA : NVN_RB_SAMPA; r->n = (uint8_t)n; r->off = (uint16_t)[b[@"off"] intValue];
