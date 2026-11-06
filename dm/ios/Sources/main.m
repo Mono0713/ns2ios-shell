@@ -5,7 +5,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <errno.h>
+#include <sys/stat.h>
 #include <os/proc.h>          // os_proc_available_memory: the line at boot saying whether the memory entitlement took effect
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
@@ -80,34 +80,40 @@ static NSString *romfs_locate(void) {
     return nil;
 }
 
+// Each game's own last two runs, in Documents/logs/<title ID>.txt and <title ID>.prev.txt: log.txt holds only the latest launch of the app, so in a package of
+// several games a crash is lost as soon as another game (or only the picker) is opened twice. At launch, before log.txt is rotated, the run it holds is copied
+// under the game it ran (the last "boot: game <id>" line; none = only the picker). A copy, not a second name: the device's file service (AFC, what Switch Pad
+// reads Documents through) refuses to open a file with more than one link, so a hard link made log.txt itself unreadable.
+static void game_log_keep(NSString *doc) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *dir = [doc stringByAppendingPathComponent:@"logs"];
+    // names a shell build that hard-linked them left behind (st_nlink 2) keep log.txt / log.prev.txt unreadable: remove every such name first
+    for (NSString *n in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        NSString *f = [dir stringByAppendingPathComponent:n]; struct stat st;
+        if (!lstat(f.fileSystemRepresentation, &st) && S_ISREG(st.st_mode) && st.st_nlink > 1) [fm removeItemAtPath:f error:nil];
+    }
+    NSData *d = [NSData dataWithContentsOfFile:log options:NSDataReadingMappedIfSafe error:nil];
+    if (!d.length) return;
+    NSString *txt = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: [[NSString alloc] initWithData:d encoding:NSISOLatin1StringEncoding];
+    // the last game chosen in that run ("boot: game language ..." follows it, so only a 16-digit title ID counts)
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"^boot: game ([0-9A-Fa-f]{16}) " options:NSRegularExpressionAnchorsMatchLines error:nil];
+    NSTextCheckingResult *m = [re matchesInString:txt options:0 range:NSMakeRange(0, txt.length)].lastObject;
+    if (!m) return;
+    NSString *gid = [txt substringWithRange:[m rangeAtIndex:1]];
+    NSString *cur = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".txt"]], *prev = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".prev.txt"]];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
+    [d writeToFile:cur atomically:YES];
+}
+
 // Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
 static void boot_log(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
+    game_log_keep(doc);
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
     if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
-}
-
-// Each game's own last two runs, in Documents/logs/<title ID>.txt and <title ID>.prev.txt: log.txt holds only the latest launch of the app, so in a package of
-// several games a crash is lost as soon as another game (or only the picker) is opened twice. The game's file is a second name (hard link) of log.txt, so it holds
-// everything log.txt gets from the picker on, up to the last line written before a crash, with nothing copied. Undone if the launcher goes back to the picker.
-static NSString *g_game_log;
-static void game_log_rotate(NSString *gid, BOOL back) {
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-    NSString *dir = [doc stringByAppendingPathComponent:@"logs"];
-    NSString *cur = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".txt"]], *prev = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".prev.txt"]];
-    if (back) {   // no run of this game happened: put its last run back
-        if (g_game_log) { [fm removeItemAtPath:cur error:nil]; [fm moveItemAtPath:prev toPath:cur error:nil]; g_game_log = nil; }
-        return;
-    }
-    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
-    NSString *log = [doc stringByAppendingPathComponent:@"log.txt"];
-    if (link(log.fileSystemRepresentation, cur.fileSystemRepresentation)) { fprintf(stderr, "boot: [RED] this game's log %s: link failed (errno %d), only log.txt keeps this run\n", cur.lastPathComponent.UTF8String, errno); return; }
-    g_game_log = cur;
-    fprintf(stderr, "boot: this run is also kept in Documents/logs/%s (and the one before in %s)\n", cur.lastPathComponent.UTF8String, prev.lastPathComponent.UTF8String);
 }
 
 // Boot prerequisites (before UIApplicationMain, or once the picker has chosen a game): directories / environment variables -- the host's early load reads these
@@ -224,7 +230,6 @@ static void pads_start(void) { static int once; if (!once++) phone_pads_start();
 static void choose(NSString *gid) {
     NSString *games = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"];
     g_game_id = gid; g_game_root = [games stringByAppendingPathComponent:gid]; g_pick = 0; g_env_set = [NSMutableArray array];
-    game_log_rotate(gid, NO);
     setenv("DM_SHELL_GAME", gid.UTF8String, 1);   // the launcher and the touch controls keep their settings per game (Launcher.swift, DmGamepad.m)
     setenv("DM_SHELL_GAME_ROOT", g_game_root.fileSystemRepresentation, 1);
     NSString *fw = [NSString stringWithFormat:@"Frameworks/Guest_%@.framework/Guest", gid];
@@ -240,7 +245,6 @@ int shell_game_unchoose(void) {
     for (NSString *k in g_env_set) unsetenv(k.UTF8String);
     for (NSString *k in @[@"DM_SHELL_GAME", @"DM_SHELL_GAME_ROOT", @"DM_GUEST", @"DM_ENV_FILE_KEYS"]) unsetenv(k.UTF8String);
     fprintf(stderr, "boot: back to the game picker from %s\n", g_game_id.UTF8String);
-    game_log_rotate(g_game_id, YES);
     g_env_set = nil; g_game_id = nil; g_game_root = NSBundle.mainBundle.resourcePath; g_boot_ok = 0; g_pick = 1;
     return 1;
 }
