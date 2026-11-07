@@ -1632,6 +1632,7 @@ def unity_shaders(d, label, out, trees):
                 print(f'[RED] {label}{":" + node if node else ""}: serialized file format {fmt}, which unityfs.py does not read; its shaders are left out', flush=True)
             continue
         try: objs = list(unityfs.serialized_objects(x, COMMON, {unityfs.CLASS_SHADER}, trees))
+        except unityfs.NoTree: raise   # a ValueError too: the first pass defers the file, the second reads it with the layouts by version
         except (ValueError, struct.error, IndexError) as e:
             print(f'[RED] {label}{":" + node if node else ""}: the serialized file cannot be read ({e}); its shaders are left out', flush=True); continue
         for cid, pid, o in objs:
