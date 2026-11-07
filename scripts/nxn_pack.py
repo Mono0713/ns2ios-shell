@@ -443,8 +443,9 @@ def scan_nsps(folder):
             if kind == 'update' and ver in ('', 'v0'):
                 # An update is never version 0. Without a name or CNMT version it would collide with the base's "v0",
                 # the pair would look like one file and the base would be packed as if no update existed -- which is what
-                # happened to Balatro's update NSP. "v?" sorts above v0, so the update is still the newest to pack.
-                ver = 'v?'
+                # happened to Balatro's update NSP. "vupd" is still taken as the update to pack when it is the only one; no "?",
+                # which Windows refuses in the log and folder names built from the version (CloverPit's [1.4.2] update).
+                ver = 'vupd'
         else:
             # an XCI, or an NSP without the metadata XML: fall back to the name, then to what an earlier run recorded, and
             # to the title ID's low bits for the kind
@@ -470,7 +471,7 @@ def scan_nsps(folder):
         a = apps.setdefault(key, {'base': None, 'updates': {}, 'dlc': [], 'all': []})
         a['all'].append((kind, ver, p))
         if kind == 'base': a['base'] = p
-        elif kind == 'update': a['updates'][ver or 'v?'] = p
+        elif kind == 'update': a['updates'][ver or 'vupd'] = p
         else: a['dlc'].append(p); a.setdefault('dlc_ids', []).append((int(tid, 16), ver, p))
     return apps
 
