@@ -1135,7 +1135,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
         if not src.is_file(): src = work / 'shader' / 'tables' / n
         if src.is_file(): shutil.copyfile(src, A / 'dm' / n)
 
-    step_launcher(tid, patched, game, A, work)
+    # The launcher's NVN-only rows (Metal 4 pipelines, pipeline prebuild, encode thread, frame buffering: settings.tsv
+    # gfxapi:nvn) are shown only when settings.py is told the game's graphics API, which upstream's build_ipa.sh sets as
+    # GFXAPI. Without it those rows were missing from every package, so the Metal 4 pipelines switch could not be turned on.
+    gfx = 'nvn' if msl_dir.is_dir() and any(msl_dir.glob('*_b.metallib')) else ''
+    step_launcher(tid, patched, game, A, work, gfx)
 
     # The shell was built from the placeholder profile, so every value compiled into its host is the placeholder's. The
     # game's own values are written into dm/env.txt here: main.m turns that into environment variables before the host
@@ -1184,7 +1188,7 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     return A
 
 
-def step_launcher(tid, patched, game, A, work):
+def step_launcher(tid, patched, game, A, work, gfxapi=''):
     """The settings screen that upstream put in front of the game (Launcher.swift) is drawn from dm/launcher.json, which
     dm/games/settings.py writes: the rows of dm/games/settings.tsv whose condition holds for this game, with its defaults.
 
@@ -1198,8 +1202,10 @@ def step_launcher(tid, patched, game, A, work):
         warn('no control.nacp beside the RomFS: no dm/launcher.json, so the game starts without the settings screen')
         return
     out = A / 'dm' / 'launcher.json'
+    env = dict(os.environ, PYTHONUTF8='1')
+    if gfxapi: env['GFXAPI'] = gfxapi
     r = subprocess.run([str(PY), str(s), tid, str(patched), str(nacp), str(out)],
-                       capture_output=True, text=True, env=dict(os.environ, PYTHONUTF8='1'))
+                       capture_output=True, text=True, env=env)
     log = work / 'logs' / 'launcher.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text((r.stdout or '') + (r.stderr or ''), encoding='utf-8', errors='replace')
