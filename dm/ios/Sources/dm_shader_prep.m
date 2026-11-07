@@ -127,15 +127,53 @@ static int prep_show(NSArray<NSString *> *src, NSString *mk, void (^done)(void))
     });
     return 1;
 }
+// What the last full scan found, so a later start does not open every file again: on an iPad the scan of a Unity game's tens of thousands
+// of .metallib files took many seconds at every start, behind "Checking shaders", even when everything was compiled long ago.
+// The key is cheap to take and changes whenever the package's shaders can have changed: the shader folders' entry counts and modification
+// times (a file added, removed or replaced through a rename) and the package stamp inputs.tsv (size, time and content). The cached answer is
+// the marker the full scan computed ("-" when the package has no source-form shaders); it counts only while that marker still exists, so the
+// system dropping its shader cache (and the marker with it) brings back the full scan and the compile. DM_SHADER_SCAN_CACHE=0 always scans
+static NSString *scan_key(void) {
+    NSFileManager *fm = NSFileManager.defaultManager; NSMutableString *k = [NSMutableString stringWithString:msldir()];
+    NSString *lib = libdir();
+    for (NSString *d in @[msldir(), lib ?: @"-", [msldir() stringByAppendingPathComponent:@"gl/src"], [msldir() stringByAppendingPathComponent:@"vk/src"]]) {
+        NSDictionary *a = [fm attributesOfItemAtPath:d error:nil];
+        NSUInteger n = a ? [fm contentsOfDirectoryAtPath:d error:nil].count : 0;
+        [k appendFormat:@"|%@:%lu:%.3f", d.lastPathComponent, (unsigned long)n, a ? a.fileModificationDate.timeIntervalSince1970 : 0.0];
+    }
+    for (NSString *st in @[[(lib ?: msldir()) stringByAppendingPathComponent:@"inputs.tsv"], [msldir() stringByAppendingPathComponent:@"gl/inputs.tsv"]]) {
+        NSDictionary *a = [fm attributesOfItemAtPath:st error:nil]; if (!a) continue;
+        NSString *txt = [NSString stringWithContentsOfFile:st encoding:NSUTF8StringEncoding error:nil] ?: @"";
+        [k appendFormat:@"|%@:%llu:%.3f:%lx", st.lastPathComponent, a.fileSize, a.fileModificationDate.timeIntervalSince1970, (unsigned long)txt.hash];
+    }
+    [k appendFormat:@"|os %ld.%ld", (long)NSProcessInfo.processInfo.operatingSystemVersion.majorVersion, (long)NSProcessInfo.processInfo.operatingSystemVersion.minorVersion];
+    return k;
+}
+static NSString *scan_cache_path(void) {
+    NSArray *c = msldir().pathComponents; NSString *tag = [[c subarrayWithRange:NSMakeRange(c.count > 3 ? c.count - 3 : 0, MIN(c.count, 3u))] componentsJoinedByString:@"_"];
+    tag = [[tag componentsSeparatedByCharactersInSet:[NSCharacterSet alphanumericCharacterSet].invertedSet] componentsJoinedByString:@"_"];
+    return [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:[NSString stringWithFormat:@"dm_shader_scan_%@.txt", tag]];
+}
+static int scan_cache_on(void) { const char *e = getenv("DM_SHADER_SCAN_CACHE"); return !(e && *e == '0'); }
 // Finding the source-form shaders opens every .metallib of the package (tens of thousands for a Unity game) and the marker stats each one: on the main
 // thread that held the screen black for many seconds after Play, before the loading screen could draw. The scan runs in the background; then, on the main
 // thread, either the progress page takes over or done runs at once (nothing to compile, or done last time)
 void dm_shader_prep_start(void (^done)(void)) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+        NSString *key = scan_cache_on() ? scan_key() : nil, *cache = key ? scan_cache_path() : nil;
+        if (cache) {   // the same package as at the last full scan, and nothing left to compile: start at once
+            NSArray<NSString *> *ln = [[NSString stringWithContentsOfFile:cache encoding:NSUTF8StringEncoding error:nil] componentsSeparatedByString:@"\n"];
+            if (ln.count >= 2 && [ln[0] isEqualToString:key] && ([ln[1] isEqualToString:@"-"] || [NSFileManager.defaultManager fileExistsAtPath:ln[1]])) {
+                pl([NSString stringWithFormat:@"shader preparation: unchanged since the last scan (%@), nothing to do, checked in %.2f s", [ln[1] isEqualToString:@"-"] ? @"no source-form shaders" : @"all compiled", CFAbsoluteTimeGetCurrent() - t0]);
+                dispatch_async(dispatch_get_main_queue(), ^{ done(); });
+                return;
+            }
+        }
         NSArray<NSString *> *src = shader_sources();   // NVN 的版本目录；GL 包没有，源码在 msl/gl/src | the chain version's directory; a GL package has none, its sources are in msl/gl/src
         NSString *mk = src.count ? marker(src, libdir()) : nil;
         BOOL need = mk && ![NSFileManager.defaultManager fileExistsAtPath:mk];
+        if (cache) [[NSString stringWithFormat:@"%@\n%@\n", key, mk ?: @"-"] writeToFile:cache atomically:YES encoding:NSUTF8StringEncoding error:nil];   // read next start; the marker itself appears once the compile succeeds
         pl([NSString stringWithFormat:@"shader preparation: %lu source-form shaders, %@, checked in %.1f s", (unsigned long)src.count, need ? @"to compile" : @"nothing to do", CFAbsoluteTimeGetCurrent() - t0]);
         dispatch_async(dispatch_get_main_queue(), ^{ if (!need || !prep_show(src, mk, done)) done(); });
     });

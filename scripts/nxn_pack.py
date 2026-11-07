@@ -947,8 +947,18 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # Completeness is decided by the per-shader results dmsh_build.py writes, not by "some file is there": a run that was
     # interrupted leaves libraries behind, and trusting them would ship a package that only fails on the phone.
     cache = work / 'shader' / 'cache'
+    nometal = GFX / 'nometal_run.py'
+    # Which compiler made the libraries: Apple's Metal Developer Tools for Windows compile them for real (the phone loads
+    # them at once), without them they hold source. Installing or removing the tools changes the chain version, so a
+    # rebuild goes to a new b-<version> folder; the libraries already there count only when they were made the same way.
+    mfile = work / 'shader' / 'compiler.txt'
+    mode = subprocess.run([PY, nometal, '--mode'], capture_output=True, text=True).stdout.strip() if nometal.is_file() else ''
+    if mode.startswith('windows-metal'): say('compiling shaders on this computer with Apple\'s Metal Developer Tools for Windows')
     def done():
-        marks = sorted(cache.glob('b-*/_b_build.json'))
+        try: same = mfile.read_text(encoding='utf-8').strip() == mode
+        except OSError: same = mode == 'source' or not mode
+        if not same: return False
+        marks = sorted(cache.glob('b-*/_b_build.json'), key=lambda p: p.stat().st_mtime)
         if not marks: return False
         try: res = json.load(open(marks[-1], encoding='utf-8'))
         except Exception: return False
@@ -960,7 +970,6 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         say('shader libraries already there'); return
     need_tool('spirv-cross', 'translate SPIR-V to Metal Shading Language',
               'install Vulkan SDK 1.4.357.0 (its Bin/ holds spirv-cross.exe) or build SPIRV-Cross at tag vulkan-sdk-1.4.357.0')
-    nometal = GFX / 'nometal_run.py'
     if not nometal.is_file():
         die('dm/gfx/tools/nometal_run.py is missing (it is what makes this work without Apple\'s compiler)')
     # dmsh_build.py refuses to start when the toolchain does not match dmsh_chain.lock, which on a machine using the
@@ -985,6 +994,7 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
     n = len(list(iosout.glob('b-*/*_b.metallib'))) if iosout.is_dir() else 0
     if not n: die('no shader libraries were produced (see %s)' % (work / 'logs' / 'shaders.log'))
+    mfile.write_text(mode + '\n', encoding='utf-8')
     say('%d shader libraries' % n)
 
 
@@ -1135,7 +1145,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
         if not src.is_file(): src = work / 'shader' / 'tables' / n
         if src.is_file(): shutil.copyfile(src, A / 'dm' / n)
 
-    step_launcher(tid, patched, game, A, work)
+    # The launcher's NVN-only rows (Metal 4 pipelines, pipeline prebuild, encode thread, frame buffering: settings.tsv
+    # gfxapi:nvn) are shown only when settings.py is told the game's graphics API, which upstream's build_ipa.sh sets as
+    # GFXAPI. Without it those rows were missing from every package, so the Metal 4 pipelines switch could not be turned on.
+    gfx = 'nvn' if msl_dir.is_dir() and any(msl_dir.glob('*_b.metallib')) else ''
+    step_launcher(tid, patched, game, A, work, gfx)
 
     # The shell was built from the placeholder profile, so every value compiled into its host is the placeholder's. The
     # game's own values are written into dm/env.txt here: main.m turns that into environment variables before the host
@@ -1184,7 +1198,7 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     return A
 
 
-def step_launcher(tid, patched, game, A, work):
+def step_launcher(tid, patched, game, A, work, gfxapi=''):
     """The settings screen that upstream put in front of the game (Launcher.swift) is drawn from dm/launcher.json, which
     dm/games/settings.py writes: the rows of dm/games/settings.tsv whose condition holds for this game, with its defaults.
 
@@ -1198,8 +1212,10 @@ def step_launcher(tid, patched, game, A, work):
         warn('no control.nacp beside the RomFS: no dm/launcher.json, so the game starts without the settings screen')
         return
     out = A / 'dm' / 'launcher.json'
+    env = dict(os.environ, PYTHONUTF8='1')
+    if gfxapi: env['GFXAPI'] = gfxapi
     r = subprocess.run([str(PY), str(s), tid, str(patched), str(nacp), str(out)],
-                       capture_output=True, text=True, env=dict(os.environ, PYTHONUTF8='1'))
+                       capture_output=True, text=True, env=env)
     log = work / 'logs' / 'launcher.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text((r.stdout or '') + (r.stderr or ''), encoding='utf-8', errors='replace')
@@ -1549,7 +1565,8 @@ def main():
         xlate = next((c for c in cands if c.is_file()), None)
         if not xlate: die('no shader translator: pass --tools <folder> with dmsh_xlate, or build it with dotnet publish')
         step_translate(pkg_dir, work, xlate, iosout, tid, a.force)
-        libs = sorted(p for p in iosout.glob('b-*') if p.is_dir()) if iosout.is_dir() else []
+        # newest first: after the compiler changes, the old b-<version> folder is still there beside the new one
+        libs = sorted((p for p in iosout.glob('b-*') if p.is_dir()), key=lambda p: p.stat().st_mtime) if iosout.is_dir() else []
         if not libs: die('no shader library directory under %s' % iosout)
         msl_out = libs[-1]
         say('shader libraries: %s (%d)' % (msl_out.name, len(list(msl_out.glob('*_b.metallib')))))
