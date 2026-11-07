@@ -456,19 +456,21 @@ def _tables(d, common, want, trees):
     """serialized file → (little-endian, data offset, [(class ID, type hash, type tree or None, or [candidate trees] with the file's Unity version when the tree is a guess by version)], [(path ID, start, size, type index)]):
     its type table and object table"""
     msz, fsz, ver, doff = struct.unpack_from('>IIII', d, 0)
-    if not 17 <= ver <= 22: raise ValueError(f'serialized file format {ver} is not supported')
+    if not 17 <= ver <= MAX_FORMAT: raise ValueError(f'serialized file format {ver} is not supported')
     p = 16; le = d[p] == 0; p += 4
     if ver >= 22: msz, fsz, doff, _ = struct.unpack_from('>Iqqq', d, p); p += 28
     r = Reader(d, le); r.p = p
     uver, r.p = _cstr(d, r.p); r.u('i'); tt = r.u('?')
     line = '.'.join(uver.split('.')[:2])
-    tlist = []
-    for _ in range(r.u('i')):
+    tlist = []; ntypes = r.u('i')
+    for _ in range(ntypes):
         cid = r.u('i'); r.u('B'); r.u('h')
         if cid == 114: r.p += 16   # script ID
         h = d[r.p:r.p + 16]; r.p += 16
         root = guess = None
-        if tt:
+        if tt and ver >= 23:   # Unity 6000.5: a second 16-byte hash, then a size-prefixed block that starts "mhtt", not the node list: the tree is taken by hash or by version below
+            r.p += 16; r.p = _skip_mhtt(d, r, ver, le, len(tlist) == ntypes - 1, ntypes, len(d) - doff)
+        elif tt:
             nn, sb = r.u('i'), r.u('i'); raw = [r.u('HBBIIiiiQ' if ver >= 19 else 'HBBIIiii') for _ in range(nn)]   # refTypeHash from format 19
             buf = d[r.p:r.p + sb]; r.p += sb
             def st(o):
@@ -483,7 +485,7 @@ def _tables(d, common, want, trees):
                 stack.append(nd)
             if ver >= 21: n = r.u('i'); r.p += 4 * n   # type dependencies
             if trees is not None and (want is None or cid in want): trees.setdefault((cid, h), root)
-        elif trees is not None:
+        if root is None and trees is not None:
             root = trees.get((cid, h))
             if root is None:
                 cand = [trees[version_key(cid, line)]] if version_key(cid, line) in trees else []
@@ -496,11 +498,48 @@ def _tables(d, common, want, trees):
         objs.append((pid, start, size, ti))
     return le, doff, tlist, objs
 
+def _skip_mhtt(d, r, ver, le, last, ntypes, room):
+    """format 23 with type trees: the position past one type's "mhtt" block. Its size word may or may not count itself, and type dependencies (format 21 on) may
+    follow it, so each reading is tried and the one after which the next type's header (or the object count) reads as one is kept"""
+    e = '<' if le else '>'
+    sz = struct.unpack_from(e + 'I', d, r.p)[0]; body = r.p + 4
+    if d[body:body + 4] != b'mhtt': raise ValueError(f'format {ver} type entry at {r.p:#x}: no "mhtt" block after the hashes')
+    def plausible(q):
+        if q + 8 > len(d): return False
+        if not last:
+            cid, stripped = struct.unpack_from(e + 'iB', d, q)
+            return 0 <= cid < 1 << 24 and stripped in (0, 1)
+        n = struct.unpack_from(e + 'i', d, q)[0]; q = (q + 4 + 3) & ~3   # the object count, then the first object (path ID, start, size, type index)
+        if not 0 < n <= (len(d) - q) // 24 or q + 24 > len(d): return n == 0
+        _pid, start, size, ti = struct.unpack_from(e + 'qqIi', d, q)
+        return 0 <= ti < ntypes and 0 <= start and start + size <= room
+    for end in (body + sz, body + sz - 4, r.p + sz):
+        for q in (end, (end + 3) & ~3):
+            for deps in (False, True):
+                p = q
+                if deps:
+                    if p + 4 > len(d): continue
+                    n = struct.unpack_from(e + 'i', d, p)[0]
+                    if not 0 <= n < 4096: continue
+                    p += 4 + 4 * n
+                if plausible(p): return p
+    raise ValueError(f'format {ver} type entry at {r.p:#x}: the "mhtt" block of {sz} bytes is not followed by another type')
+
+MAX_FORMAT = 23   # format 23 (Unity 6000.5) keeps format 22's header and object table; its type trees are an "mhtt" block _skip_mhtt steps over
+
+def newer_format(d):
+    """the format of a serialized file newer than MAX_FORMAT (format 22's header: the sizes +0x14), else 0, so that it is reported instead of skipped"""
+    if len(d) < 48: return 0
+    ver = struct.unpack_from('>I', d, 8)[0]
+    if not MAX_FORMAT < ver < 64 or d[16] not in (0, 1): return 0
+    msz, fsz, doff = struct.unpack_from('>Iqq', d, 20)
+    return ver if fsz == len(d) and 0 < msz < fsz and doff <= fsz else 0
+
 def is_serialized(d):
-    """does it look like a serialized file (big-endian header: format 17..22; from 22 the sizes follow +0x14)"""
+    """does it look like a serialized file (big-endian header: format 17..23; from 22 the sizes follow +0x14)"""
     if len(d) < 48: return False
     ver = struct.unpack_from('>I', d, 8)[0]
-    if not 17 <= ver <= 22 or d[16] not in (0, 1): return False
+    if not 17 <= ver <= MAX_FORMAT or d[16] not in (0, 1): return False
     if ver >= 22: msz, fsz, doff = struct.unpack_from('>Iqq', d, 20)
     else: msz, fsz, _, doff = struct.unpack_from('>IIII', d, 0)
     return fsz == len(d) and 0 < msz < fsz and doff <= fsz

@@ -1626,8 +1626,15 @@ def unity_shaders(d, label, out, trees):
     if COMMON is None: red(f'{label}: a Unity asset, but main has no Unity common string table')
     sers = unityfs.bundle_files(d) if d[:8] == b'UnityFS\0' else [('', d)]
     for node, x in sers:
-        if not unityfs.is_serialized(x): continue
-        for cid, pid, o in unityfs.serialized_objects(x, COMMON, {unityfs.CLASS_SHADER}, trees):
+        if not unityfs.is_serialized(x):
+            fmt = unityfs.newer_format(x)
+            if fmt:   # a newer serialized format (Super Bunny Man, Unity 6000.5, format 23, was skipped without a word and drew a black screen)
+                print(f'[RED] {label}{":" + node if node else ""}: serialized file format {fmt}, which unityfs.py does not read; its shaders are left out', flush=True)
+            continue
+        try: objs = list(unityfs.serialized_objects(x, COMMON, {unityfs.CLASS_SHADER}, trees))
+        except (ValueError, struct.error, IndexError) as e:
+            print(f'[RED] {label}{":" + node if node else ""}: the serialized file cannot be read ({e}); its shaders are left out', flush=True); continue
+        for cid, pid, o in objs:
             name = o['m_ParsedForm']['m_Name'] if 'm_ParsedForm' in o else o.get('m_Name', '?')
             stages = unity_stages(o)
             for plat, k, sp in unityfs.shader_programs(o, unity_code_blobs(o)):
@@ -1796,7 +1803,7 @@ def scan_file(args):
             d = head_d if len(head_d) >= struct.unpack_from('<I', d, 10)[0] else xnb_decompress(d)
         else:
             d = xnb_decompress(d)
-    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and __import__('unityfs').is_serialized(d)):
+    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and (__import__('unityfs').is_serialized(d) or __import__('unityfs').newer_format(d))):
         import unityfs
         try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
         except unityfs.NoTree as e:
