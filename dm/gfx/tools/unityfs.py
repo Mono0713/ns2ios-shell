@@ -469,7 +469,7 @@ def _tables(d, common, want, trees):
         h = d[r.p:r.p + 16]; r.p += 16
         root = guess = None
         if tt and ver >= 23:   # Unity 6000.5: a second 16-byte hash, then a size-prefixed block that starts "mhtt", not the node list: the tree is taken by hash or by version below
-            r.p += 16; r.p = _skip_mhtt(d, r, ver, le, len(tlist) == ntypes - 1, ntypes, len(d) - doff)
+            r.p += 16; r.p = _skip_mhtt(d, r, ver, le)
         elif tt:
             nn, sb = r.u('i'), r.u('i'); raw = [r.u('HBBIIiiiQ' if ver >= 19 else 'HBBIIiii') for _ in range(nn)]   # refTypeHash from format 19
             buf = d[r.p:r.p + sb]; r.p += sb
@@ -498,32 +498,15 @@ def _tables(d, common, want, trees):
         objs.append((pid, start, size, ti))
     return le, doff, tlist, objs
 
-def _skip_mhtt(d, r, ver, le, last, ntypes, room):
-    """format 23 with type trees: the position past one type's "mhtt" block. Its size word may or may not count itself, and type dependencies (format 21 on) may
-    follow it, so each reading is tried and the one after which the next type's header (or the object count) reads as one is kept"""
+def _skip_mhtt(d, r, ver, le):
+    """format 23 with type trees: the position past one type's "mhtt" block (its size word counts what follows it) and the type dependencies after it
+    (a count and that many 4-byte indices, as from format 21; Super Bunny Man's 39 bundles, every entry)"""
     e = '<' if le else '>'
     sz = struct.unpack_from(e + 'I', d, r.p)[0]; body = r.p + 4
     if d[body:body + 4] != b'mhtt': raise ValueError(f'format {ver} type entry at {r.p:#x}: no "mhtt" block after the hashes')
-    def plausible(q):
-        if q + 8 > len(d): return False
-        if not last:
-            cid, stripped = struct.unpack_from(e + 'iB', d, q)
-            return 0 <= cid < 1 << 24 and stripped in (0, 1)
-        n = struct.unpack_from(e + 'i', d, q)[0]; q = (q + 4 + 3) & ~3   # the object count, then the first object (path ID, start, size, type index)
-        if not 0 < n <= (len(d) - q) // 24 or q + 24 > len(d): return n == 0
-        _pid, start, size, ti = struct.unpack_from(e + 'qqIi', d, q)
-        return 0 <= ti < ntypes and 0 <= start and start + size <= room
-    for end in (body + sz, body + sz - 4, r.p + sz):
-        for q in (end, (end + 3) & ~3):
-            for deps in (False, True):
-                p = q
-                if deps:
-                    if p + 4 > len(d): continue
-                    n = struct.unpack_from(e + 'i', d, p)[0]
-                    if not 0 <= n < 4096: continue
-                    p += 4 + 4 * n
-                if plausible(p): return p
-    raise ValueError(f'format {ver} type entry at {r.p:#x}: the "mhtt" block of {sz} bytes is not followed by another type')
+    q = body + sz; n = struct.unpack_from(e + 'i', d, q)[0]
+    if not 0 <= n <= (len(d) - q - 4) // 4: raise ValueError(f'format {ver} type entry at {r.p:#x}: {n} type dependencies after the "mhtt" block')
+    return q + 4 + 4 * n
 
 MAX_FORMAT = 23   # format 23 (Unity 6000.5) keeps format 22's header and object table; its type trees are an "mhtt" block _skip_mhtt steps over
 

@@ -13,13 +13,14 @@ from test_unity_layouts import write, UNKNOWN_HASH, generated
 
 
 def fmt23(unity, root, mhtt=None, ver=23, deps=None):
-    """one Shader object; mhtt = the tree block's bytes after "mhtt" (None: a file without type trees); deps = type dependencies after the block"""
+    """one Shader object; mhtt = the tree block's bytes after "mhtt" (None: a file without type trees); deps = the type dependencies that always follow the block"""
     payload = bytearray(); write(root, payload); payload = bytes(payload)
     types = struct.pack('<iBh', unityfs.CLASS_SHADER, 0, -1) + UNKNOWN_HASH
     if mhtt is not None:
         block = b'mhtt' + mhtt
         types += bytes(range(16)) + struct.pack('<I', len(block)) + block
-        if deps is not None: types += struct.pack('<i', len(deps)) + b''.join(struct.pack('<i', x) for x in deps)
+        deps = deps or []
+        types += struct.pack('<i', len(deps)) + b''.join(struct.pack('<i', x) for x in deps)
     meta = unity.encode() + b'\0' + struct.pack('<i?i', 38, mhtt is not None, 1) + types + struct.pack('<i', 1)
     head = 48
     meta += bytes(-(head + len(meta)) % 4)
@@ -47,7 +48,7 @@ class Format23Tests(unittest.TestCase):
         self.assertEqual(len(objs), 1); self.assertEqual(objs[0][2]['m_Name'], 'x')
 
     def test_mhtt_block_then_type_dependencies(self):
-        objs = self.read(fmt23('6000.5.7f1', self.root, mhtt=bytes(40), deps=[3, 4]))
+        objs = self.read(fmt23('6000.5.7f1', self.root, mhtt=bytes(40), deps=[2, 0, 1]))
         self.assertEqual(len(objs), 1)
 
     def test_newer_format_is_reported(self):
