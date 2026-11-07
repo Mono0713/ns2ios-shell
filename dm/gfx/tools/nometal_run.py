@@ -23,9 +23,46 @@
 # Result: the "library files" (*_b.metallib / *_bf.metallib) contain shader source. When the graphics layer of the shell (DM_SHELL build) finds that a library is not a compiled one, it compiles it on the device
 # (gfx/nvn/nvn_mtl.m); the system caches the compiled result, and from the second launch on nothing is compiled again.
 # The one check that is lost: in normal mode Apple's compiler also verifies along the way that every source compiles; here that is not verified, and one that fails to compile only reports a failure when it is used on the device.
-import os, runpy, shutil, subprocess, sys
+# Apple's Metal Developer Tools for Windows: when they are installed, the iOS libraries are compiled for real on this
+# machine (`metal -target air64-apple-ios18.0`, then `metallib`), so the phone loads them at once instead of compiling
+# every shader from source. The Mac libraries (never shipped) stay copies. A shader the Windows compiler refuses is kept
+# as source, which the phone still compiles, so a package never loses a shader to this. DM_METAL_TOOLS=<folder> names the
+# install folder (the one holding ios\bin\metal.exe); DM_METAL_TOOLS=0 turns it off.
+import os, runpy, shutil, subprocess, sys, threading
 
 _real = subprocess.run
+_fallback = [0]; _fb_lock = threading.Lock()
+
+
+def win_tools():
+    """(metal, metallib) of the iOS toolchain in Apple's Metal Developer Tools for Windows, or None."""
+    v = os.environ.get('DM_METAL_TOOLS', '')
+    if v == '0': return None
+    roots = [v] if v else [os.path.join(os.environ.get(e, ''), 'Metal Developer Tools') for e in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)') if os.environ.get(e)]
+    for r in roots:
+        for sub in (os.path.join('ios', 'bin'), 'bin', ''):
+            m, l = os.path.join(r, sub, 'metal.exe'), os.path.join(r, sub, 'metallib.exe')
+            if os.path.isfile(m) and os.path.isfile(l): return m, l
+    return None
+
+
+_WIN = win_tools()
+
+
+def mode():
+    return 'windows-metal %s' % _WIN[0] if _WIN else 'source'
+
+
+def _sdk(c):
+    return c[c.index('-sdk') + 1] if '-sdk' in c and c.index('-sdk') + 1 < len(c) else ''
+
+
+def _ios_compile(c):
+    """`xcrun -sdk iphoneos metal -c ... src -o air` with the Windows compiler; False when it refuses the source."""
+    a = c[c.index('metal') + 1:]
+    a = ['-target', 'air64-apple-ios18.0'] + [x for x in a if not x.startswith('-mios-version-min=')]
+    r = _real([_WIN[0], *a], capture_output=True, text=True)
+    return r.returncode == 0
 
 
 def _done(args, out=''):
@@ -37,18 +74,47 @@ def run(args, *a, **k):
     enc = (lambda s: s) if text else (lambda s: s.encode())
     if isinstance(args, (list, tuple)) and args:
         c = [str(x) for x in args]
+        if _WIN and c[0] == 'xcrun' and _sdk(c) == 'iphoneos':
+            if '--version' in c and ('metal' in c or 'metallib' in c):
+                # The real compiler's identity goes into the chain version, so these libraries never mix with source ones.
+                r = _real([_WIN[0] if 'metal' in c else _WIN[1], '--version'], capture_output=True, text=True)
+                return _done(args, enc('windows ' + (r.stdout.splitlines() or ['?'])[0].strip() + '\n'))
+            if 'metal' in c and '-c' in c and '-o' in c:
+                o = c[c.index('-o') + 1]
+                if _ios_compile(c): return _done(args, enc(''))
+                with _fb_lock: _fallback[0] += 1      # refused: ship this one as source, as without the Windows tools
+                _copy_source(c)
+                with open(o + '.src', 'w') as f: f.write('1')
+                return _done(args, enc(''))
+            if 'metallib' in c and '-o' in c:
+                air, lib = c[c.index('metallib') + 1], c[c.index('-o') + 1]
+                if os.path.exists(air + '.src'):
+                    os.remove(air + '.src'); shutil.copyfile(air, lib); return _done(args, enc(''))
+                _real([_WIN[1], air, '-o', lib], check=True, capture_output=True)
+                return _done(args, enc(''))
         if c[0] == 'xcrun' and 'metal' in c and '--version' in c: return _done(args, enc('none\n'))
         # dmsh_mtlcache.py fingerprints the toolchain with four probes; without a compiler they answer fixed values, so this
         # branch of the chain version is the same on every machine and its cache never mixes with the compiled one.
         if c[0] == 'xcrun' and 'metallib' in c and '--version' in c: return _done(args, enc('none\n'))
         if c[0] == 'xcrun' and '--show-sdk-version' in c: return _done(args, enc('26.0\n'))
         if c[0] == 'xcrun' and '--show-sdk-build-version' in c: return _done(args, enc('26A000\n'))
-        if c[0] == 'xcrun' and 'metal' in c and '-c' in c and '-o' in c:   # 源码 = metal 之后第一个不是选项、也不是 -o 的值的参数（iOS 那条命令在 -c 后面还带一个版本选项） | source = the first argument after metal that is neither an option nor the value of -o (the iOS command also carries a version option after -c)
-            o = c.index('-o'); src = [x for i, x in enumerate(c[c.index('metal') + 1:], c.index('metal') + 1) if not x.startswith('-') and i != o + 1]
-            if len(src) != 1: raise RuntimeError('nometal_run：认不出源码参数 %r' % c)
-            with open(src[0], 'rb') as f: b = f.read()
-            with open(c[o + 1], 'wb') as f: f.write(b.replace(b'\r\n', b'\n'))   # Windows 上 spirv-cross 写出的源码是 \r\n 换行：进安装包前归一，同样的输入各系统出的包才相同 | On Windows spirv-cross writes sources with CRLF line endings: normalize before they go into the install package, so the same input gives the same package on every system
-            return _done(args, enc(''))
+        if c[0] == 'xcrun' and 'metal' in c and '-c' in c and '-o' in c: _copy_source(c); return _done(args, enc(''))
+    return _run_rest(args, c if isinstance(args, (list, tuple)) and args else None, enc, *a, **k)
+
+
+def _copy_source(c):
+    """`metal -c <source> -o <intermediate>` without a compiler: the intermediate file is the source itself.
+    The source is the first argument after metal that is neither an option nor the value of -o (the iOS command also carries
+    a version option after -c). On Windows spirv-cross writes CRLF line endings: normalize them before they go into the
+    package, so the same input gives the same package on every system."""
+    o = c.index('-o'); src = [x for i, x in enumerate(c[c.index('metal') + 1:], c.index('metal') + 1) if not x.startswith('-') and i != o + 1]
+    if len(src) != 1: raise RuntimeError('nometal_run：认不出源码参数 %r' % c)
+    with open(src[0], 'rb') as f: b = f.read()
+    with open(c[o + 1], 'wb') as f: f.write(b.replace(b'\r\n', b'\n'))
+
+
+def _run_rest(args, c, enc, *a, **k):
+    if c:
         if c[0] == 'xcrun' and 'metallib' in c and '-o' in c: shutil.copyfile(c[c.index('metallib') + 1], c[c.index('-o') + 1]); return _done(args, enc(''))
         if c[0] == 'xcrun': raise RuntimeError('nometal_run：没认出的 xcrun 命令 %r' % c)
         if c[0] == 'which' and len(c) == 2: return _done(args, enc((shutil.which(c[1]) or '') + '\n'))
@@ -58,6 +124,9 @@ def run(args, *a, **k):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2: sys.exit(__doc__ or '用法：nometal_run.py <脚本.py> [参数…]')
+    if sys.argv[1] == '--mode': print(mode()); sys.exit(0)
     subprocess.run = run
     script = os.path.abspath(sys.argv[1]); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(script))
-    runpy.run_path(script, run_name='__main__')
+    try: runpy.run_path(script, run_name='__main__')
+    finally:
+        if _WIN: print('nometal_run: iOS libraries compiled with %s; %d kept as source (the Windows compiler refused them)' % (_WIN[0], _fallback[0]), file=sys.stderr)
