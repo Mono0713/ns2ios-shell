@@ -1216,6 +1216,14 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # does not crash at once -- the game asks for the wrong heap and aborts in SetHeapSize (Hades II asked for pool - 64 MB
     # instead of pool - 108 MB and overflowed the pool by 44 MB).
     env_lines = env_for(rows)
+    # The npdm's main thread stack size: the host runs the main thread on a 64 MB stack and reports this size instead (hle_os.c GetCurrentStackInfo),
+    # since Godot sizes its worker stacks from it (Unrailed 2: 1 MB on the Switch, 64 MB x 28 workers on the host ran the heap out)
+    try:
+        npdm = (game / 'ExeFS' / 'main.npdm').read_bytes()
+        if npdm[:4] == b'META' and len(npdm) >= 0x20:
+            mts = struct.unpack_from('<I', npdm, 0x1C)[0]
+            if mts: env_lines.append('DM_MAIN_STACK=%#x' % mts)
+    except OSError: pass
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))

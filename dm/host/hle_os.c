@@ -142,6 +142,36 @@ HLE_FORCE("getenv", "the game profile's game_env answers its names; the SDK's ow
     return orig(name);
 }
 
+// ---------- nn::os::GetCurrentStackInfo: the main thread's stack as the game's npdm sizes it ----------
+// The main guest thread runs on a host pthread whose stack is 64 MB (dm/ios/Sources/main.m), and QueryMemory reports that whole stack, so the SDK's main thread
+// record and GetCurrentStackInfo say 64 MB where the Switch gives the npdm's main_thread_stack_size. Godot (W4) sizes every worker thread's stack from the main
+// thread's (main+0x1a23b14 in Unrailed 2, npdm 1 MB): 28 workers took 1.8 GB of the heap, and thread creation then failed ("!stack", MapAliasStack, NVN pools
+// left without storage). For the main thread the size is reported as the npdm's (DM_MAIN_STACK, written by the packer), or more when the thread already uses more;
+// the top stays where it is, so the sp is inside the range. Other threads, and packages without DM_MAIN_STACK, get the SDK's answer unchanged
+HLE_FORCE("_ZN2nn2os19GetCurrentStackInfoEPmS1_", "the SDK's answer; for the main thread the npdm's stack size (DM_MAIN_STACK) instead of the host's 64 MB pthread stack", void, h_os_GetCurrentStackInfo, uintptr_t *out_addr, size_t *out_size) {
+    static void (*orig)(uintptr_t *, size_t *);
+    static size_t want = (size_t)-1;
+    if (!orig) {
+        module_t *ms = NULL; for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) ms = &g_mod[i];
+        if (!ms || !(orig = module_sym(ms, "_ZN2nn2os19GetCurrentStackInfoEPmS1_"))) die("nn::os::GetCurrentStackInfo not found in the SDK");
+    }
+    if (want == (size_t)-1) { const char *e = getenv("DM_MAIN_STACK"); want = e ? (size_t)strtoull(e, NULL, 0) : 0; }
+    uintptr_t a = 0; size_t n = 0;
+    orig(&a, &n);
+    uintptr_t top = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+    if (want && a + n == top && n > want) {
+        uintptr_t here = (uintptr_t)__builtin_frame_address(0);
+        size_t used = top > here ? top - here : 0, m = want;
+        if (used + 0x10000 > m) m = (used + 0x10000 + 0xfff) & ~(size_t)0xfff;
+        if (m < n) {
+            static int said; if (!said++) LOG("GetCurrentStackInfo: main thread stack reported as %#zx (npdm %#zx, in use %#zx) instead of the host's %#zx", m, want, used, n);
+            a = top - m; n = m;
+        }
+    }
+    if (out_addr) *out_addr = a;
+    if (out_size) *out_size = n;
+}
+
 // ---------- nn::mem::StandardAllocator::Allocate(size): Vanillaware's large blocks aligned to 64 KB (profile key alloc_big_align) ----------
 // 13 Sentinels 1.10's own malloc (main 4b632573…, main+0x310550) is StandardAllocator::Allocate(size). It gets the storage of a GPU memory pool from malloc rounded only to 4 KB (main+0x3073b8),
 //   then cuts three ring heaps out of the pool at 64 KB alignment relative to the GPU address (main+0x30c118), and the pool size is exactly their sum (main+0x307adc). On the Switch a pool's GPU address is aligned to a big page;
