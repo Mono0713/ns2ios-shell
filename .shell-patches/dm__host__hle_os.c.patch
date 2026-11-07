@@ -1,7 +1,20 @@
 diff --git a/dm/host/hle_os.c b/dm/host/hle_os.c
 --- a/dm/host/hle_os.c
 +++ b/dm/host/hle_os.c
-@@ -153,6 +153,10 @@
+@@ -132,6 +132,12 @@
+     static char *(*orig)(const char *);
+     size_t n = name ? strlen(name) : 0;
+     for (const char *const *p = game_env(); n && *p; p++) if (!strncmp(*p, name, n) && (*p)[n] == '=') return (char *)*p + n + 1;
++    // .NET NativeAOT's GC (Absolum, Unrailed 2 — Godot .NET) reserves 5 × its heap limit as its region range unless told otherwise: past the alias region on the host, and
++    // the runtime's initialization callback fails, so the game calls abort() with no message on its first managed call. A profile without game_env gets Absolum's 1.5 GB
++    if (n && !strcmp(name, "DOTNET_GCRegionRange")) {
++        static int said; if (!said++) LOG("getenv DOTNET_GCRegionRange: the host's default 60000000 (1.5 GB; profile game_env or DM_GAME_ENV overrides it)");
++        return (char *)"60000000";
++    }
+     if (!orig && !(orig = guest_sym("getenv"))) return NULL;
+     return orig(name);
+ }
+@@ -153,6 +159,10 @@
      g_sa_alloc_al = ms ? module_sym(ms, "_ZN2nn3mem17StandardAllocator8AllocateEmm") : NULL;
      if (!g_sa_alloc || !g_sa_alloc_al) die("StandardAllocator::Allocate not found in the SDK");
      g_sa_big_align = DM_GAME_ALLOC_BIG_ALIGN;
