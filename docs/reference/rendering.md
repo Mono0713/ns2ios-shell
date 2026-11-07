@@ -20,12 +20,19 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md); [Pokémon Brilliant Diamond](../../dm/games/0100000011D90000/README.md): the opening movie's YUV conversion uses GEQUAL against a new 1920×1080 depth texture that the game never clears. Metal supplied depth 1, discarding the movie; zero initialization restores it without a shader override.
 - **Check:** `t_clear_ds` poisons depth and stencil before calling the real initializer and checks both become zero; depth clear, stencil-view and upload-budget tests cover the related paths.
 
+### Window textures presented before anything drew into them
+
+- **Symptom:** the whole screen one flat colour (magenta, pink) for the first frame or two after the loading screen, then the game looks right; the pass dump's first line of that frame is `X ser=<n>` with no pass into that texture before it (Ultimate Chicken Horse on an iPad: 0.2 s of magenta at every start).
+- **Cause:** the game presents a window texture before any submission draws into it. Its Metal texture is then made on the present thread, where [New textures start as zero](#new-textures-start-as-zero) cannot fill it (the upload batch belongs to the submit thread), so its content is undefined, which Apple GPUs show as magenta.
+- **Fix:** a texture made off the submit thread is noted (`zf_defer`), the next submission fills it before it encodes anything (`zf_drain` in `mtl_sub_begin`), and `present_now` skips a texture still waiting, so the previous picture (the loading screen) stays up. `DM_NVN_ZF_OFFTHREAD=0` turns it off. The log says `window texture ser=… not drawn into yet, frame … not presented`.
+- **Found on:** Ultimate Chicken Horse (0100FCF002A58000, not in the games table): its first draw (`F3`) goes into `ser=1` while `ser=3` is presented first. Super Smash Bros. Ultimate's window stayed pink on the Mac for the same reason before its residency fix (`present_now`).
+
 ### All-zero ASTC blocks written as transparent black
 
 - **Symptom:** the whole picture, or textured surfaces, flash magenta for an instant at launch or on entering a level, then look right (Ultimate Chicken Horse on an iPad, a Unity game, at every start).
 - **Cause:** a texture sampled before the game has written its content reads storage that is still zero, and Metal decodes an all-zero ASTC block (block mode 0, reserved) as the error colour (1, 0, 1). [New textures start as zero](#new-textures-start-as-zero) covers GPU-only textures; a packaged or CPU-written texture is deswizzled from the game's memory, zeros included.
 - **Fix:** the deswizzle (`deswz` in `dm/gfx/tex/nvn_deswizzle_gpu.m`, and `nvn_astc_zero_patch` after the CPU deswizzle) writes every all-zero 16-byte block of an NVN ASTC format (0x79–0x94) as a transparent-black void-extent block; the upload of the real content replaces it. No valid ASTC block is all zero, so no texture's content changes. `DM_NVN_ASTC_ZERO=0` keeps the zeros; `DM_NVN_ZBLOCK` still counts them (before the fix).
-- **Found on:** Ultimate Chicken Horse (0100FCF002A58000, not in the games table): suspected from the symptom, not yet confirmed with `DM_NVN_ZBLOCK` on the device.
+- **Found on:** none confirmed: suspected for Ultimate Chicken Horse, whose flash turned out to be the next entry (its textures are BC).
 
 ### Texture swizzle through swizzled Metal views
 

@@ -736,6 +736,7 @@ static void *g_sub_pool;
 static int tbdr_on(void);
 
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
+static void zf_drain(void);
 void mtl_sub_begin(void) {
     mtl_init(); g_sub_serial++; g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; g_rc_npend = 0; g_rc_skip = 0;
     defer_drain();
@@ -744,6 +745,7 @@ void mtl_sub_begin(void) {
     warm_claim();
     if (g_cb) MDIE("submit re-entered");
     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
+    zf_drain();   // textures made off this thread since the last submission: zero-filled before this one draws into or samples them
     atomic_store(&g_last_commit_error, 0);
     g_sub_pool = objc_autoreleasePoolPush();
     g_cb = rec_cb_new();
@@ -2270,9 +2272,30 @@ static id<MTLBuffer> astc_clear_buf(size_t need) {
     return ab;
 }
 static uint64_t g_tex_zeroed;
+// Textures made off the submit thread (the present thread resolving a window texture nothing has drawn into yet) cannot be zero-filled there: the upload batch belongs to the
+// submit thread. Their content is undefined, and on Apple GPUs an untouched texture reads as magenta: Ultimate Chicken Horse presents its window texture ser=3 before any
+// submission draws into it (the pass dump's first line, "F3 X ser=3"), and the whole screen was magenta for that first, 210 ms frame (Super Smash Bros. Ultimate's window
+// stayed pink for the same reason). They wait here: the next submission fills them before it encodes anything (zf_drain, mtl_sub_begin), and the present skips a texture still
+// waiting, so the loading screen stays up instead (present_now)
+static NSHashTable *g_zf_pending; static os_unfair_lock g_zf_lk = OS_UNFAIR_LOCK_INIT;
+static void zf_defer(id<MTLTexture> mt) {
+    os_unfair_lock_lock(&g_zf_lk); if (!g_zf_pending) g_zf_pending = [NSHashTable weakObjectsHashTable]; [g_zf_pending addObject:mt]; os_unfair_lock_unlock(&g_zf_lk);
+    static int nl; if (nl++ < 4) MLOG("new-texture zeroing: a %lux%lu texture made off the submit thread is filled by the next submission (not presented until then)", (unsigned long)mt.width, (unsigned long)mt.height);
+}
+static int zf_waiting(id<MTLTexture> mt) {
+    if (!mt) return 0;
+    os_unfair_lock_lock(&g_zf_lk); int r = g_zf_pending && [g_zf_pending containsObject:mt]; os_unfair_lock_unlock(&g_zf_lk);
+    return r;
+}
+static void tex_zero_fill(id<MTLTexture> mt);
+static void zf_drain(void) {   // on the submit thread, before the submission encodes anything
+    os_unfair_lock_lock(&g_zf_lk); NSArray *a = g_zf_pending.count ? g_zf_pending.allObjects : nil; os_unfair_lock_unlock(&g_zf_lk);
+    for (id<MTLTexture> mt in a) tex_zero_fill(mt);   // queued in an upload batch committed ahead of this submission's work
+    if (a.count) { os_unfair_lock_lock(&g_zf_lk); for (id mt in a) [g_zf_pending removeObject:mt]; os_unfair_lock_unlock(&g_zf_lk); }
+}
 static void tex_zero_fill(id<MTLTexture> mt) {
     static int warned;
-    if (!atomic_load(&g_sub_thread_set) || !on_sub_thread()) return;   // the upload batch belongs to the submit thread only
+    if (!atomic_load(&g_sub_thread_set) || !on_sub_thread()) { const char *e = getenv("DM_NVN_ZF_OFFTHREAD"); if (!(e && *e == '0')) zf_defer(mt); return; }   // DM_NVN_ZF_OFFTHREAD=0: leave them undefined, as before   // the upload batch belongs to the submit thread only
     MTLTextureType tt = mt.textureType;
     MTLPixelFormat pf = mt.pixelFormat;
     int depth = pf == MTLPixelFormatDepth16Unorm || pf == MTLPixelFormatDepth32Float || pf == MTLPixelFormatDepth32Float_Stencil8;
@@ -10157,6 +10180,9 @@ static void present_gpu_note(double s, int fx) {
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
+    if (zf_waiting(tex_mtl(t))) {   // nothing has drawn into it and it is not filled yet: undefined content (magenta on Apple GPUs). Not presented; the previous picture stays
+        static int nl; if (nl++ < 4) MLOG("present: window texture ser=%llu not drawn into yet, frame %llu not presented", (unsigned long long)t->serial, (unsigned long long)frame);
+        return 0; }
     if (++g_present_n == 1) front_first_frame();   // every route (NVN, Vulkan, GL) presents here
     if (bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
         if (g_present_n == 1) g_bp_first_present = bp_now() - g_bp_t0;
