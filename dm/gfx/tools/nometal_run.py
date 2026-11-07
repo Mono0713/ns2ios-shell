@@ -28,10 +28,10 @@
 # every shader from source. The Mac libraries (never shipped) stay copies. A shader the Windows compiler refuses is kept
 # as source, which the phone still compiles, so a package never loses a shader to this. DM_METAL_TOOLS=<folder> names the
 # install folder (the one holding ios\bin\metal.exe); DM_METAL_TOOLS=0 turns it off.
-import os, runpy, shutil, subprocess, sys, threading
+import os, runpy, shutil, subprocess, sys, tempfile, threading
 
 _real = subprocess.run
-_fallback = [0]; _fb_lock = threading.Lock()
+_fallback = [0]; _compiled = [0]; _first_err = []; _fb_lock = threading.Lock()
 
 
 def win_tools():
@@ -50,18 +50,43 @@ _WIN = win_tools()
 
 
 def mode():
-    return 'windows-metal %s' % _WIN[0] if _WIN else 'source'
+    return 'windows-metal-2 %s' % _WIN[0] if _WIN else 'source'
 
 
 def _sdk(c):
     return c[c.index('-sdk') + 1] if '-sdk' in c and c.index('-sdk') + 1 < len(c) else ''
 
 
+def _src_arg(c):
+    """Index of the source in `metal ... -c ... <source> -o <out>`: the first argument after metal that is neither an option
+    nor the value of -o (the iOS command also carries a version option after -c)."""
+    o = c.index('-o'); m = c.index('metal')
+    idx = [i for i in range(m + 1, len(c)) if not c[i].startswith('-') and i != o + 1]
+    if len(idx) != 1: raise RuntimeError('nometal_run：认不出源码参数 %r' % c)
+    return idx[0]
+
+
+def _in_tmp(tool, inp, ext_in, out, ext_out, extra):
+    """Run a Windows Metal tool on bare file names inside a fresh temporary folder: metal.exe splits paths at spaces
+    ("Switch PAD" → "no such file or directory"), so it never sees a path at all."""
+    d = tempfile.mkdtemp(prefix='dmmtl')
+    try:
+        shutil.copyfile(inp, os.path.join(d, 'i' + ext_in))
+        r = _real([tool, *extra, 'i' + ext_in, '-o', 'o' + ext_out], cwd=d, capture_output=True, text=True)
+        if r.returncode == 0: shutil.move(os.path.join(d, 'o' + ext_out), out)
+        return r
+    finally: shutil.rmtree(d, ignore_errors=True)
+
+
 def _ios_compile(c):
     """`xcrun -sdk iphoneos metal -c ... src -o air` with the Windows compiler; False when it refuses the source."""
-    a = c[c.index('metal') + 1:]
-    a = ['-target', 'air64-apple-ios18.0'] + [x for x in a if not x.startswith('-mios-version-min=')]
-    r = _real([_WIN[0], *a], capture_output=True, text=True)
+    si, o = _src_arg(c), c.index('-o')
+    opts = ['-target', 'air64-apple-ios18.0'] + [x for i, x in enumerate(c[c.index('metal') + 1:], c.index('metal') + 1)
+                                                  if i not in (si, o, o + 1) and not x.startswith('-mios-version-min=')]
+    r = _in_tmp(_WIN[0], c[si], '.metal', c[o + 1], '.air', opts)
+    with _fb_lock:
+        if r.returncode == 0: _compiled[0] += 1
+        elif not _first_err: _first_err.append('%s: %s' % (c[si], (r.stderr or r.stdout).strip()[:600]))
     return r.returncode == 0
 
 
@@ -77,8 +102,10 @@ def run(args, *a, **k):
         if _WIN and c[0] == 'xcrun' and _sdk(c) == 'iphoneos':
             if '--version' in c and ('metal' in c or 'metallib' in c):
                 # The real compiler's identity goes into the chain version, so these libraries never mix with source ones.
+                # "-2": the first version ran metal.exe on paths with spaces, which it refuses, and cached the source copies
+                # it fell back to under this identity; a new one keeps those out.
                 r = _real([_WIN[0] if 'metal' in c else _WIN[1], '--version'], capture_output=True, text=True)
-                return _done(args, enc('windows ' + (r.stdout.splitlines() or ['?'])[0].strip() + '\n'))
+                return _done(args, enc('windows-2 ' + (r.stdout.splitlines() or ['?'])[0].strip() + '\n'))
             if 'metal' in c and '-c' in c and '-o' in c:
                 o = c[c.index('-o') + 1]
                 if _ios_compile(c): return _done(args, enc(''))
@@ -90,7 +117,8 @@ def run(args, *a, **k):
                 air, lib = c[c.index('metallib') + 1], c[c.index('-o') + 1]
                 if os.path.exists(air + '.src'):
                     os.remove(air + '.src'); shutil.copyfile(air, lib); return _done(args, enc(''))
-                _real([_WIN[1], air, '-o', lib], check=True, capture_output=True)
+                r = _in_tmp(_WIN[1], air, '.air', lib, '.metallib', [])
+                if r.returncode: raise subprocess.CalledProcessError(r.returncode, [_WIN[1], air, '-o', lib], r.stdout, r.stderr)
                 return _done(args, enc(''))
         if c[0] == 'xcrun' and 'metal' in c and '--version' in c: return _done(args, enc('none\n'))
         # dmsh_mtlcache.py fingerprints the toolchain with four probes; without a compiler they answer fixed values, so this
@@ -129,4 +157,11 @@ if __name__ == '__main__':
     script = os.path.abspath(sys.argv[1]); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(script))
     try: runpy.run_path(script, run_name='__main__')
     finally:
-        if _WIN: print('nometal_run: iOS libraries compiled with %s; %d kept as source (the Windows compiler refused them)' % (_WIN[0], _fallback[0]), file=sys.stderr)
+        if _WIN and (_compiled[0] or _fallback[0]):
+            print('nometal_run: %d iOS libraries compiled with %s; %d kept as source (the Windows compiler refused them)' % (_compiled[0], _WIN[0], _fallback[0]), file=sys.stderr)
+            if _first_err: print('nometal_run: first refusal: ' + _first_err[0], file=sys.stderr)
+    # Every compile refused means the tools themselves do not work here, not a few odd shaders: stop instead of quietly
+    # shipping a source-only package. DM_METAL_TOOLS=0 packs without them.
+    if _WIN and _fallback[0] and not _compiled[0]:
+        sys.exit('nometal_run: the Windows Metal compiler refused all %d shaders (see the first refusal above); '
+                 'fix the install or set DM_METAL_TOOLS=0 to pack with shader source' % _fallback[0])
