@@ -87,7 +87,8 @@ def facts_of(exefs, romfs):
         for pat, name in MARKERS:
             if pat in img: F['markers'].setdefault(name, []).append(p.name)
         if p.name == 'main':
-            F['unity'] = {v.decode() for v in re.findall(rb'20[12][0-9]\.[0-9]+\.[0-9]+f[0-9]', img)}
+            # Unity 5.5 and 5.6 players too (Snipperclips Plus: 5.5.0p1, a patch build), which were taken for Unreal before
+            F['unity'] = {v.decode() for v in re.findall(rb'20[12][0-9]\.[0-9]+\.[0-9]+f[0-9]|(?<![0-9.])5\.[56]\.[0-9]+[fp][0-9]+', img)}
             F['glslc'], F['glsl_src'], F['gl_names'] = img.count(GLSLC_MAGIC), img.count(b'#version '), img.count(b'glShaderSource')
             F['gl_src'] = len(re.findall(GL_SRC, img))
             F['main_markers'] = {name for pat, name in MARKERS if pat in img}
@@ -143,15 +144,15 @@ def guess(F, hooks=None):
     if F['sysres']:   # virtual address memory: Engage's 5 GB block. With a heap, the heap check moves the alias / heap split once it sees the heap the game asks for (Wonder, Tears of the Kingdom);
         # without one the game maps everything in the alias region itself (Hollow Knight: Silksong's Unity 6 through AllocateAddressRegion / AllocateMemoryPages, 1.5 GB in its first room;
         # Absolum's and Pokémon Legends: Z-A's StandardAllocator), which a 256 MB alias region cannot hold
-        mem = (0x140000000, 0x118000000, APP_POOL, f'the NPDM declares {F["sysres"] // MiB} MB of system resource (virtual address memory) and main ' +
+        mem = (0x140000000 + STACK - 0x10000000, 0x118000000, APP_POOL, f'the NPDM declares {F["sysres"] // MiB} MB of system resource (virtual address memory) and main ' +
                ('sets a heap: a 5 GB block with a large alias region; the heap check sizes the heap region from the heap the game asks for' if heap_api else
                 'never sets a heap: a 5 GB block with a 4.375 GB alias region, where the game maps its memory itself'))
     else:
         heap = max(0x10000000, -(-(APP_POOL - 64 * MiB - giant) // 0x10000000) * 0x10000000) if heap_api else 0x10000000
-        mem = (0x30000000 + heap, 0x10000000, APP_POOL,
+        mem = (0x20000000 + STACK + heap, 0x10000000, APP_POOL,
                ('main sets a heap of at most the pool − 64 MB' + (f' − {giant // MiB} MB of bss (counted as used memory)' if giant else '') + f': a {heap // MiB} MB heap region')
                if heap_api else 'main never sets a heap (its memory is its own bss): a 256 MB heap region')
-    G['mem_reserve'] = (f'{mem[0]:#x}', mem[3]); G['mem_alias'] = (f'{mem[1]:#x}', ''); G['mem_stack'] = ('0x10000000', ''); G['app_pool'] = (f'{mem[2]:#X}'.replace('0X', '0x'), '')
+    G['mem_reserve'] = (f'{mem[0]:#x}', mem[3]); G['mem_alias'] = (f'{mem[1]:#x}', ''); G['mem_stack'] = (f'{STACK:#x}', STACK_WHY); G['app_pool'] = (f'{mem[2]:#X}'.replace('0X', '0x'), '')
     G['sys_resource'] = (f'{F["sysres"]:#x}', f'the NPDM declares {F["sysres"] // MiB} MB of system resource' + ('' if F['sysres'] else
                          ': IsVirtualAddressMemoryEnabled is false, as on Horizon (Big Brain Academy: Brain vs. Brain sets a heap only then)'))
 
@@ -160,7 +161,7 @@ def guess(F, hooks=None):
     # The engine region needs virtual address memory; without it (OCTOPATH TRAVELER 1.0.5, Unreal Engine 4 on SDK 3.5.1, no system resource) nninitStartup sets a heap of pool − used instead,
     # which the heap-region layout above holds
     if F.get('main_markers', set()) & {'Unreal', 'Unreal 4'} and R['exts'].get('.pak') and 'nvnBootstrapLoader' in imp and F['sysres']:
-        G['mem_reserve'] =('0x1028000000', 'Unreal: nninitStartup reserves a 62 GB address region and its FMallocBinned3 takes 37 GB of it, so a 64 GB alias region for the bring-up on the Mac. '
+        G['mem_reserve'] =(f'{0x1028000000 + STACK - 0x10000000:#x}', 'Unreal: nninitStartup reserves a 62 GB address region and its FMallocBinned3 takes 37 GB of it, so a 64 GB alias region for the bring-up on the Mac. '
                             'An iPhone needs the allocator cut for the build and a capped region (game_args), as Octopath Traveler 0\'s profile (docs/reference/memory.md)')
         # Leave 128 MB for the initial heap after the 256 MB module and stack regions.
         # The old 64.125 GB alias consumed the entire block (SMT V: Vengeance's 6 MB heap failed).
@@ -170,6 +171,11 @@ def guess(F, hooks=None):
 
 
 HEAP_API = '_ZN2nn2os17SetMemoryHeapSizeEm'
+# Stack region: 1 GB (Horizon's is 2 GB in a 39-bit address space). nn::os::CreateThread moves every thread stack into it at a random address with 64 KB guards
+# (StackGuardManager::MapAtRandomAddress), and gives up with an abort when 0x200 random tries find no room: Godot (Unrailed 2: Back on Track, SDK 20) makes
+# 64 MB stacks, and its fifth thread found no room in the 256 MB region the guess used to give. The region is address space only, nothing is committed for it.
+STACK = 0x40000000
+STACK_WHY = 'a 1 GB stack region: CreateThread places each thread stack at a random address in it (Godot makes 64 MB stacks)'
 GPU_DRIVERS = {'NintendoSDK_OpenGL', 'NintendoSDK_Vulkan'}
 
 

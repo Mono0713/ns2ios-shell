@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <os/proc.h>          // os_proc_available_memory: the line at boot saying whether the memory entitlement took effect
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
@@ -79,11 +80,40 @@ static NSString *romfs_locate(void) {
     return nil;
 }
 
+// Each game's own last two runs, in Documents/logs/<title ID>.txt and <title ID>.prev.txt: log.txt holds only the latest launch of the app, so in a package of
+// several games a crash is lost as soon as another game (or only the picker) is opened twice. At launch, before log.txt is rotated, the run it holds is copied
+// under the game it ran (the last "boot: game <id>" line; none = only the picker). A copy, not a second name: the device's file service (AFC, what Switch Pad
+// reads Documents through) refuses to open a file with more than one link, so a hard link made log.txt itself unreadable.
+static void game_log_keep(NSString *doc) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *dir = [doc stringByAppendingPathComponent:@"logs"];
+    // names a shell build that hard-linked them left behind (st_nlink 2) keep log.txt / log.prev.txt unreadable: remove every such name first
+    // (also in Documents/.Trash, where the Files app puts a name deleted by hand: the link stays until the trash is emptied)
+    for (NSString *dd in @[dir, [doc stringByAppendingPathComponent:@".Trash"]])
+        for (NSString *n in [fm contentsOfDirectoryAtPath:dd error:nil]) {
+            NSString *f = [dd stringByAppendingPathComponent:n]; struct stat st;
+            if ([n hasSuffix:@".txt"] && !lstat(f.fileSystemRepresentation, &st) && S_ISREG(st.st_mode) && st.st_nlink > 1) [fm removeItemAtPath:f error:nil];
+        }
+    NSData *d = [NSData dataWithContentsOfFile:log options:NSDataReadingMappedIfSafe error:nil];
+    if (!d.length) return;
+    NSString *txt = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: [[NSString alloc] initWithData:d encoding:NSISOLatin1StringEncoding];
+    // the last game chosen in that run ("boot: game language ..." follows it, so only a 16-digit title ID counts)
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"^boot: game ([0-9A-Fa-f]{16}) " options:NSRegularExpressionAnchorsMatchLines error:nil];
+    NSTextCheckingResult *m = [re matchesInString:txt options:0 range:NSMakeRange(0, txt.length)].lastObject;
+    if (!m) return;
+    NSString *gid = [txt substringWithRange:[m rangeAtIndex:1]];
+    NSString *cur = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".txt"]], *prev = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".prev.txt"]];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
+    [d writeToFile:cur atomically:YES];
+}
+
 // Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
 static void boot_log(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
+    game_log_keep(doc);
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
     if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
 }

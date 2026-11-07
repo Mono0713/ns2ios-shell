@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,325 @@
+@@ -3,10 +3,335 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -23,6 +23,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    return SettingsStore.named(g ?? "app", from: g.flatMap { UserDefaults(suiteName: "game." + $0) } ?? .standard)
 +}
 +@_silgen_name("front_ios_back_to_picker") private func frontIosBackToPicker()
++@_silgen_name("dm_run_mark_open") private func dmRunMarkOpen(_ path: UnsafePointer<CChar>)   // hle_runmark.c: the host records how this run ends
 +
 +// The launcher and the game picker move with player 1's controller themselves (DMLauncherInput). Without this, iPadOS also moves its own focus over their
 +// buttons with it, and A then pressed whichever button that focus was left on (Open game folder, once tapped) as well as the highlighted row
@@ -60,7 +61,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
 +    "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
 +    "Portuguese": "葡萄牙文", "Russian": "俄文", "Korean": "韓文", "Traditional Chinese": "繁體中文", "Simplified Chinese": "簡體中文", "Brazilian Portuguese": "葡萄牙文（巴西）",
-+    "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設",
++    "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設", "Auto": "自動",
 +    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "僅在畫面或聲音異常時調整；設定錯誤可能導致遊戲無法啟動。",
 +    // the launcher's own
 +    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
@@ -84,6 +85,15 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
 +    "Player 1's controller: A on a player, then left and right pick what to change. Players 2 to 8: left and right on your own row pick the layout or Identify, A to use it.":
 +        "1P 手把：在玩家那一列按 A，再用左右選要調整的項目。2P 以後：用左右在自己那一列選按鍵配置或震動，按 A 執行。",
++    // save slots (SaveSlots.swift)
++    "Saves": "存檔", "Save in use": "使用中的存檔", "New empty save": "新增空白存檔", "Copy this save": "複製目前的存檔",
++    "Rename this save": "重新命名這份存檔", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
++    "Save %d": "存檔 %d", "%@ (copy)": "%@（副本）", "Delete \"%@\"?": "要刪除「%@」嗎？",
++    "Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it.": "這份存檔會從 iPad 刪除。電腦上（Switch Pad）的存檔備份裡還找得到。",
++    "Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along.":
++        "每份存檔分開保存，遊戲讀的是「使用中的存檔」。新增空白存檔會從頭開始玩，其他存檔不會被動到。Switch Pad 備份存檔時每一份都會一起備份。",
++    "Could not switch saves": "切換存檔失敗", "Could not add a save": "新增存檔失敗", "Could not copy the save": "複製存檔失敗",
++    "Could not rename the save": "重新命名失敗", "Could not delete the save": "刪除存檔失敗",
 +]
 +// English as shown: settings.tsv's labels and notes (and the strings above, which are the keys) rewritten for the screen; a string not listed is shown as it is
 +private let enText: [String: String] = [
@@ -328,7 +338,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +333,31 @@
+@@ -18,17 +343,55 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -348,12 +358,36 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    private var memoryGB: Binding<Double> {
 +        Binding(get: {
 +                    let v = m.values[s.env] ?? s.def
++                    if v == "-", let a = m.memory { return Double(a.pick) / 1073741824 }   // automatic: the size the launcher picked
 +                    return gb(v == "-" ? (ProcessInfo.processInfo.environment[s.env] ?? "") : v) ?? s.max ?? 3.2
 +                },
 +                set: { m.values[s.env] = String(format: "0x%llX", UInt64(($0 * 1024).rounded()) << 20) })
 +    }
 +    private var memoryIsDefault: Bool { (m.values[s.env] ?? s.def) == "-" }
-+    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + tr("Game default") : "") }   // VoiceOver's value
++    private var memoryDefaultLabel: String { tr(m.memory != nil ? "Auto" : "Game default") }   // "-" is automatic when the launcher can pick (MemoryAuto)
++    private var memoryText: String { String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + memoryDefaultLabel : "") }   // VoiceOver's value
++    // What automatic memory knows, under the slider: what the last run told and why the size is what it is
++    private var memoryAutoNote: (text: String, warn: Bool)? {
++        guard memoryIsDefault, !locked, let a = m.memory else { return nil }
++        func g(_ v: UInt64) -> String { String(format: "%.1f GB", Double(v) / 1073741824) }
++        let now = g(a.pick)
++        if a.exhausted {
++            return (zhHant ? "各種記憶體大小都試過了還是打不開，應該不是記憶體的問題；先用回遊戲預設 \(now)。"
++                           : "Every memory size failed, so memory is likely not the problem; back to the game's default \(now).", true)
++        }
++        if let l = a.last {
++            let was = g(l.pool)
++            switch l.outcome {
++            case .worked: return (zhHant ? "\(now) 已確認可以正常執行。" : "\(now) is confirmed to work.", false)
++            case .tooBig: return (zhHant ? "上次 \(was) 被 iOS 以記憶體不足關掉，這次自動改用 \(now)。" : "Last time iOS closed the game at \(was) for lack of memory; trying \(now) now.", true)
++            case .tooSmall: return (zhHant ? "上次 \(was) 遊戲要不到記憶體而中止，這次自動改用 \(now)。" : "Last time the game ran out of memory at \(was); trying \(now) now.", true)
++            case .maybeSmall: return (zhHant ? "上次 \(was) 遊戲自己中止，可能是記憶體不夠，這次先試 \(now)。" : "Last time the game stopped itself at \(was), maybe for memory; trying \(now) now.", true)
++            case .notMemory: return (zhHant ? "上次 \(was) 閃退，但看起來不是記憶體造成的，所以記憶體不變。" : "Last time the game crashed at \(was), but not for memory, so the size stays.", true)
++            }
++        }
++        if a.confirmed { return (zhHant ? "\(now) 已確認可以正常執行。" : "\(now) is confirmed to work.", false) }
++        return (zhHant ? "打不開而且是記憶體造成的話，下次會自動換一個大小。" : "If the game fails to start for memory, the next start tries another size.", false)
++    }
  
      private var settingLabel: some View {
          VStack(alignment: .leading, spacing: 4) {
@@ -362,7 +396,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +367,7 @@
+@@ -38,7 +401,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -371,7 +405,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +380,22 @@
+@@ -51,8 +414,23 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -386,16 +420,17 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                        Spacer()
 +                        // the size, then "Game default" in the same place: a label at the default, a button that goes back to it otherwise
 +                        Text(String(format: "%.1f GB", memoryGB.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
-+                        if memoryIsDefault || locked { Text(tr("Game default")).foregroundStyle(.secondary).opacity(memoryIsDefault ? 1 : 0) }
-+                        else { Button(tr("Game default")) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
++                        if memoryIsDefault || locked { Text(memoryDefaultLabel).foregroundStyle(.secondary).opacity(memoryIsDefault ? 1 : 0) }
++                        else { Button(memoryDefaultLabel) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
 +                    }
 +                    Slider(value: memoryGB, in: (s.min ?? 0.5)...(s.max ?? 3.2), step: s.step ?? 0.1)
 +                        .accessibilityLabel(tr(s.label))
 +                        .accessibilityValue(memoryText)
++                    if let n = memoryAutoNote { Text(n.text).font(.footnote).foregroundStyle(n.warn ? Color.orange : Color.secondary) }
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,43 +407,219 @@
+@@ -64,43 +442,270 @@
      }
  }
  
@@ -447,8 +482,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        case "range":
 +            let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
 +            values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, (Double(v) ?? hi) + Double(d) * st)))
-+        case "memory":   // "-" moves from the package's own value
-+            let t = (v == "-" ? ProcessInfo.processInfo.environment[s.env] ?? "" : v).lowercased()
++        case "memory":   // "-" moves from the automatic size, else the package's own value
++            let t = (v == "-" ? memory.map { MemoryAuto.hex($0.pick) } ?? ProcessInfo.processInfo.environment[s.env] ?? "" : v).lowercased()
 +            let lo = s.min ?? 0.5, hi = s.max ?? 3.2, st = s.step ?? 0.1
 +            let g = (t.hasPrefix("0x") ? UInt64(t.dropFirst(2), radix: 16) : UInt64(t)).map { Double($0) / 1073741824 } ?? hi
 +            let n = Swift.min(hi, Swift.max(lo, (g / st).rounded() * st + Double(d) * st))
@@ -538,6 +573,55 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +}
 +
++// Save slots (SaveSlots.swift): which save the game loads. Player 1's controller: left and right on the first row switch, A on New or Copy;
++// renaming and deleting are by touch (they need the keyboard or a confirmation)
++private struct SaveSlotsSection: View {
++    @ObservedObject var s: SaveSlotsModel
++    @State private var renaming = false
++    @State private var newName = ""
++    @State private var deleting: SaveSlot?
++
++    var body: some View {
++        Section {
++            Picker(selection: Binding(get: { s.active }, set: { s.switchTo($0) })) {
++                ForEach(s.slots) { Text($0.name).tag($0.id) }
++            } label: {
++                Label(tr("Save in use"), systemImage: "externaldrive.fill")
++            }
++            .pickerStyle(.menu)
++            .nav("slot")
++            Button { s.addEmpty() } label: { Label(tr("New empty save"), systemImage: "plus.circle") }
++                .nav("slotNew")
++            Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
++                .nav("slotCopy")
++            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
++            if s.slots.count > 1 {
++                Menu {
++                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
++                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
++            }
++        } header: {
++            Text(tr("Saves"))
++        } footer: {
++            VStack(alignment: .leading, spacing: 4) {
++                Text(tr("Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along."))
++                if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
++            }
++        }
++        .alert(tr("Rename this save"), isPresented: $renaming) {
++            TextField(tr("Name"), text: $newName)
++            Button(tr("Rename")) { s.rename(s.active, newName) }
++            Button(tr("Cancel"), role: .cancel) {}
++        }
++        .confirmationDialog(tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: deleting?.name ?? ""), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
++            Button(tr("Delete"), role: .destructive) { if let d = deleting { s.delete(d.id) }; deleting = nil }
++            Button(tr("Cancel"), role: .cancel) { deleting = nil }
++        } message: {
++            Text(tr("Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it."))
++        }
++    }
++}
++
 +private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
 +    if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
 +       let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -552,6 +636,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @StateObject private var players = PlayersModel()
 +    @StateObject private var nav = NavModel()
 +    @StateObject private var activity = ActivityModel()
++    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
  
      var body: some View {
@@ -586,6 +671,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                ScrollViewReader { proxy in
                  List {
 +                    PlayersSection(m: players)
++                    if saves.available { SaveSlotsSection(s: saves) }
                      ForEach(m.sections, id: \.self) { section in
 -                        Section(section) {
 -                            ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
@@ -622,7 +708,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                              Spacer()
                              Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                          }
-@@ -108,24 +627,144 @@
+@@ -108,24 +713,149 @@
                  }
                  .listStyle(.insetGrouped)
                  .contentMargins(.horizontal, 12, for: .scrollContent)
@@ -673,6 +759,11 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        var items: [NavItem] = []
 +        for r in players.players { items.append(NavItem(id: "p\(r.player)", activate: { nav.part = 0 })) }
 +        for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
++        if saves.available {
++            items.append(NavItem(id: "slot", slider: true, adjust: { saves.step($0) }))
++            items.append(NavItem(id: "slotNew", activate: { saves.addEmpty() }))
++            items.append(NavItem(id: "slotCopy", activate: { saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: saves.activeName)) }))
++        }
 +        for section in m.sections {
 +            for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
 +                switch s.kind {
@@ -770,7 +861,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +776,29 @@
+@@ -137,21 +867,30 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
@@ -789,6 +880,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 -        h.dismiss(animated: false) { done() }
 -    }
 +        shell.apply()
++        if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
 +        h.dismiss(animated: true) { done() }
 +    }, back: severalGames ? {
 +        guard let h = host else { return }

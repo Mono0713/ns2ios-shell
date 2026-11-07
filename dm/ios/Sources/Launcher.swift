@@ -82,6 +82,15 @@ private let zhText: [String: String] = [
         "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
     "Player 1's controller: A on a player, then left and right pick what to change. Players 2 to 8: left and right on your own row pick the layout or Identify, A to use it.":
         "1P 手把：在玩家那一列按 A，再用左右選要調整的項目。2P 以後：用左右在自己那一列選按鍵配置或震動，按 A 執行。",
+    // save slots (SaveSlots.swift)
+    "Saves": "存檔", "Save in use": "使用中的存檔", "New empty save": "新增空白存檔", "Copy this save": "複製目前的存檔",
+    "Rename this save": "重新命名這份存檔", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
+    "Save %d": "存檔 %d", "%@ (copy)": "%@（副本）", "Delete \"%@\"?": "要刪除「%@」嗎？",
+    "Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it.": "這份存檔會從 iPad 刪除。電腦上（Switch Pad）的存檔備份裡還找得到。",
+    "Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along.":
+        "每份存檔分開保存，遊戲讀的是「使用中的存檔」。新增空白存檔會從頭開始玩，其他存檔不會被動到。Switch Pad 備份存檔時每一份都會一起備份。",
+    "Could not switch saves": "切換存檔失敗", "Could not add a save": "新增存檔失敗", "Could not copy the save": "複製存檔失敗",
+    "Could not rename the save": "重新命名失敗", "Could not delete the save": "刪除存檔失敗",
 ]
 // English as shown: settings.tsv's labels and notes (and the strings above, which are the keys) rewritten for the screen; a string not listed is shown as it is
 private let enText: [String: String] = [
@@ -572,6 +581,55 @@ private struct TouchStyleRow: View {   // opacity or size of the touch controls,
     }
 }
 
+// Save slots (SaveSlots.swift): which save the game loads. Player 1's controller: left and right on the first row switch, A on New or Copy;
+// renaming and deleting are by touch (they need the keyboard or a confirmation)
+private struct SaveSlotsSection: View {
+    @ObservedObject var s: SaveSlotsModel
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var deleting: SaveSlot?
+
+    var body: some View {
+        Section {
+            Picker(selection: Binding(get: { s.active }, set: { s.switchTo($0) })) {
+                ForEach(s.slots) { Text($0.name).tag($0.id) }
+            } label: {
+                Label(tr("Save in use"), systemImage: "externaldrive.fill")
+            }
+            .pickerStyle(.menu)
+            .nav("slot")
+            Button { s.addEmpty() } label: { Label(tr("New empty save"), systemImage: "plus.circle") }
+                .nav("slotNew")
+            Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
+                .nav("slotCopy")
+            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
+            if s.slots.count > 1 {
+                Menu {
+                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
+                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
+            }
+        } header: {
+            Text(tr("Saves"))
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tr("Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along."))
+                if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
+            }
+        }
+        .alert(tr("Rename this save"), isPresented: $renaming) {
+            TextField(tr("Name"), text: $newName)
+            Button(tr("Rename")) { s.rename(s.active, newName) }
+            Button(tr("Cancel"), role: .cancel) {}
+        }
+        .confirmationDialog(tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: deleting?.name ?? ""), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
+            Button(tr("Delete"), role: .destructive) { if let d = deleting { s.delete(d.id) }; deleting = nil }
+            Button(tr("Cancel"), role: .cancel) { deleting = nil }
+        } message: {
+            Text(tr("Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it."))
+        }
+    }
+}
+
 private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
     if let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
        let url = URL(string: "shareddocuments://" + doc.path) { UIApplication.shared.open(url) }
@@ -586,6 +644,7 @@ private struct LauncherView: View {
     @StateObject private var players = PlayersModel()
     @StateObject private var nav = NavModel()
     @StateObject private var activity = ActivityModel()
+    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
 
     var body: some View {
@@ -618,6 +677,7 @@ private struct LauncherView: View {
                 ScrollViewReader { proxy in
                 List {
                     PlayersSection(m: players)
+                    if saves.available { SaveSlotsSection(s: saves) }
                     ForEach(m.sections, id: \.self) { section in
                         Section(tr(section)) {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
@@ -697,6 +757,11 @@ private struct LauncherView: View {
         var items: [NavItem] = []
         for r in players.players { items.append(NavItem(id: "p\(r.player)", activate: { nav.part = 0 })) }
         for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
+        if saves.available {
+            items.append(NavItem(id: "slot", slider: true, adjust: { saves.step($0) }))
+            items.append(NavItem(id: "slotNew", activate: { saves.addEmpty() }))
+            items.append(NavItem(id: "slotCopy", activate: { saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: saves.activeName)) }))
+        }
         for section in m.sections {
             for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
                 switch s.kind {

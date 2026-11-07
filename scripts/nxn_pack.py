@@ -443,8 +443,9 @@ def scan_nsps(folder):
             if kind == 'update' and ver in ('', 'v0'):
                 # An update is never version 0. Without a name or CNMT version it would collide with the base's "v0",
                 # the pair would look like one file and the base would be packed as if no update existed -- which is what
-                # happened to Balatro's update NSP. "v?" sorts above v0, so the update is still the newest to pack.
-                ver = 'v?'
+                # happened to Balatro's update NSP. "vupd" is still taken as the update to pack when it is the only one; no "?",
+                # which Windows refuses in the log and folder names built from the version (CloverPit's [1.4.2] update).
+                ver = 'vupd'
         else:
             # an XCI, or an NSP without the metadata XML: fall back to the name, then to what an earlier run recorded, and
             # to the title ID's low bits for the kind
@@ -470,7 +471,7 @@ def scan_nsps(folder):
         a = apps.setdefault(key, {'base': None, 'updates': {}, 'dlc': [], 'all': []})
         a['all'].append((kind, ver, p))
         if kind == 'base': a['base'] = p
-        elif kind == 'update': a['updates'][ver or 'v?'] = p
+        elif kind == 'update': a['updates'][ver or 'vupd'] = p
         else: a['dlc'].append(p); a.setdefault('dlc_ids', []).append((int(tid, 16), ver, p))
     return apps
 
@@ -536,6 +537,13 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         if dst.exists(): shutil.rmtree(dst, ignore_errors=True)
         tmp.replace(dst)
         dirs[ver] = dst
+    # Modules built for system 22 and later may keep their segments ZBIC-compressed (Super Bunny Man 1.3.0's main) where every
+    # tool here reads LZ4: store those segments uncompressed once, before anything reads the modules (dm/tools/nso_zbic.py)
+    sys.path.insert(0, str(TOOLS))
+    import nso_zbic
+    for ver, dst in dirs.items():
+        done = nso_zbic.normalize_exefs(dst / 'ExeFS') if (dst / 'ExeFS').is_dir() else []
+        if done: say('%s: %s had ZBIC-compressed segments (system 22 and later), stored uncompressed' % (ver, ', '.join(done)))
     return dirs
 
 
@@ -838,12 +846,28 @@ def fill_mem_used(patched, mods, gdir, rows):
 def step_rewrite(exe_dir, mods, out, work, force=False):
     # patch_nso.py is pure Python (capstone + lz4): its stubs are hand-assembled machine code, not built at run time,
     # so no C compiler is needed here even though its comments mention clang.
+    # An sdk build no patch file names gets the address-space cuts every registered build takes, found by their
+    # instructions (dm/tools/sdk_auto_cuts.py: the 1 GB node area, pre-SDK 20 size-class alignment). patch_nso.py loads
+    # the file it writes from DM_GAMES_DIR. sdk.auto_cuts beside the output records what the sdk was rewritten with, so
+    # an sdk rewritten before (or with other cuts) is rewritten again on its own.
+    sys.path.insert(0, str(TOOLS))
+    import sdk_auto_cuts
+    games_dirs = [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d]
+    auto_dir, auto_line, auto_text = sdk_auto_cuts.prepare(str(exe_dir), mods, str(work / 'auto_patches'), str(DM.parent), games_dirs)
+    say(auto_line)
+    env = {'DM_GAMES_DIR': os.pathsep.join(games_dirs + [auto_dir])} if auto_dir else None
+    marker = out / 'sdk.auto_cuts'
+    old = marker.read_text(encoding='utf-8') if marker.is_file() else ''
+    todo = list(mods)
     if not force and all((out / (m + '.patched.bin')).is_file() and (out / (m + '.fixups.tsv')).is_file() for m in mods):
-        say('rewritten modules already there'); return
+        if 'sdk' not in mods or old == auto_text:
+            say('rewritten modules already there'); return
+        say('sdk auto cuts changed: rewriting sdk again'); todo = ['sdk']
     out.mkdir(parents=True, exist_ok=True)
-    for m in mods:
-        run([PY, TOOLS / 'patch_nso.py', exe_dir / m, out, m],
+    for m in todo:
+        run([PY, TOOLS / 'patch_nso.py', exe_dir / m, out, m], env=env,
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
+    if 'sdk' in todo: marker.write_text(auto_text, encoding='utf-8', newline='\n')
 
 
 def precheck(game, prof_dir, folder):
@@ -913,6 +937,41 @@ def shader_split_hint(text):
     return None
 
 
+GLSLC_MAGIC = b'\x91\x68\x86\x19'
+
+
+def take_glslc_capture(folder, game):
+    """Copy the GLSLC outputs recorded on the phone (<hash>.glslc) to <version dir>/glslc_capture, where shader_split.py reads
+    them. Only whole outputs: the magic, and the length at +0x44 matching the file (a run can be killed while it writes one).
+    Returns how many were taken."""
+    dst = game / 'glslc_capture'
+    if not folder: return 0
+    src = Path(folder).resolve()
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    n = bad = 0
+    for f in sorted(src.glob('*.glslc')) if src.is_dir() else []:
+        d = f.read_bytes()
+        if len(d) < 0x48 or d[:4] != GLSLC_MAGIC or struct.unpack_from('<I', d, 0x44)[0] != len(d): bad += 1; continue
+        (dst / f.name).write_bytes(d); n += 1
+    if bad: warn('%d recorded GLSLC output(s) in %s are cut short or not GLSLC outputs: left out' % (bad, src))
+    return n
+
+
+def glslc_needed(work):
+    """shader_split.py says so: main holds GLSL sources and calls glslcCompile, and nothing recorded what it compiled"""
+    log = work / 'logs' / 'shader_split.log'
+    try: return 'imports glslcCompile, but there are no captured GLSLC outputs' in log.read_text(encoding='utf-8', errors='replace')
+    except OSError: return False
+
+
+def shader_rows(tb):
+    """how many shaders the split found (rows of its shader_map.tsv)"""
+    try: rows = [l for l in (tb / 'shader_map.tsv').read_text(encoding='utf-8', errors='replace').splitlines() if l.strip() and not l.startswith('#')]
+    except OSError: return 0
+    return max(0, len(rows) - 1)
+
+
 def step_shaders(game, prof_dir, tables, work, tid, force=False):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
@@ -947,8 +1006,18 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # Completeness is decided by the per-shader results dmsh_build.py writes, not by "some file is there": a run that was
     # interrupted leaves libraries behind, and trusting them would ship a package that only fails on the phone.
     cache = work / 'shader' / 'cache'
+    nometal = GFX / 'nometal_run.py'
+    # Which compiler made the libraries: Apple's Metal Developer Tools for Windows compile them for real (the phone loads
+    # them at once), without them they hold source. Installing or removing the tools changes the chain version, so a
+    # rebuild goes to a new b-<version> folder; the libraries already there count only when they were made the same way.
+    mfile = work / 'shader' / 'compiler.txt'
+    mode = subprocess.run([PY, nometal, '--mode'], capture_output=True, text=True).stdout.strip() if nometal.is_file() else ''
+    if mode.startswith('windows-metal'): say('compiling shaders on this computer with Apple\'s Metal Developer Tools for Windows')
     def done():
-        marks = sorted(cache.glob('b-*/_b_build.json'))
+        try: same = mfile.read_text(encoding='utf-8').strip() == mode
+        except OSError: same = mode == 'source' or not mode
+        if not same: return False
+        marks = sorted(cache.glob('b-*/_b_build.json'), key=lambda p: p.stat().st_mtime)
         if not marks: return False
         try: res = json.load(open(marks[-1], encoding='utf-8'))
         except Exception: return False
@@ -960,7 +1029,6 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         say('shader libraries already there'); return
     need_tool('spirv-cross', 'translate SPIR-V to Metal Shading Language',
               'install Vulkan SDK 1.4.357.0 (its Bin/ holds spirv-cross.exe) or build SPIRV-Cross at tag vulkan-sdk-1.4.357.0')
-    nometal = GFX / 'nometal_run.py'
     if not nometal.is_file():
         die('dm/gfx/tools/nometal_run.py is missing (it is what makes this work without Apple\'s compiler)')
     # dmsh_build.py refuses to start when the toolchain does not match dmsh_chain.lock, which on a machine using the
@@ -985,6 +1053,7 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
     n = len(list(iosout.glob('b-*/*_b.metallib'))) if iosout.is_dir() else 0
     if not n: die('no shader libraries were produced (see %s)' % (work / 'logs' / 'shaders.log'))
+    mfile.write_text(mode + '\n', encoding='utf-8')
     say('%d shader libraries' % n)
 
 
@@ -1135,7 +1204,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
         if not src.is_file(): src = work / 'shader' / 'tables' / n
         if src.is_file(): shutil.copyfile(src, A / 'dm' / n)
 
-    step_launcher(tid, patched, game, A, work)
+    # The launcher's NVN-only rows (Metal 4 pipelines, pipeline prebuild, encode thread, frame buffering: settings.tsv
+    # gfxapi:nvn) are shown only when settings.py is told the game's graphics API, which upstream's build_ipa.sh sets as
+    # GFXAPI. Without it those rows were missing from every package, so the Metal 4 pipelines switch could not be turned on.
+    gfx = 'nvn' if msl_dir.is_dir() and any(msl_dir.glob('*_b.metallib')) else ''
+    step_launcher(tid, patched, game, A, work, gfx)
 
     # The shell was built from the placeholder profile, so every value compiled into its host is the placeholder's. The
     # game's own values are written into dm/env.txt here: main.m turns that into environment variables before the host
@@ -1143,6 +1216,14 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # does not crash at once -- the game asks for the wrong heap and aborts in SetHeapSize (Hades II asked for pool - 64 MB
     # instead of pool - 108 MB and overflowed the pool by 44 MB).
     env_lines = env_for(rows)
+    # The npdm's main thread stack size: the host runs the main thread on a 64 MB stack and reports this size instead (hle_os.c GetCurrentStackInfo),
+    # since Godot sizes its worker stacks from it (Unrailed 2: 1 MB on the Switch, 64 MB x 28 workers on the host ran the heap out)
+    try:
+        npdm = (game / 'ExeFS' / 'main.npdm').read_bytes()
+        if npdm[:4] == b'META' and len(npdm) >= 0x20:
+            mts = struct.unpack_from('<I', npdm, 0x1C)[0]
+            if mts: env_lines.append('DM_MAIN_STACK=%#x' % mts)
+    except OSError: pass
     if env_lines:
         (A / 'dm' / 'env.txt').write_text('\n'.join(env_lines) + '\n', encoding='utf-8')
         say('dm/env.txt: ' + ', '.join(env_lines))
@@ -1184,7 +1265,7 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     return A
 
 
-def step_launcher(tid, patched, game, A, work):
+def step_launcher(tid, patched, game, A, work, gfxapi=''):
     """The settings screen that upstream put in front of the game (Launcher.swift) is drawn from dm/launcher.json, which
     dm/games/settings.py writes: the rows of dm/games/settings.tsv whose condition holds for this game, with its defaults.
 
@@ -1198,8 +1279,10 @@ def step_launcher(tid, patched, game, A, work):
         warn('no control.nacp beside the RomFS: no dm/launcher.json, so the game starts without the settings screen')
         return
     out = A / 'dm' / 'launcher.json'
+    env = dict(os.environ, PYTHONUTF8='1')
+    if gfxapi: env['GFXAPI'] = gfxapi
     r = subprocess.run([str(PY), str(s), tid, str(patched), str(nacp), str(out)],
-                       capture_output=True, text=True, env=dict(os.environ, PYTHONUTF8='1'))
+                       capture_output=True, text=True, env=env)
     log = work / 'logs' / 'launcher.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text((r.stdout or '') + (r.stderr or ''), encoding='utf-8', errors='replace')
@@ -1251,6 +1334,10 @@ def main():
                     help="an OpenGL game's captured shaders (<key>.vert / <key>.frag, which DM_GL_CAPTURE writes on the "
                          'phone): translated to Metal sources and packed, so the game draws. Needs glslangValidator and '
                          'spirv-cross on PATH or in --tools.')
+    ap.add_argument('--glslc-capture', default='', metavar='FOLDER',
+                    help="the GLSLC outputs an NVN game compiled at run time on the phone (<hash>.glslc, which DM_GLSLC_CAPTURE "
+                         'writes; Unrailed 2, Godot): split and translated like the shaders the game files hold. Without it '
+                         'such a game is packed with what its files hold and records the rest on the phone.')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
                          'modules and the shaders (it is several times the size of the game)')
@@ -1502,8 +1589,15 @@ def main():
     # the four tables shader_split.py writes (upstream tuple, pso_pairs.tsv included since it is what the pipeline prebuild
     # reads; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
+    glslc_record = False   # the package records the GLSLC outputs the game compiles, on the phone (Documents/glslc_capture/<title ID>)
     if route == 'nvn':
-        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force)
+        glslc_n = take_glslc_capture(a.glslc_capture, game)
+        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n))
+        glslc_record = bool(a.glslc_capture) or glslc_needed(work)
+        if glslc_record:
+            say('this game compiles shaders at run time with GLSLC: %s; the phone keeps recording the ones it compiles '
+                '(Documents/glslc_capture/%s), and the next pack takes them with --glslc-capture'
+                % ('%d recorded outputs packed' % glslc_n if glslc_n else 'none recorded yet', tid))
         if derived_dir is not None:
             # The shader tool reads its tables from the profile it loads, and a derived profile has none (the split just made
             # them). Without this it falls back to the registered profile's tables, which name shader packs this version lacks.
@@ -1529,7 +1623,7 @@ def main():
             say('profile tables replaced by the ones split from these files: %s' % ov)
     if a.stop_after == 'shaders': return say('stopped after the shader split')
 
-    if route != 'nvn':
+    if route != 'nvn' or (glslc_record and not shader_rows(tb)):
         # The b- directory is what the app looks for (main.m points DM_MSL_DIR at <App>/msl, and the chain version names one
         # directory inside it). Beyond the stamp it is empty here: a GL package's shaders are under msl/gl, which is where
         # the GL layer reads them from, and are copied there after assembly.
@@ -1538,6 +1632,7 @@ def main():
         (msl_out / 'inputs.tsv').write_text('game\t%s\n' % tid, encoding='utf-8')
         if gl_out is None and vk_out is None:
             say('no shader library: the app will run without drawing until its shaders are captured')
+            if route == 'nvn': warn('no shader in the game files and none recorded yet: play it once on the phone (no picture), then pack again')
     else:
         # The chain version is not resolved here on purpose. dmsh_chain.py's command-line modes fingerprint the toolchain,
         # which needs the translator's .dll files -- absent from a single-file build -- and the version it writes into a
@@ -1549,7 +1644,8 @@ def main():
         xlate = next((c for c in cands if c.is_file()), None)
         if not xlate: die('no shader translator: pass --tools <folder> with dmsh_xlate, or build it with dotnet publish')
         step_translate(pkg_dir, work, xlate, iosout, tid, a.force)
-        libs = sorted(p for p in iosout.glob('b-*') if p.is_dir()) if iosout.is_dir() else []
+        # newest first: after the compiler changes, the old b-<version> folder is still there beside the new one
+        libs = sorted((p for p in iosout.glob('b-*') if p.is_dir()), key=lambda p: p.stat().st_mtime) if iosout.is_dir() else []
         if not libs: die('no shader library directory under %s' % iosout)
         msl_out = libs[-1]
         say('shader libraries: %s (%d)' % (msl_out.name, len(list(msl_out.glob('*_b.metallib')))))
@@ -1570,6 +1666,12 @@ def main():
         lines = [l for l in lines if not l.startswith('DM_GL_CAPTURE=')] + ['DM_GL_CAPTURE=gl_capture/%s' % tid]
         env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         say('dm/env.txt: DM_GL_CAPTURE=gl_capture/%s (the phone records the GLSL the game compiles there)' % tid)
+    if glslc_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_GLSLC_CAPTURE=')] + ['DM_GLSLC_CAPTURE=glslc_capture/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_GLSLC_CAPTURE=glslc_capture/%s (the phone records the GLSLC outputs the game compiles there)' % tid)
     if gl_out is not None:
         # <App>/msl/gl: hle_gl.m reads gl_shaders.tsv and gl/src from DM_MSL_DIR itself, not from the chain version's directory.
         dst = A / 'msl' / 'gl'

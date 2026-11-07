@@ -91,6 +91,7 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Found on:** [Fire Emblem Engage](../../dm/games/0100A6301214E000/README.md): the prologue battle crash (scripted run, about 357 s; a 12-minute scripted run now plays through the battle) and the idle attract demo crash after about 220 s (from about 180 s 32-bit mesh indices also turned up inside Unity's texture objects). With the cut an 850 s idle run is clean, with no corrupted texture objects; with the old SDK the same run dies at 159 s in Unity's heap allocator.
 - **Check:** probe the SDK's `VammManager::AllocateAddressRegion` at its success path and `FreeAddressRegion` after its prologue, and sum the live regions by caller ([Measuring address regions and commits](#measuring-address-regions-and-commits)).
 - **Note:** to reproduce the old state: `boot.sh <log> 245` with no input on an SDK rewritten without the cut.
+- **Unregistered builds:** the packers run `dm/tools/sdk_auto_cuts.py` before the rewrite. For an `sdk` build no patch file names, it finds the node-area movs (and, before SDK 20, the size-class alignment movs just after them; on SDK 7 / 8 only the 1 GB class, an `orr`, which becomes 32 MB) by their instructions. When each is found exactly once, it writes the same cuts to `auto_patches/sdk_auto/patches.py`, which `patch_nso.py` loads from `DM_GAMES_DIR`. Toasterball (`addr=0xffffe0`, +4.26 of 4.38 GB with 1.51 GB mapped, SDK `d5a1029a…`) and Lethal League Blaze (a hang while loading at +4.06 GB, SDK `3ae34e68…`) were on unregistered builds.
 
 ### 1 GB alignment of regions of 1 GB and more
 
@@ -196,6 +197,13 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Cause:** Unreal allocates the stacks of the threads it creates with FMemory (OCTOPATH TRAVELER II's game thread: `nnMain` mallocs it with 4 KB alignment at `main+0x544`; its FRunnableThreads take theirs from inside larger allocations), and `CreateThread` moves such a stack into the stack region with `svcMapMemory`. With [the host allocator](#unreals-fmallocbinned3-replaced-by-the-host-allocator) that memory is a host malloc zone outside the guest block, and `MapMemory` takes only a backed source: the heap, mapped alias pages or a module's writable data (`map_source_backed`, `hle_svc.c`).
 - **Fix:** with the host allocator installed, a source outside the guest block that the host has mapped readable and writable is taken too (`dm_ue_heap_owns`, `hle_uemalloc.c`; `vm_region_64`, since malloc has no cheap lookup from an interior pointer). A refused map now logs its arguments.
 - **Found on:** [OCTOPATH TRAVELER II](../../dm/games/0100A3501946E000/README.md), after the stricter source check of `MapMemory`; [Pikmin 4](../../dm/games/0100B7C00933A000/README.md) boots with the same host.
+
+### Thread stacks that do not fit the stack region
+
+- **Symptom:** `nn::diag` abort with Result 0 at `nnMain`, under `nn::os::CreateThread` → `ThreadManagerImplByHorizon::MapAliasStack`, with no `[RED]` line (the SDK never reaches `MapMemory`).
+- **Cause:** `CreateThread` moves each stack into the stack region at a random address with 64 KB guards (`StackGuardManager::MapAtRandomAddress` → `AllocateSpace`, which gives up after 0x200 tries and makes `MapAliasStack` abort). Godot makes 64 MB thread stacks; the fifth one found no room in the 256 MB stack region provisional profiles used to get.
+- **Fix:** provisional profiles get a 1 GB stack region (`STACK`, `dm/games/profile_guess.py`; Horizon's is 2 GB in a 39-bit address space), with the block grown by the same amount so the heap region keeps its size. A profile already made keeps its `mem_stack` until it is guessed again. Open: not yet run on the device.
+- **Found on:** Unrailed 2: Back on Track (010593A5182E4000, Godot, SDK 20; provisional profile, no note).
 
 ### Unreal 5.6's page allocator never gives address space back
 
