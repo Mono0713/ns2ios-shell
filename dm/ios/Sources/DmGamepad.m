@@ -174,7 +174,7 @@ static BOOL shell_zh_hant(void) { NSString *l = NSLocale.preferredLanguages.firs
     BOOL _floatStick; CGPoint _lCentre;            // floating left stick, and its centre while held
     float _alpha;                                  // the editor's opacity, times the launcher's
     BOOL _editing; int _sel;
-    UIView *_editPanel; UILabel *_selName; UISlider *_sizeSlider, *_alphaSlider; UISwitch *_hideSwitch; UISegmentedControl *_stickSeg;
+    UIView *_editPanel; NSLayoutConstraint *_panelX, *_panelY; UILabel *_selName; UISlider *_sizeSlider, *_alphaSlider; UISwitch *_hideSwitch; UISegmentedControl *_stickSeg;
     CAShapeLayer *_selRing;
     NSMapTable<UITouch *, NSNumber *> *_editGroup; NSMapTable<UITouch *, NSValue *> *_editPrev;
     NSTimer *_swapTimer;                           // holding the layout button opens the editor
@@ -644,7 +644,7 @@ static NSString *groupName(int g, BOOL zh) {
     if (!_editing) return;
     _editing = NO; _sel = -1;
     [_editGroup removeAllObjects]; [_editPrev removeAllObjects];
-    [_editPanel removeFromSuperview]; _editPanel = nil;
+    [_editPanel removeFromSuperview]; _editPanel = nil; _panelX = _panelY = nil;
     [self saveAdj]; [self applyLayout]; [self setNeedsLayout];
 }
 - (int)groupAt:(CGPoint)p {
@@ -724,19 +724,23 @@ static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     [p addSubview:st];
     const CGFloat W = MIN(340, self.bounds.size.width - 32), pad = 18;
     [NSLayoutConstraint activateConstraints:@[[st.topAnchor constraintEqualToAnchor:p.topAnchor constant:pad], [st.leadingAnchor constraintEqualToAnchor:p.leadingAnchor constant:pad],
-        [st.trailingAnchor constraintEqualToAnchor:p.trailingAnchor constant:-pad], [st.widthAnchor constraintEqualToConstant:W - 2 * pad]]];
-    CGSize sz = [st systemLayoutSizeFittingSize:CGSizeMake(W - 2 * pad, 0) withHorizontalFittingPriority:UILayoutPriorityRequired verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
-    p.frame = CGRectMake(0, 0, W, sz.height + 2 * pad); p.center = CGPointMake(CGRectGetMidX(self.bounds), CGRectGetMidY(self.bounds));
+        [st.trailingAnchor constraintEqualToAnchor:p.trailingAnchor constant:-pad], [st.bottomAnchor constraintEqualToAnchor:p.bottomAnchor constant:-pad]]];
+    // Auto Layout sizes the card from its contents when it is laid out (a height measured beforehand came out short and cut the buttons off); dragging moves its centre
     [p addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragPanel:)]];
+    p.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:p]; _editPanel = p;
+    _panelX = [p.centerXAnchor constraintEqualToAnchor:self.centerXAnchor]; _panelY = [p.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
+    [NSLayoutConstraint activateConstraints:@[[p.widthAnchor constraintEqualToConstant:W], _panelX, _panelY]];
     [self updatePanel];
 }
 - (void)dragPanel:(UIPanGestureRecognizer *)g {
-    CGPoint d = [g translationInView:self]; _editPanel.center = CGPointMake(_editPanel.center.x + d.x, _editPanel.center.y + d.y);
+    CGPoint d = [g translationInView:self]; _panelX.constant += d.x; _panelY.constant += d.y;
     [g setTranslation:CGPointZero inView:self]; [self clampPanel];
 }
-- (void)clampPanel { CGRect f = _editPanel.frame, b = self.bounds;
-    f.origin.x = fmin(fmax(f.origin.x, 0), b.size.width - f.size.width); f.origin.y = fmin(fmax(f.origin.y, 0), b.size.height - f.size.height); _editPanel.frame = f; }
+- (void)clampPanel {   // keep the card on screen: its centre moves at most half the free room either way
+    CGSize c = [_editPanel systemLayoutSizeFittingSize:UILayoutFittingCompressedSize], b = self.bounds.size;
+    CGFloat mx = fmax(0, (b.width - c.width) / 2), my = fmax(0, (b.height - c.height) / 2);
+    _panelX.constant = fmin(fmax(_panelX.constant, -mx), mx); _panelY.constant = fmin(fmax(_panelY.constant, -my), my); }
 - (void)updatePanel {
     if (!_editPanel) return;
     _selName.text = groupName(_sel, shell_zh_hant());
