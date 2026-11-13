@@ -1,0 +1,54 @@
+diff --git a/dm/host/hle_friends.c b/dm/host/hle_friends.c
+--- a/dm/host/hle_friends.c
++++ b/dm/host/hle_friends.c
+@@ -60,7 +60,46 @@
+ // Online play sessions (DRAGON QUEST XI S)
+ HLE_FORCE("_ZN2nn7friends28DeclareOpenOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_OpenSession, const void *uid) { (void)uid; return RES_FAIL; }
+ HLE_FORCE("_ZN2nn7friends29DeclareCloseOnlinePlaySessionERKNS_7account3UidE", "online play session unavailable (cut)", Result, h_fr_CloseSession, const void *uid) { (void)uid; return RES_FAIL; }
+-// Presence
+-HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeERKNS_7account3UidE", "presence unavailable (cut)", Result, h_fr_UpInit, void *self, const void *uid) { (void)self; (void)uid; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence unavailable (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence unavailable (cut)", Result, h_fr_UpCommit, void *self) { (void)self; return RES_FAIL; }
++// Presence: success. A UserPresence lives in the game's own object, and on a console without a network these still succeed (the friends service is local),
++// so a game may take a failure as fatal: Heave Ho's SwitchAccountManager (GameSystems.Awake) is the suspect -- GameManager.Awake later loads its fonts
++// through a ResourceManager that was never made (main+0x1077f28). Nothing is sent anywhere
++HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeERKNS_7account3UidE", "presence kept locally (cut)", Result, h_fr_UpInit, void *self, const void *uid) { (void)self; (void)uid; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends12UserPresence14SetDescriptionEPKc", "presence kept locally (cut)", Result, h_fr_UpDesc, void *self, const char *s) { (void)self; (void)s; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends12UserPresence6CommitEv", "presence kept locally (cut)", Result, h_fr_UpCommit, void *self) { (void)self; return RES_OK; }
++
++// ---------- Overloads without a Uid and the rest of Unity's Switch plugin (SUPER BOMBERMAN R 2, All You Need Is Help, Splatterbot import the same set) ----------
++// SUPER BOMBERMAN R 2 calls EnsureBlockedUserListAvailable(AsyncContext*) about 20 s in (main+0x160ea48); the SDK's own version connected to friend:u through sm and aborted with
++// 0xe15 (ShimLibraryGlobal::Initialize). Ensure* answer like an offline console: the request is "started", the context's event fires at once and its GetResult reports the failure
++// (above). Check* say "not available", the lists are empty
++HLE_FORCE("_ZN2nn7friends12AsyncContext6CancelEv", "async context: nothing to cancel (cut)", Result, h_fr_AcCancel, void *self) { (void)self; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends30EnsureBlockedUserListAvailableEPNS0_12AsyncContextE", "blocked user list (cut): the request fails through its context", Result, h_fr_BlkEnsure, void *ctx) { (void)ctx; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends30EnsureBlockedUserListAvailableEPNS0_12AsyncContextERKNS_7account3UidE", "blocked user list (cut): the request fails through its context", Result, h_fr_BlkEnsure2,
++          void *ctx, const void *uid) { (void)ctx; (void)uid; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends32CheckBlockedUserListAvailabilityEPb", "blocked user list unavailable (cut)", Result, h_fr_BlkAvail, uint8_t *out) { if (out) *out = 0; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends32CheckBlockedUserListAvailabilityEPbRKNS_7account3UidE", "blocked user list unavailable (cut)", Result, h_fr_BlkAvail2, uint8_t *out, const void *uid) {
++    (void)uid; if (out) *out = 0; return RES_OK;
++}
++HLE_FORCE("_ZN2nn7friends25EnsureFriendListAvailableEPNS0_12AsyncContextE", "friend list (cut): the request fails through its context", Result, h_fr_ListEnsure1, void *ctx) { (void)ctx; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends27CheckFriendListAvailabilityEPb", "friend list unavailable (cut)", Result, h_fr_ListAvail1, uint8_t *out) { if (out) *out = 0; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends13GetFriendListEPiPNS_7account23NetworkServiceAccountIdERKNS2_3UidEiiRKNS0_12FriendFilterE", "friend list is empty (cut)", Result, h_fr_ListIds2,
++          int *count, void *out, const void *uid, int off, int n, const void *filt) { (void)out; (void)uid; (void)off; (void)n; (void)filt; if (count) *count = 0; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends13GetFriendListEPiPNS_7account23NetworkServiceAccountIdEiiRKNS0_12FriendFilterE", "friend list is empty (cut)", Result, h_fr_ListIds,
++          int *count, void *out, int off, int n, const void *filt) { (void)out; (void)off; (void)n; (void)filt; if (count) *count = 0; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends14GetProfileListEPNS0_12AsyncContextEPNS0_7ProfileEPKNS_7account23NetworkServiceAccountIdEi", "profile query fails (cut)",
++          Result, h_fr_GetProfileList1, void *ctx, void *out, const void *ids, int n) { (void)ctx; (void)out; (void)ids; (void)n; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends16UpdateFriendInfoEPNS0_6FriendEPKNS_7account23NetworkServiceAccountIdEi", "friend info update fails (cut)",
++          Result, h_fr_UpdateFriendInfo1, void *f, const void *ids, int n) { (void)f; (void)ids; (void)n; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends6Friend6UpdateEv", "friend update fails (cut)", Result, h_fr_FriendUpdate, void *self) { (void)self; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends29GetPlayHistoryRegistrationKeyEPNS0_26PlayHistoryRegistrationKeyEb", "play history key unavailable (cut)",
++          Result, h_fr_GetPHKey1, void *k, int local) { (void)k; (void)local; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends28DeclareOpenOnlinePlaySessionEv", "online play session unavailable (cut)", Result, h_fr_OpenSession1, void) { return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends29DeclareCloseOnlinePlaySessionEv", "online play session unavailable (cut)", Result, h_fr_CloseSession1, void) { return RES_FAIL; }
++// Presence of the open user (no Uid): kept locally, as the Uid overload above
++HLE_FORCE("_ZN2nn7friends12UserPresence10InitializeEv", "presence kept locally (cut)", Result, h_fr_UpInit1, void *self) { (void)self; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends12UserPresence28DeclareOpenOnlinePlaySessionEv", "presence kept locally (cut)", Result, h_fr_UpOpen, void *self) { (void)self; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends12UserPresence29DeclareCloseOnlinePlaySessionEv", "presence kept locally (cut)", Result, h_fr_UpClose, void *self) { (void)self; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends12UserPresence5ClearEv", "presence kept locally (cut)", Result, h_fr_UpClear, void *self) { (void)self; return RES_OK; }
++// Notification queue of the open user: as the Uid overload, its Initialize fails and nothing is ever queued
++HLE_FORCE("_ZN2nn7friends17NotificationQueue10InitializeEv", "notification queue init fails (cut)", Result, h_fr_NqInit1, void *self) { (void)self; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7friends17NotificationQueue5ClearEv", "notification queue is always empty (cut)", Result, h_fr_NqClear, void *self) { (void)self; return RES_OK; }
++HLE_FORCE("_ZN2nn7friends17NotificationQueue8FinalizeEv", "notification queue has no session to close (cut)", void, h_fr_NqFini, void *self) { (void)self; }

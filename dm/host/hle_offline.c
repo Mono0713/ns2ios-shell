@@ -204,3 +204,11 @@ HLE_FORCE("_ZN2nn5album21GetSharePostedLastUrlEPcmRKNS0_7ShareIdE", "URL of the 
 HLE_FORCE("_ZN2nn5album14ShowAlbumFilesEv", "album applet: not shown", Result, h_album_Show, void) { return RES_FAIL; }
 // Pokémon Legends: Z-A (SDK 19): a screenshot of the current frame, taken by the capture service
 HLE_FORCE("_ZN2nn5album21SaveCurrentScreenshotENS0_17AlbumReportOptionE", "screenshot of the current frame (capsrv): no album, fails", Result, h_album_SaveCur, int report) { (void)report; LOG("album::SaveCurrentScreenshot (no album)"); return RES_FAIL; }
+
+// ---------- ngc: the rest of Unity's Switch plugin (SUPER BOMBERMAN R 2, All You Need Is Help, Splatterbot). The host's filter has no word list: nothing is profanity ----------
+HLE_FORCE("_ZN2nn3ngc15ProfanityFilter15SkipAtSignCheckENS1_8SkipModeE", "profanity filter option; nothing is checked whatever the mode", void, h_ngc_SkipAt, void *self, int mode) { (void)self; (void)mode; }
+HLE_FORCE("_ZN2nn3ngc15ProfanityFilter22SetNormalizationOptionEi", "profanity filter option; nothing is checked whatever the option", void, h_ngc_Norm, void *self, int opt) { (void)self; (void)opt; }
+HLE_FORCE("_ZN2nn3ngc47CheckProfanityWordsInTextForPlatformRegionChinaEPbPKc", "profanity check (China region): no profanity", Result, h_ngc_CheckCn, uint8_t *out, const char *text) {
+    (void)text; if (out) *out = 0; return RES_OK;
+}
+HLE_FORCE("_ZN2nn3ngc46MaskProfanityWordsInTextForPlatformRegionChinaEPc", "profanity masking (China region): nothing is masked", Result, h_ngc_MaskCn, char *text) { (void)text; return RES_OK; }
