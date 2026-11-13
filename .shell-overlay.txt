@@ -17,6 +17,7 @@
 + dm/gfx/tools/gl_prebuilt.py              # a LOVE game's GLSL from its own files: what DM_GL_CAPTURE would have written
 + dm/ios/Sources/dm_shader_prep.m         # first-launch shader compilation page
 + dm/ios/tools/shell_build.sh             # builds the game-free shell
++ dm/host/hle_eos.c                      # Epic Online Services stand-in: an EOS SDK NRO a game loads answers as an offline console (Unity bindings wait for a platform otherwise)
 + dm/ios/DmIOS.entitlements               # increased-memory-limit: the shell is signed ad hoc with it so install tools see it
 + dm/ios/Sources/shell_slots.c          # the one player-slot table: physical controllers and phones take their players from it
 + dm/ios/Sources/shell_slots.h
@@ -56,6 +57,9 @@
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL); profile mem_map_limit too (DM_MEM_MAP_LIMIT)
 ~ dm/host/hle_oe.c              # profile perf_mode overridable at run time (DM_PERF_BOOST): the shell compiles the placeholder's 0; logs the language the game is given (once)
 ~ dm/host/hle_os.c              # profile alloc_big_align overridable at run time (DM_ALLOC_BIG_ALIGN): likewise
+~ dm/host/hle_ro.c              # an EOS SDK image gets the hle_eos.c stand-in instead of a refusal
+~ dm/host/hle_friends.c         # friends overloads without a Uid (Unity's plugin: SUPER BOMBERMAN R 2)
+~ dm/host/hle_offline.c         # ngc filter options and China-region checks (Unity's plugin)
 ~ dm/host/main.c                # profile game_args overridable at run time (DM_GAME_ARGS): the shell compiles the placeholder's empty string
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name (DM_MSL_DIR first); render_cond / tex_dyn_slots / tex_dirty_upload read from the environment
 ~ dm/gfx/nvn/hle_nvn.c          # profile tex_flush_upload / tex_dirty_upload / render_cond overridable at run time: the shell compiles the placeholder's 0
