@@ -121,5 +121,8 @@ int shell_slot_layout(const void *owner) {
 void shell_slots_on_change(void (*hook)(void)) { g_hook = hook; }
 void shell_slot_input(int p, uint64_t buttons, int32_t lx, int32_t ly) { void (*h)(int, uint64_t, int32_t, int32_t) = g_input; if (h && p >= 0 && p < DM_PLAYERS) h(p, buttons, lx, ly); }
 void shell_slots_on_input(void (*hook)(int, uint64_t, int32_t, int32_t)) { g_input = hook; }
+static void (*g_home)(int);
+void shell_slot_home(int p) { void (*h)(int) = g_home; if (h && p >= 0 && p < DM_PLAYERS) h(p); }
+void shell_slots_on_home(void (*hook)(int)) { g_home = hook; }
 void shell_slot_request_layout(int p, int xbox) { void (*h)(int, int) = g_layout_req; if (h) h(p, xbox != 0); else shell_slot_set_layout(p, xbox); }
 void shell_slots_on_layout_request(void (*hook)(int, int)) { g_layout_req = hook; }
