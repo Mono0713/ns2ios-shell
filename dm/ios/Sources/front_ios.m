@@ -61,6 +61,15 @@ void front_ios_audio_session(void);
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
 static UILabel *front_ios_fps_label(void);
+static NSString *game_name(void);
+
+// A view that lays itself out with a block (the TV panel's cards follow the iPad's size and orientation)
+@interface DmLayoutView : UIView
+@property (nonatomic, copy) void (^layout)(UIView *v);
+@end
+@implementation DmLayoutView
+- (void)layoutSubviews { [super layoutSubviews]; if (self.layout) self.layout(self); }
+@end
 
 @interface DmGameView : UIView
 @end
@@ -149,7 +158,7 @@ void front_ios_back_to_picker(void) {
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self layoutStage];
-    if (self.menuButton) { UIEdgeInsets in = self.view.safeAreaInsets; self.menuButton.frame = tv_on() ? CGRectMake(MAX(16, in.left), MAX(16, in.top), 88, 40) : CGRectMake(floor(self.view.bounds.size.width / 2) - 22, self.view.bounds.size.height - MAX(12, in.bottom) - 44, 44, 44); }   // handheld: bottom centre, the one place the touch controls leave free (ZL sits in the top corners, − / + and the layout button at the top centre)
+    if (self.menuButton) { UIEdgeInsets in = self.view.safeAreaInsets; self.menuButton.frame = tv_on() ? CGRectMake(MAX(32, in.left), MAX(32, in.top) + 8, 104, 44) : CGRectMake(floor(self.view.bounds.size.width / 2) - 22, self.view.bounds.size.height - MAX(12, in.bottom) - 44, 44, 44); }   // handheld: bottom centre, the one place the touch controls leave free (ZL sits in the top corners, − / + and the layout button at the top centre)
 }
 - (void)layoutStage {
     if (!self.game || !self.stage.superview) return;
@@ -190,10 +199,11 @@ void front_ios_back_to_picker(void) {
         [b addTarget:self action:@selector(menuTapped) forControlEvents:UIControlEventTouchUpInside];
         self.menuButton = b; [self.view addSubview:b];   // above the pad
     }
-    [self.menuButton setTitle:tv ? (z ? @"選單" : @"Menu") : @"⌂" forState:UIControlStateNormal];
+    [self.menuButton setTitle:tv ? (z ? @" 選單" : @" Menu") : @"⌂" forState:UIControlStateNormal];
+    [self.menuButton setImage:tv ? [UIImage systemImageNamed:@"line.3.horizontal" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]] : nil forState:UIControlStateNormal];
     self.menuButton.titleLabel.font = [UIFont systemFontOfSize:tv ? 16 : 20 weight:UIFontWeightSemibold];
     self.menuButton.backgroundColor = [UIColor colorWithWhite:tv ? 1 : 0 alpha:tv ? 0.14 : 0.35];
-    self.menuButton.layer.cornerRadius = tv ? 10 : 12; self.menuButton.alpha = tv ? 1 : 0.6;
+    self.menuButton.layer.cornerRadius = tv ? 14 : 12; self.menuButton.alpha = tv ? 1 : 0.6;
     self.tvNote.hidden = !tv;
     [self.view bringSubviewToFront:self.menuButton];
     [self.view setNeedsLayout];
@@ -202,68 +212,154 @@ void front_ios_back_to_picker(void) {
 - (void)menuTapped { home_menu_toggle(); }
 // What the iPad shows while the picture is on the TV: the phones' QR code (friends scan it from the sofa) and who is playing, kept current;
 // the touch controls stay over it while no controller is connected
+static UIColor *player_color(int p) {   // each player's own colour (1-based), the same on every screen of the panel
+    static const uint32_t c[8] = {0x3478F6, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F};
+    uint32_t x = c[(p - 1) & 7]; return [UIColor colorWithRed:(x >> 16) / 255.0 green:((x >> 8) & 255) / 255.0 blue:(x & 255) / 255.0 alpha:1];
+}
+static UIView *glass_card(void) {   // a frosted rounded card with a hairline edge
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    g.layer.cornerRadius = 28; g.layer.cornerCurve = kCACornerCurveContinuous; g.clipsToBounds = YES;
+    g.layer.borderWidth = 1; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.1].CGColor;
+    g.contentView.backgroundColor = [UIColor colorWithWhite:1 alpha:0.04];
+    return g;
+}
+static UILabel *panel_label(CGFloat size, UIFontWeight w, CGFloat white) {
+    UILabel *l = [UILabel new]; l.font = [UIFont systemFontOfSize:size weight:w]; l.textColor = [UIColor colorWithWhite:white alpha:1]; return l;
+}
+// What the iPad shows while the picture is on the TV, like a console's second screen: the game and that it plays on the TV, a card to join with a phone
+// (the QR code), the eight player places with who holds each, the time and the battery. Landscape puts the two cards side by side, portrait stacks them
 static UIView *tv_panel(CGRect frame) {
     BOOL z = zh_ui();
-    UIView *v = [[UIView alloc] initWithFrame:frame]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    v.backgroundColor = UIColor.blackColor;
-    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(floor((frame.size.width - 640) / 2), floor((frame.size.height - 380) / 2), 640, 380)];
-    box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    [v addSubview:box];
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 640, 30)];
-    t.text = z ? @"遊戲畫面在電視上" : @"The game is on the TV"; t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold];
-    [box addSubview:t];
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(0, 34, 640, 40)]; sub.numberOfLines = 2;
-    sub.text = z ? @"按 Home 鍵叫出選單" : @"Press Home for the menu";
-    sub.textColor = [UIColor colorWithWhite:0.6 alpha:1]; sub.font = [UIFont systemFontOfSize:14];
-    [box addSubview:sub];
-    // the phones' QR code (phone_pads.c), white on a rounded card
-    int phone_pads_url(char *out, size_t cap);
-    char url[96] = "";
-    UIView *qrCard = [[UIView alloc] initWithFrame:CGRectMake(0, 92, 220, 220)];
-    qrCard.backgroundColor = UIColor.whiteColor; qrCard.layer.cornerRadius = 18; qrCard.layer.cornerCurve = kCACornerCurveContinuous;
-    [box addSubview:qrCard];
-    if (phone_pads_url(url, sizeof url)) {
-        CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[@(url) dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
-        CIImage *ci = f.outputImage; CGImageRef cg = ci ? [[CIContext context] createCGImage:ci fromRect:ci.extent] : NULL;
-        if (cg) {
-            UIImageView *img = [[UIImageView alloc] initWithFrame:CGRectInset(qrCard.bounds, 16, 16)]; img.image = [UIImage imageWithCGImage:cg]; CGImageRelease(cg);
-            img.layer.magnificationFilter = kCAFilterNearest; img.contentMode = UIViewContentModeScaleAspectFit;
-            [qrCard addSubview:img];
-        }
-    }
-    UILabel *qa = [[UILabel alloc] initWithFrame:CGRectMake(0, 322, 220, 40)]; qa.numberOfLines = 2; qa.textAlignment = NSTextAlignmentCenter;
-    qa.text = url[0] ? [NSString stringWithFormat:@"%@\n%s", z ? @"手機掃描加入" : @"Scan with a phone to join", url] : (z ? @"手機手把沒有開啟" : @"Phone controllers are off");
-    qa.textColor = [UIColor colorWithWhite:0.7 alpha:1]; qa.font = [UIFont systemFontOfSize:12];
-    [box addSubview:qa];
-    // the players: one small tag box per held player, from shell_players.m's list
-    UILabel *ph = [[UILabel alloc] initWithFrame:CGRectMake(260, 92, 380, 22)];
-    ph.text = z ? @"玩家" : @"Players"; ph.textColor = [UIColor colorWithWhite:0.6 alpha:1]; ph.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-    [box addSubview:ph];
-    UIView *list = [[UIView alloc] initWithFrame:CGRectMake(260, 120, 380, 240)]; [box addSubview:list];
-    __weak UIView *wl = list;
-    void (^fill)(NSArray *) = ^(NSArray *players) {
-        UIView *l = wl; if (!l) return;
-        for (UIView *x in l.subviews) [x removeFromSuperview];
-        if (!players.count) {
-            UILabel *n = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 380, 24)]; n.text = z ? @"還沒有手把或手機" : @"No controllers or phones yet";
-            n.textColor = [UIColor colorWithWhite:0.5 alpha:1]; n.font = [UIFont systemFontOfSize:15]; [l addSubview:n]; return;
-        }
-        CGFloat y = 0;
-        for (NSArray *r in players) {   // [player, kind, label, name, xbox]
-            if (r.count < 3 || y > 210) continue;
-            UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, 380, 26)];
-            UILabel *pn = [[UILabel alloc] initWithFrame:CGRectMake(0, 2, 40, 22)];
-            pn.text = [NSString stringWithFormat:@"P%@", r[0]]; pn.textAlignment = NSTextAlignmentCenter; pn.textColor = UIColor.whiteColor;
-            pn.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold]; pn.backgroundColor = [UIColor colorWithRed:0.25 green:0.5 blue:1 alpha:1];
-            pn.layer.cornerRadius = 6; pn.layer.masksToBounds = YES;
-            UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(50, 2, 330, 22)];
-            nm.text = [NSString stringWithFormat:@"%@ · %@", [r[1] intValue] == 2 ? (z ? @"手機" : @"Phone") : (z ? @"手把" : @"Controller"), r[2]];
-            nm.textColor = [UIColor colorWithWhite:0.85 alpha:1]; nm.font = [UIFont systemFontOfSize:15];
-            [row addSubview:pn]; [row addSubview:nm]; [l addSubview:row];
-            y += 30;
-        }
+    DmLayoutView *v = [[DmLayoutView alloc] initWithFrame:frame]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    v.backgroundColor = [UIColor colorWithRed:0.02 green:0.025 blue:0.04 alpha:1]; v.clipsToBounds = YES;
+    // the backdrop: two soft glows drifting slowly
+    CAGradientLayer *g1 = [CAGradientLayer layer], *g2 = [CAGradientLayer layer];
+    g1.type = kCAGradientLayerRadial; g1.colors = @[(id)[UIColor colorWithRed:0.2 green:0.4 blue:1 alpha:0.35].CGColor, (id)UIColor.clearColor.CGColor];
+    g2.type = kCAGradientLayerRadial; g2.colors = @[(id)[UIColor colorWithRed:0.6 green:0.25 blue:0.9 alpha:0.25].CGColor, (id)UIColor.clearColor.CGColor];
+    for (CAGradientLayer *g in @[g1, g2]) { g.startPoint = CGPointMake(0.5, 0.5); g.endPoint = CGPointMake(1, 1); [v.layer addSublayer:g]; }
+    // the header: the game's name and a live tag
+    UILabel *title = panel_label(34, UIFontWeightBold, 1); title.text = game_name(); title.adjustsFontSizeToFitWidth = YES; title.minimumScaleFactor = 0.6;
+    UIView *live = [UIView new]; live.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1]; live.layer.cornerRadius = 10; live.layer.cornerCurve = kCACornerCurveContinuous;
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(12, 9, 8, 8)]; dot.backgroundColor = [UIColor colorWithRed:0.19 green:0.82 blue:0.35 alpha:1]; dot.layer.cornerRadius = 4;
+    CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"opacity"]; pulse.fromValue = @1; pulse.toValue = @0.25; pulse.duration = 1.1; pulse.autoreverses = YES; pulse.repeatCount = HUGE_VALF;
+    [dot.layer addAnimation:pulse forKey:@"pulse"];
+    UILabel *lt = panel_label(13, UIFontWeightSemibold, 0.9); lt.text = z ? @"正在電視上播放" : @"Playing on the TV"; [lt sizeToFit]; lt.frame = CGRectMake(28, 0, lt.bounds.size.width, 26);
+    live.frame = CGRectMake(0, 0, 28 + lt.bounds.size.width + 12, 26); [live addSubview:dot]; [live addSubview:lt];
+    [v addSubview:title]; [v addSubview:live];
+    // the join card: the phones' QR code (phone_pads.c) on white
+    UIView *join = glass_card(); [v addSubview:join];
+    UILabel *jt = panel_label(20, UIFontWeightBold, 1); jt.text = z ? @"用手機加入" : @"Join with a phone";
+    UILabel *js = panel_label(14, UIFontWeightRegular, 0.65); js.text = z ? @"相機掃描，不用裝 App" : @"Scan with the camera, no app needed";
+    UIView *qr = [UIView new]; qr.backgroundColor = UIColor.whiteColor; qr.layer.cornerRadius = 20; qr.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageView *qi = [UIImageView new]; qi.layer.magnificationFilter = kCAFilterNearest; qi.contentMode = UIViewContentModeScaleAspectFit; [qr addSubview:qi];
+    UILabel *ju = [UILabel new]; ju.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular]; ju.textColor = [UIColor colorWithWhite:0.55 alpha:1]; ju.textAlignment = NSTextAlignmentCenter;
+    ju.adjustsFontSizeToFitWidth = YES;
+    NSString *url = nil; qi.image = phones_qr(&url);
+    ju.text = url ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off");
+    for (UIView *x in @[jt, js, qr, ju]) [((UIVisualEffectView *)join).contentView addSubview:x];
+    // the players card: eight places in two columns
+    UIView *pc = glass_card(); [v addSubview:pc];
+    UILabel *pt = panel_label(20, UIFontWeightBold, 1); pt.text = z ? @"玩家" : @"Players";
+    UILabel *pn = panel_label(14, UIFontWeightSemibold, 0.6); pn.textAlignment = NSTextAlignmentRight;
+    UIView *grid = [UIView new];
+    for (UIView *x in @[pt, pn, grid]) [((UIVisualEffectView *)pc).contentView addSubview:x];
+    // the footer: Home is the menu, the time and the battery
+    UIView *key = [UIView new]; key.layer.cornerRadius = 8; key.layer.cornerCurve = kCACornerCurveContinuous; key.layer.borderWidth = 1; key.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
+    UIImageView *ki = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"house.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]]];
+    ki.tintColor = [UIColor colorWithWhite:1 alpha:0.85]; ki.contentMode = UIViewContentModeCenter; [key addSubview:ki];
+    UILabel *kl = panel_label(14, UIFontWeightMedium, 0.6); kl.text = z ? @"選單" : @"Menu";
+    UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:0.85 alpha:1]; clock.textAlignment = NSTextAlignmentRight;
+    UIImageView *bat = [UIImageView new]; bat.contentMode = UIViewContentModeScaleAspectFit; bat.tintColor = [UIColor colorWithWhite:0.85 alpha:1];
+    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium]; batl.textColor = [UIColor colorWithWhite:0.6 alpha:1];
+    for (UIView *x in @[key, kl, clock, bat, batl]) [v addSubview:x];
+    UIDevice.currentDevice.batteryMonitoringEnabled = YES;
+    __weak UILabel *wc = clock, *wbl = batl; __weak UIImageView *wb = bat;
+    void (^tick)(void) = ^{
+        NSDateFormatter *df = [NSDateFormatter new]; df.dateFormat = @"HH:mm"; wc.text = [df stringFromDate:NSDate.date];
+        float lv = UIDevice.currentDevice.batteryLevel; UIDeviceBatteryState st = UIDevice.currentDevice.batteryState;
+        BOOL plug = st == UIDeviceBatteryStateCharging || st == UIDeviceBatteryStateFull;
+        NSString *sym = plug ? @"battery.100.bolt" : lv > 0.8 ? @"battery.100" : lv > 0.55 ? @"battery.75" : lv > 0.3 ? @"battery.50" : lv > 0.12 ? @"battery.25" : @"battery.0";
+        wb.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightRegular]];
+        wb.tintColor = !plug && lv >= 0 && lv <= 0.12 ? [UIColor colorWithRed:1 green:0.27 blue:0.23 alpha:1] : [UIColor colorWithWhite:0.85 alpha:1];
+        wbl.text = lv < 0 ? @"" : [NSString stringWithFormat:@"%d%%", (int)lroundf(lv * 100)];
     };
-    fill(@[]);
+    tick();
+    [NSTimer scheduledTimerWithTimeInterval:15 repeats:YES block:^(NSTimer *t) { if (!wc) { [t invalidate]; return; } tick(); }];
+    // the player places: filled from shell_players.m's list ([player, kind, label, name, xbox]); a newly taken place pops in
+    __weak UIView *wg = grid; __weak UILabel *wpn = pn;
+    __block NSArray *last = @[]; NSMutableSet *held = [NSMutableSet set];
+    void (^fill)(NSArray *) = ^(NSArray *players) {
+        UIView *gr = wg; if (!gr) return; last = players ?: @[];
+        NSMutableDictionary *by = [NSMutableDictionary dictionary];
+        for (NSArray *r in last) if ([r isKindOfClass:NSArray.class] && r.count >= 3) by[@([r[0] intValue])] = r;
+        wpn.text = [NSString stringWithFormat:@"%lu / 8", (unsigned long)by.count];
+        for (UIView *x in gr.subviews) [x removeFromSuperview];
+        CGFloat W = gr.bounds.size.width, H = gr.bounds.size.height, gap = 10, cw = (W - gap) / 2, ch = MIN(64, (H - 3 * gap) / 4);
+        for (int p = 1; p <= 8; p++) {
+            NSArray *r = by[@(p)]; int col = (p - 1) / 4, rowi = (p - 1) % 4;
+            UIView *t = [[UIView alloc] initWithFrame:CGRectMake(col * (cw + gap), rowi * (ch + gap), cw, ch)];
+            t.layer.cornerRadius = 16; t.layer.cornerCurve = kCACornerCurveContinuous;
+            t.backgroundColor = [UIColor colorWithWhite:1 alpha:r ? 0.09 : 0.03];
+            if (!r) { t.layer.borderWidth = 1; t.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.06].CGColor; }
+            UILabel *b = [[UILabel alloc] initWithFrame:CGRectMake(10, (ch - 30) / 2, 40, 30)];
+            b.text = [NSString stringWithFormat:@"%dP", p]; b.textAlignment = NSTextAlignmentCenter; b.font = [UIFont systemFontOfSize:14 weight:UIFontWeightHeavy];
+            b.layer.cornerRadius = 9; b.layer.cornerCurve = kCACornerCurveContinuous; b.layer.masksToBounds = YES;
+            b.backgroundColor = r ? player_color(p) : [UIColor colorWithWhite:1 alpha:0.06]; b.textColor = r ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
+            [t addSubview:b];
+            if (r) {
+                BOOL phone = [r[1] intValue] == 2;
+                UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:phone ? @"iphone" : @"gamecontroller.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]]];
+                ic.tintColor = [UIColor colorWithWhite:1 alpha:0.7]; ic.contentMode = UIViewContentModeCenter; ic.frame = CGRectMake(58, 0, 22, ch); [t addSubview:ic];
+                UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(86, p == 1 ? ch / 2 - 18 : 0, cw - 96, p == 1 ? 20 : ch)];
+                nm.text = [r[2] description]; nm.textColor = UIColor.whiteColor; nm.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; [t addSubview:nm];
+                if (p == 1) {   // player 1 runs the menu
+                    UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(86, ch / 2 + 2, cw - 96, 16)];
+                    m.text = z ? @"操作選單" : @"Runs the menu"; m.textColor = [UIColor colorWithWhite:1 alpha:0.5]; m.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium]; [t addSubview:m];
+                }
+                if (![held containsObject:@(p)]) {   // just joined
+                    t.alpha = 0; t.transform = CGAffineTransformMakeScale(0.85, 0.85);
+                    [UIView animateWithDuration:0.5 delay:0.04 * rowi usingSpringWithDamping:0.7 initialSpringVelocity:0.4 options:0 animations:^{ t.alpha = 1; t.transform = CGAffineTransformIdentity; } completion:nil];
+                }
+            } else {
+                UILabel *e = [[UILabel alloc] initWithFrame:CGRectMake(58, 0, cw - 68, ch)];
+                e.text = z ? @"空位" : @"Open"; e.textColor = [UIColor colorWithWhite:1 alpha:0.25]; e.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; [t addSubview:e];
+            }
+            [gr addSubview:t];
+        }
+        [held removeAllObjects]; [held addObjectsFromArray:by.allKeys];
+    };
+    v.layout = ^(UIView *me) {
+        CGSize S = me.bounds.size; UIEdgeInsets in = me.safeAreaInsets;
+        CGFloat m = 32, L = MAX(m, in.left), R = S.width - MAX(m, in.right), T = MAX(m, in.top) + 8, B = S.height - MAX(24, in.bottom);
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        g1.frame = CGRectMake(-S.width * 0.3, -S.height * 0.4, S.width * 1.1, S.width * 1.1);
+        g2.frame = CGRectMake(S.width * 0.4, S.height * 0.3, S.width * 0.9, S.width * 0.9);
+        [CATransaction commit];
+        title.frame = CGRectMake(L + 124, T, R - L - 124 - 8, 40);   // the Menu button sits at the top left (placeStage)
+        CGRect lf = live.frame; lf.origin = CGPointMake(L + 124, T + 46); live.frame = lf;
+        CGFloat top = T + 96, foot = B - 28, ch = foot - 20 - top;
+        BOOL wide = S.width > S.height;
+        CGRect jf, pf;
+        if (wide) { CGFloat jw = MIN(380, (R - L) * 0.38); jf = CGRectMake(L, top, jw, ch); pf = CGRectMake(L + jw + 20, top, R - L - jw - 20, ch); }
+        else { CGFloat jh = MIN(420, ch * 0.5); jf = CGRectMake(L, top, R - L, jh); pf = CGRectMake(L, top + jh + 20, R - L, ch - jh - 20); }
+        join.frame = jf; pc.frame = pf;
+        CGFloat jw = jf.size.width, qs = MIN(MIN(jw - 64, jf.size.height - 150), 280);
+        jt.frame = CGRectMake(24, 22, jw - 48, 26); js.frame = CGRectMake(24, 50, jw - 48, 20);
+        qr.frame = CGRectMake((jw - qs) / 2, 86, qs, qs); qi.frame = CGRectInset(qr.bounds, 16, 16);
+        ju.frame = CGRectMake(20, 86 + qs + 12, jw - 40, 18);
+        pt.frame = CGRectMake(24, 22, 200, 26); pn.frame = CGRectMake(pf.size.width - 124, 24, 100, 22);
+        CGRect gf = CGRectMake(20, 64, pf.size.width - 40, pf.size.height - 84);
+        if (!CGRectEqualToRect(grid.frame, gf)) { grid.frame = gf; [held addObjectsFromArray:@[@1, @2, @3, @4, @5, @6, @7, @8]]; fill(last); }   // a new size: drawn again with no pop
+        key.frame = CGRectMake(L, foot - 2, 30, 30); ki.frame = key.bounds;
+        kl.frame = CGRectMake(L + 40, foot, 120, 26);
+        batl.frame = CGRectMake(R - 44, foot, 44, 26); bat.frame = CGRectMake(R - 44 - 34, foot, 30, 26);
+        clock.frame = CGRectMake(R - 44 - 34 - 90, foot, 80, 26);
+    };
+    CABasicAnimation *drift = [CABasicAnimation animationWithKeyPath:@"transform.translation"];
+    drift.fromValue = [NSValue valueWithCGSize:CGSizeZero]; drift.toValue = [NSValue valueWithCGSize:CGSizeMake(60, 40)];
+    drift.duration = 9; drift.autoreverses = YES; drift.repeatCount = HUGE_VALF; drift.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [g1 addAnimation:drift forKey:@"drift"];
+    CABasicAnimation *drift2 = [drift copy]; drift2.toValue = [NSValue valueWithCGSize:CGSizeMake(-50, -30)]; drift2.duration = 11; [g2 addAnimation:drift2 forKey:@"drift"];
     [NSNotificationCenter.defaultCenter addObserverForName:@"DMPlayersChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { fill(n.userInfo[@"players"]); }];
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"refresh"}];   // the list now
     return v;
