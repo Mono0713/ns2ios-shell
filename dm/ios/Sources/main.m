@@ -218,7 +218,7 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 #ifdef DM_SHELL
     // Shaders can be in the package as source when the computer that packed it had no Apple shader compiler: compile them all once
     // here, with a progress page, then start the host. Returns 0 when there is nothing to do (no source shaders, or done last time).
-    front_ios_loading_text(@"正在檢查著色器…", @"Checking shaders…");
+    front_ios_loading_text(@"遊戲載入中…", @"Loading…");
     dm_shader_prep_start(^{ boot_start(); }); return;
 #endif
     boot_start();
