@@ -50,6 +50,7 @@ targets:
         GCSupportedGameControllers:
           - ProfileName: ExtendedGamepad
         NSLocalNetworkUsageDescription: "同一個 Wi-Fi 的手機打開這台裝置的網址，就能當手把。Phones on this Wi-Fi can join as controllers by opening this device's address in their browser."   # phone_pads.c
+        NSMicrophoneUsageDescription: "只在接電視時選「聲音：iPad 喇叭」才會用到：iOS 需要這個權限才能讓 iPad 喇叭出聲，不會錄音。Only for Sound: iPad speaker while the game is on a TV: iOS needs it to play through the iPad's speaker. Nothing is recorded."   # front_ios.m audio_on_ipad
         NSBonjourServices:
           - _nxpad._tcp
         CADisableMinimumFrameDurationOnPhone: true

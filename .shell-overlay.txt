@@ -75,7 +75,7 @@
 ~ dm/gfx/tools/dmsh_mtlcache.py # ctypes.CDLL(None) is POSIX-only
 ~ dm/ios/Sources/main.m         # modules from the Guest library, relaxed romfs lookup, shader preparation before the host; shell_players_start and phone_pads_start at launch; a package of several games (games/<title ID>/): the picker first, then that game's files, saves in save/<title ID>, its program loaded only when it starts so the launcher can go back to the picker
 ~ dm/ios/Sources/DmGamepad.m    # profile pad_layout overridable at run time (DM_PAD_LAYOUT), for the first launch only; physical controllers moved to shell_players.m (the pad hides while a controller or phone plays and shows for a few seconds after a tap); the iPad's motion for player 1; the launcher's opacity and size; a QR button that shows the phone gamepads' address in game; the touch layout kept per game
-~ dm/ios/project.yml           # local network permission and the Bonjour service (_nxpad._tcp) for the phone gamepads; the external display scene (TV)
+~ dm/ios/project.yml           # local network permission and the Bonjour service (_nxpad._tcp) for the phone gamepads; the external display scene (TV); the microphone line for Sound: iPad speaker in TV play
 ~ dm/ios/tools/pack_ipa.py      # keep the executable bit when packing on Windows
 ~ dm/host/haptics_apple.m       # controller rumble: plain players and the default locality when advanced players fail; routes rebuilt and the audio-interruption suspension lifted on becoming active
 ~ dm/host/front.h               # front_first_frame: the first present, for the loading screen
