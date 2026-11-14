@@ -15,6 +15,8 @@
 #include "hle.h"
 #include "dm.h"
 #include "haptics_apple.h"
+#include "dm_input.h"
+#include "shell_slots.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
@@ -47,6 +49,9 @@ static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare
 static UIView *overlay_root(void);
 static void home_menu_toggle(void);
 static void home_menu_relayout(void);
+static int g_menu_page;   // 0 main, 1 players / who is 1P, 2 join (QR)
+static void menu_page(int page, int sel);
+static UIImage *phones_qr(NSString **url_out);
 static void home_menu_watch(void);
 static UIView *tv_panel(CGRect frame);
 void front_ios_audio_session(void);
@@ -617,6 +622,14 @@ static void home_menu_activate(int i) {
     if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
     NSString *act = g_menu_rows[i][2];
     if ([act isEqualToString:@"continue"]) home_menu_close();
+    else if ([act isEqualToString:@"players"]) menu_page(1, 0);
+    else if ([act isEqualToString:@"join"]) menu_page(2, 0);
+    else if ([act isEqualToString:@"back"]) menu_page(0, g_menu_page == 1 ? 1 : 2);
+    else if ([act hasPrefix:@"p1:"]) {   // this player becomes player 1 (the launcher's swap): from now on it runs the menu
+        int p = [[act substringFromIndex:3] intValue];
+        if (p > 1) { LOG("front end: Home menu: player %d becomes player 1", p); [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"swap", @"a": @1, @"b": @(p)}]; }
+        menu_page(1, 0);
+    }
     else if ([act isEqualToString:@"audio"]) {   // switches at once (the game is paused, its sound resumes on the new output) and stays the choice
         NSUserDefaults *d = NSUserDefaults.standardUserDefaults; [d setBool:![d boolForKey:@"DMAudioOnIPad"] forKey:@"DMAudioOnIPad"];
         front_ios_audio_session();
@@ -641,8 +654,10 @@ static UIView *home_menu_make(UIView *root) {
     UIView *menu = [[UIView alloc] initWithFrame:root.bounds];
     menu.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
-    CGFloat W = 440, rowH = 64, pad = 16, top = 76;
-    CGFloat H = top + g_menu_rows.count * (rowH + 10) + pad - 10 + 34;
+    CGFloat W = 440, rowH = g_menu_page == 1 ? 52 : 64, gap = g_menu_page == 1 ? 6 : 10, pad = 16, top = 76;
+    NSString *qrURL = nil; UIImage *qr = g_menu_page == 2 ? phones_qr(&qrURL) : nil;
+    if (g_menu_page == 2) top += 250;   // the QR code and its address above the rows
+    CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + 34;
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - W) / 2), floor((root.bounds.size.height - H) / 2), W, H)];
     card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     card.backgroundColor = [UIColor colorWithRed:0.11 green:0.12 blue:0.14 alpha:0.97];
@@ -654,14 +669,23 @@ static UIView *home_menu_make(UIView *root) {
     tag.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; tag.layer.cornerRadius = 6; tag.layer.masksToBounds = YES;
     [tag sizeToFit]; tag.frame = CGRectMake(pad + 4, 48, tag.bounds.size.width, 20);
     [card addSubview:t]; [card addSubview:tag];
+    if (g_menu_page == 2) {   // joining: the QR code on white, and the address
+        UIView *qc = [[UIView alloc] initWithFrame:CGRectMake((W - 200) / 2, 82, 200, 200)];
+        qc.backgroundColor = UIColor.whiteColor; qc.layer.cornerRadius = 16; qc.layer.cornerCurve = kCACornerCurveContinuous;
+        if (qr) { UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectInset(qc.bounds, 14, 14)]; iv.image = qr; iv.layer.magnificationFilter = kCAFilterNearest; iv.contentMode = UIViewContentModeScaleAspectFit; [qc addSubview:iv]; }
+        UILabel *u = [[UILabel alloc] initWithFrame:CGRectMake(pad, 290, W - 2 * pad, 22)]; u.textAlignment = NSTextAlignmentCenter;
+        u.text = qrURL ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off"); u.textColor = [UIColor colorWithWhite:0.8 alpha:1];
+        u.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+        [card addSubview:qc]; [card addSubview:u];
+    }
     for (NSUInteger i = 0; i < g_menu_rows.count; i++) {
         UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
-        row.frame = CGRectMake(pad, top + i * (rowH + 10), W - 2 * pad, rowH); row.tag = 100 + (NSInteger)i;
+        row.frame = CGRectMake(pad, top + i * (rowH + gap), W - 2 * pad, rowH); row.tag = 100 + (NSInteger)i;
         row.layer.cornerRadius = 14; row.layer.cornerCurve = kCACornerCurveContinuous;
         [row addTarget:DmMenuTap.class action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
-        UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(16, 10, W - 2 * pad - 32, 24)]; a.userInteractionEnabled = NO;
+        UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(16, rowH == 64 ? 10 : 5, W - 2 * pad - 32, 24)]; a.userInteractionEnabled = NO;
         a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-        UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(16, 34, W - 2 * pad - 32, 20)]; d.userInteractionEnabled = NO;
+        UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(16, rowH == 64 ? 34 : 28, W - 2 * pad - 32, 20)]; d.userInteractionEnabled = NO;
         d.text = g_menu_rows[i][1]; d.textColor = [UIColor colorWithWhite:0.75 alpha:1]; d.font = [UIFont systemFontOfSize:13];
         [row addSubview:a]; [row addSubview:d]; [card addSubview:row];
     }
@@ -697,15 +721,50 @@ static NSArray<NSString *> *video_row(void) {
     return @[ipad ? (z ? @"畫面輸出：iPad" : @"Picture output: iPad") : (z ? @"畫面輸出：電視" : @"Picture output: TV"),
              z ? @"按 A 切換電視／iPad" : @"A switches TV / iPad", @"video"];
 }
+// The menu's pages: 0 the main list, 1 the players (A on one makes it player 1), 2 joining (the phones' QR code)
+static NSArray *menu_rows(int page) {
+    BOOL z = zh_ui();
+    NSMutableArray *rows = [NSMutableArray array];
+    if (page == 1) {
+        shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
+        for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind != SHELL_SLOT_NONE) {
+            NSString *kind = info[p].kind == SHELL_SLOT_PHONE ? (z ? @"手機" : @"Phone") : (z ? @"手把" : @"Controller");
+            NSString *label = [NSString stringWithUTF8String:info[p].label] ?: @"?";
+            [rows addObject:@[[NSString stringWithFormat:@"P%d  %@ · %@", p + 1, kind, label],
+                              p == 0 ? (z ? @"目前的 1P：操作選單的人" : @"Player 1 now: runs the menu") : (z ? @"按 A 設為 1P（和目前的 1P 對調）" : @"A makes this player 1 (swaps with player 1)"),
+                              [NSString stringWithFormat:@"p1:%d", p + 1]]];
+        }
+        if (!rows.count) [rows addObject:@[z ? @"還沒有手把或手機" : @"No controllers or phones yet", z ? @"iPad 的觸控按鍵是 1P" : @"The iPad's touch controls are player 1", @"back"]];
+        [rows addObject:@[z ? @"返回" : @"Back", @"", @"back"]];
+        return rows;
+    }
+    if (page == 2) { [rows addObject:@[z ? @"返回" : @"Back", z ? @"手機掃描上面的 QR code 就會加入成下一位玩家" : @"A phone that scans the QR code above joins as the next player", @"back"]]; return rows; }
+    const char *ng = getenv("DM_SHELL_GAMES"); BOOL several = ng && atoi(ng) > 1;
+    [rows addObject:@[z ? @"繼續遊戲" : @"Continue", z ? @"回到遊戲" : @"Back to the game", @"continue"]];
+    [rows addObject:@[z ? @"玩家與 1P" : @"Players and player 1", z ? @"看誰是幾號玩家，換人當 1P" : @"Who is which player; choose player 1", @"players"]];
+    [rows addObject:@[z ? @"加入玩家" : @"Add players", z ? @"顯示手機手把的 QR code" : @"Shows the phone controllers' QR code", @"join"]];
+    if (g_tv_scene) { [rows addObject:video_row()]; [rows addObject:audio_row()]; }   // a TV is connected: where the picture and the sound go
+    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"回到選擇遊戲（未存檔進度會遺失）" : @"Back to the game picker (unsaved progress is lost)", @"change"]];
+    [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"結束 SwitchPad（未存檔進度會遺失）" : @"Quits SwitchPad (unsaved progress is lost)", @"quit"]];
+    return rows;
+}
+// g_menu_page declared near the top
+static void menu_page(int page, int sel) {
+    g_menu_page = page; g_menu_rows = menu_rows(page); g_menu_sel = MAX(0, MIN(sel, (int)g_menu_rows.count - 1));
+    home_menu_relayout(); home_menu_draw();
+}
+static UIImage *phones_qr(NSString **url_out) {   // the phone controllers' address as a QR code (phone_pads.c); nil while the server is off
+    int phone_pads_url(char *out, size_t cap);
+    char url[96] = ""; if (!phone_pads_url(url, sizeof url)) return nil;
+    if (url_out) *url_out = @(url);
+    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[@(url) dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
+    CIImage *ci = f.outputImage; CGImageRef cg = ci ? [[CIContext context] createCGImage:ci fromRect:ci.extent] : NULL;
+    if (!cg) return nil;
+    UIImage *img = [UIImage imageWithCGImage:cg]; CGImageRelease(cg); return img;
+}
 static void home_menu_open(void) {
     if (g_menu || !g_root.game) return;   // only once the game was started (the picker and the launcher have their own screens)
-    BOOL z = zh_ui();
-    const char *ng = getenv("DM_SHELL_GAMES"); BOOL several = ng && atoi(ng) > 1;
-    NSMutableArray *rows = [NSMutableArray arrayWithObject:@[z ? @"繼續遊戲" : @"Continue", z ? @"回到遊戲" : @"Back to the game", @"continue"]];
-    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"回到選擇遊戲（未存檔進度會遺失）" : @"Back to the game picker (unsaved progress is lost)", @"change"]];
-    if (g_tv_scene) { [rows addObject:video_row()]; [rows addObject:audio_row()]; }   // a TV is connected: where the picture and the sound go
-    [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"結束 SwitchPad（未存檔進度會遺失）" : @"Quits SwitchPad (unsaved progress is lost)", @"quit"]];
-    g_menu_rows = rows; g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++;
+    g_menu_page = 0; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++;
     game_pause(1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput
     home_menu_build();
@@ -714,17 +773,22 @@ static void home_menu_open(void) {
 static void home_menu_toggle(void) { if (g_menu) home_menu_close(); else home_menu_open(); }
 static void home_menu_input(NSDictionary *u) {
     if (!g_menu || g_menu_closing || ![u[@"on"] boolValue]) return;
+    if ([u[@"p"] intValue] != 1) return;   // only player 1 runs the menu (who that is: the menu's Players page)
     NSString *k = u[@"key"];
     if ([k isEqualToString:@"up"]) g_menu_sel = MAX(0, g_menu_sel - 1);
     else if ([k isEqualToString:@"down"]) g_menu_sel = MIN((int)g_menu_rows.count - 1, g_menu_sel + 1);
     else if ([k isEqualToString:@"a"]) { home_menu_activate(g_menu_sel); return; }
-    else if ([k isEqualToString:@"b"]) { home_menu_close(); return; }
+    else if ([k isEqualToString:@"b"]) { if (g_menu_page) menu_page(0, g_menu_page == 1 ? 1 : 2); else home_menu_close(); return; }
     home_menu_draw();
 }
 static void home_menu_watch(void) {   // once the game starts (startGame)
     static int once; if (once++) return;
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-    [nc addObserverForName:@"DMHomePressed" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; home_menu_toggle(); }];
+    [nc addObserverForName:@"DMHomePressed" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {   // only player 1's Home (the iPad's own button counts as player 1 too)
+        int p = [n.userInfo[@"p"] intValue];
+        if (p != 1) { LOG("front end: Home from player %d ignored: only player 1 opens the menu", p); return; }
+        home_menu_toggle();
+    }];
     [nc addObserverForName:@"DMLauncherInput" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { home_menu_input(n.userInfo); }];
 }
 int front_ios_menu_open(void) { return g_menu != nil; }
