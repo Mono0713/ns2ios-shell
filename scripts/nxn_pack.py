@@ -1216,6 +1216,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # does not crash at once -- the game asks for the wrong heap and aborts in SetHeapSize (Hades II asked for pool - 64 MB
     # instead of pool - 108 MB and overflowed the pool by 44 MB).
     env_lines = env_for(rows)
+    # A guessed profile (switchpad/make_provisional.py, profile_guess.py) is marked for the host, which then gives a game with virtual address memory more alias region
+    # than the guess when the device allows it (hle_svc.c mem_init_once): the guessed size ran out in two Unity games that needed it raised by hand
+    try:
+        if (gdir / 'game.tsv').read_text(encoding='utf-8').startswith('# Provisional game profile'): env_lines.append('DM_MEM_PROVISIONAL=1')
+    except OSError: pass
     # The npdm's main thread stack size: the host runs the main thread on a 64 MB stack and reports this size instead (hle_os.c GetCurrentStackInfo),
     # since Godot sizes its worker stacks from it (Unrailed 2: 1 MB on the Switch, 64 MB x 28 workers on the host ran the heap out)
     try:
