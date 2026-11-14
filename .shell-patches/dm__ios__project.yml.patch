@@ -16,3 +16,13 @@ diff --git a/dm/ios/project.yml b/dm/ios/project.yml
          CADisableMinimumFrameDurationOnPhone: true
          UIApplicationSceneManifest:
            UIApplicationSupportsMultipleScenes: false
+@@ -55,6 +59,9 @@
+             UIWindowSceneSessionRoleApplication:
+               - UISceneConfigurationName: Default
+                 UISceneDelegateClassName: SceneDelegate
++            UIWindowSceneSessionRoleExternalDisplayNonInteractive:   # a TV on the USB-C / HDMI adapter: the game's picture at the TV's own shape (front_ios.m)
++              - UISceneConfigurationName: TV
++                UISceneDelegateClassName: DmTvSceneDelegate
+     settings:
+       PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}
+       PRODUCT_NAME: DmIOS
