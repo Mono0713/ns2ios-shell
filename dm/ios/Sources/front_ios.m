@@ -52,6 +52,8 @@ static void home_menu_relayout(void);
 static int g_menu_page;   // 0 main, 1 players / who is 1P, 2 join (QR)
 static void menu_page(int page, int sel);
 static UIImage *phones_qr(NSString **url_out);
+static NSArray<NSString *> *audio_row(void);
+static NSArray<NSString *> *video_row(void);
 static void home_menu_watch(void);
 static UIView *tv_panel(CGRect frame);
 void front_ios_audio_session(void);
