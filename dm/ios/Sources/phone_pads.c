@@ -46,6 +46,7 @@
 enum { MAX_CLIENTS = 24, IN_CAP = 4096 };
 #define SILENT_NS 1000000000ull   // quiet this long: nothing held down
 #define GONE_NS 15000000000ull    // quiet this long: the page is gone (a tab left in the background keeps its socket open), its player is freed
+#define ALIVE_NS 300000000ull    // heard within this: the page is in front (it sends at least every 100 ms while it is)
 #define REQ_NS 10000000000ull     // a connection that has not sent its request (or switched to WebSocket) this long after it opened is closed
 typedef struct {
     int fd, ws, player;          // ws: the connection has switched to WebSocket; player: slot index, -1 before the hello
@@ -124,6 +125,11 @@ static void drop(client *c) {
     memset(c, 0, sizeof *c); c->fd = -1; c->player = -1;
 }
 // The value of "key":"..." in a small JSON object (the hello); enough for this protocol, which never escapes quotes in these fields
+static void replace(client *old, const char *name) {
+    LOG("phone pads: '%s' joined again from the same phone: the old page's player %d goes", name, shell_slot_of(old) + 1);
+    ws_text(old->fd, "{\"t\":\"replaced\"}");
+    drop(old);
+}
 static int json_str(const char *j, const char *key, char *out, size_t cap) {
     char pat[32]; snprintf(pat, sizeof pat, "\"%s\"", key);
     const char *p = strstr(j, pat); if (!p) return 0;
@@ -142,15 +148,15 @@ static void on_hello(client *c, const char *json) {
     json_str(json, "name", name, sizeof name);
     if (banned(id, strstr(json, "\"join\"") != NULL)) { ws_text(c->fd, "{\"t\":\"kicked\"}"); return; }
     if (c->player >= 0) { release(c); shell_slot_free(c); c->player = -1; }
-    // The same phone still connected on an older socket (a page that reloaded before the old connection timed out): close that one, so this one takes its player
-    for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) drop(&g_cl[i]);
-    // The same phone from another page with its own storage, so another id (Safari and the Home Screen copy, or a second browser): that is still one phone, the old page goes.
-    // Not for loopback, which is the server test's several phones on one machine
+    // The same phone still connected on an older socket (a page that reloaded before the old connection timed out, a second tab): that one is told it was replaced, so it
+    // stops reconnecting (phone_pad.html) instead of taking the player back and the two pages trading it forever, and closed, so this one takes its player
+    for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) replace(&g_cl[i], name);
+    // The same address from another page with its own storage, so another id (Safari and the Home Screen copy, or a second browser): the old page goes if it has gone quiet,
+    // as a page that is no longer in front does at once. One that is still sending is another phone behind the same address (a range extender or guest network that
+    // translates addresses): it keeps its player. Not for loopback, which is the server test's several phones on one machine
     if (c->ip && c->ip != htonl(INADDR_LOOPBACK))
-        for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && g_cl[i].ip == c->ip) {
-            LOG("phone pads: '%s' joined again from the same phone: the old page's player %d goes", name, shell_slot_of(&g_cl[i]) + 1);
-            drop(&g_cl[i]);
-        }
+        for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && g_cl[i].ip == c->ip && now_ns() - g_cl[i].seen_ns > ALIVE_NS)
+            replace(&g_cl[i], name);
     int p = shell_slot_take(c, id, SHELL_SLOT_PHONE, name);   // a phone that held a player before has its id on that slot and gets it back while it is free
     snprintf(c->name, sizeof c->name, "%s", name); snprintf(c->id, sizeof c->id, "%s", id);
     if (p < 0) { ws_text(c->fd, "{\"t\":\"full\"}"); LOG("phone pads: '%s' connected: all %d players are taken, not used", name, DM_PLAYERS); return; }
