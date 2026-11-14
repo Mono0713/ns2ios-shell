@@ -100,7 +100,7 @@
   <button class="tb on" id="done" data-t="done">Done</button>
 </div>
 <div id="toast"></div>
-<div id="kicked"><div data-t="kicked">This phone was removed on the iPad</div><button class="tb on" id="rejoin" data-t="rejoin">Join again</button></div>
+<div id="kicked"><div id="kickmsg" data-t="kicked">This phone was removed on the iPad</div><button class="tb on" id="rejoin" data-t="rejoin">Join again</button></div>
 
 <script>
 (() => {
@@ -109,16 +109,16 @@
   const zh = /^zh/i.test(navigator.language || '');
   const T = zh ? { rotate: '請把手機橫過來 ↻', connecting: '連線中…', connected: '已連線', full: '玩家已滿（最多 8 人）', lost: '已斷線，重新連線中…',
                    layout: '版面', drag: '拖曳移動，兩指縮放', size: '大小', reset: '還原', done: '完成',
-                   kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入',
+                   kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入', replaced: '這支手機的手把在另一個頁面（或瀏覽器）使用中', useHere: '改用這個頁面',
                    ios: 'iPhone 沒辦法讓網頁全螢幕：按 Safari 的「分享」→「加入主畫面」，再從主畫面打開，就不會有網址列。' }
                : { rotate: 'Turn your phone sideways ↻', connecting: 'Connecting…', connected: 'Connected', full: 'All 8 players are taken', lost: 'Disconnected, reconnecting…',
                    layout: 'Layout', drag: 'Drag to move, pinch to resize', size: 'Size', reset: 'Reset', done: 'Done',
-                   kicked: 'This phone was removed on the iPad', rejoin: 'Join again',
+                   kicked: 'This phone was removed on the iPad', rejoin: 'Join again', replaced: 'This phone\'s controller is in use on another page (or browser)', useHere: 'Use this page',
                    ios: 'iPhone cannot show a web page full screen: tap Share, then Add to Home Screen in Safari, and open it from the Home Screen for no address bar.' };
   if (zh) document.documentElement.lang = 'zh-Hant';
   document.querySelectorAll('[data-t]').forEach(e => { e.textContent = T[e.dataset.t]; });
   const state = { buttons: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
-  let ws = null, seq = 0, dirty = true, lastSent = 0, backoff = 500, join = false;
+  let ws = null, seq = 0, dirty = true, lastSent = 0, backoff = 500, join = false, retry = 0, replaced = false;
 
   // Device id: a reconnecting phone gets its player back
   let id;
@@ -130,7 +130,11 @@
   const name = /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'Browser';
 
   function hello() { ws.send(JSON.stringify(join ? { t: 'hello', v: 1, id, name, join: 1 } : { t: 'hello', v: 1, id, name })); join = false; }
+  // Reconnecting: only while the page is in front, and not after the iPad said another page of this phone took over. Otherwise a second page (a background tab,
+  // the Home Screen copy, another browser) and this one would keep taking the player from each other, both flickering between connected and disconnected
   function connect() {
+    clearTimeout(retry);
+    if (replaced || document.hidden || (ws && ws.readyState < 2)) return;
     const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
@@ -140,19 +144,23 @@
       if (typeof ev.data !== 'string') return;
       const m = JSON.parse(ev.data);
       if (m.t === 'assign') {
-        document.body.classList.remove('kicked'); $('#player').textContent = 'P' + m.player; $('#conn').textContent = T.connected; dirty = true;
+        replaced = false; document.body.classList.remove('kicked'); $('#player').textContent = 'P' + m.player; $('#conn').textContent = T.connected; dirty = true;
         faceLayout(m.layout === 'xbox');
       }
       else if (m.t === 'full') { $('#player').textContent = '--'; $('#conn').textContent = T.full; }
-      else if (m.t === 'kicked') { $('#player').textContent = '--'; document.body.classList.add('kicked'); release(); }
+      else if (m.t === 'kicked') { $('#player').textContent = '--'; $('#kickmsg').textContent = T.kicked; $('#rejoin').textContent = T.rejoin; document.body.classList.add('kicked'); release(); }
+      else if (m.t === 'replaced') {
+        replaced = true; $('#player').textContent = '--'; $('#kickmsg').textContent = T.replaced; $('#rejoin').textContent = T.useHere; document.body.classList.add('kicked'); release();
+      }
       else if (m.t === 'rumble') {
         if (navigator.vibrate) navigator.vibrate(m.ms || 100);
         if (m.flash) { const f = $('#flash'); f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); }
       }
     };
     ws.onclose = () => {
+      if (replaced) return;
       $('#conn').textContent = T.lost;
-      setTimeout(connect, backoff);
+      retry = setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 4000);
     };
   }
@@ -160,10 +168,15 @@
   $('#face').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
   // The iPad's menu (continue, change games), as a controller's Home button opens it
   $('#home').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'home' })); });
-  $('#rejoin').addEventListener('click', () => { join = true; if (ws && ws.readyState === 1) hello(); });
+  $('#rejoin').addEventListener('click', () => {
+    if (replaced) { replaced = false; backoff = 500; if (ws && ws.readyState === 1) hello(); else connect(); return; }   // take the player back to this page
+    join = true; if (ws && ws.readyState === 1) hello();
+  });
 
+  // When the Wi-Fi stalls, the browser queues what was sent; piling more on only replays stale input later. Each packet is the whole state, so while a backlog is
+  // still waiting nothing more is queued (dirty stays set) and the newest state goes once it drains
   function send() {
-    if (!ws || ws.readyState !== 1) return;
+    if (!ws || ws.readyState !== 1 || (ws.bufferedAmount > 64 && performance.now() - lastSent < 500)) return;   // still a heartbeat every half second, whatever the browser reports
     const buf = new ArrayBuffer(8), v = new DataView(buf);
     v.setUint8(0, 1);
     v.setUint8(1, seq = (seq + 1) & 255);
@@ -267,6 +280,7 @@
     if (mask !== state.buttons) {
       if (mask & ~state.buttons && navigator.vibrate) navigator.vibrate(8);
       state.buttons = mask; dirty = true;
+      send();   // a press or release goes out now, not on the next frame
     }
   }
 
@@ -382,6 +396,7 @@
   // Release everything when the page goes to the background, so nothing stays pressed
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { release(); send(); }
+    else connect();   // back in front: reconnect now if the connection went while in the background
   });
 
   // Keep the screen on where the browser allows it
