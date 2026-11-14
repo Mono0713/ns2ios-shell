@@ -134,6 +134,9 @@ class PhonePadsTests(unittest.TestCase):
         # the same phone on a second connection while the first is still open (a reloaded page): the new one takes over its player
         b2 = Phone(self.port)
         self.assertEqual(b2.hello('phone-b'), {'t': 'assign', 'layout': 'switch', 'player': 2})
+        # the old page is told so, and closed: the page then stops reconnecting, so two pages of one phone do not keep taking the player from each other
+        self.assertEqual(b.reply(), {'t': 'replaced'})
+        self.assertEqual(b.s.recv(1), b'')
         self.assertEqual(self.host()['mask'], 0b11)
         # eight players at most
         more = [Phone(self.port, f'phone-{i}') for i in range(6)]
