@@ -180,7 +180,7 @@ private struct PlayerBadge: View {
 
 // Each player's colour, P1 to P8 (docs/DESIGN.zh-TW.md): the same in the picker, the launcher, the in-game menu (front_ios.m) and on the phone page
 private func rgb(_ v: UInt32) -> Color { Color(red: Double(v >> 16 & 255) / 255, green: Double(v >> 8 & 255) / 255, blue: Double(v & 255) / 255) }
-let playerColors: [Color] = [0x0A84FF, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F].map(rgb)
+let playerColors: [Color] = ([0x0A84FF, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F] as [UInt32]).map(rgb)
 func controllerIcon(_ label: String) -> String {
     let l = label.lowercased()
     return l.contains("xbox") ? "logo.xbox" : l.contains("dualsense") || l.contains("dualshock") ? "logo.playstation" : "gamecontroller.fill"
