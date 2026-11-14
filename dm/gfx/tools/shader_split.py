@@ -638,13 +638,20 @@ def bea_members(d, label):
     """NintendoWare Bezel Engine archive ('.bea', magic 'SCNE', a NintendoWare binary file of version 0x10100; Big Brain Academy: Brain vs. Brain keeps nearly all of RomFS in 603 of them):
     +0x20 u64 entry count, +0x28 u64 offset of the entry pointer array (u64 each), each pointing at a 0x30-byte 'ASST' entry {+0x10 u16 kind, u16 alignment shift, u32 stored length,
     u32 length, +0x20 u64 data offset, +0x28 u64 name offset (u16 length + the path)}. Every entry of the game's 7,665 is one zstd frame (kind 2, and 258 for the one sound project),
-    even the two whose stored length equals their length, so the frame magic decides. → (path, data) of each entry"""
+    even the two whose stored length equals their length, so the frame magic decides.
+    Bezel Engine 2.9 (version 0x60000; Super Mario Party Jamboree's 949 archives, 127,203 entries) keeps the entries themselves at +0x28, back to back, each 0x48 bytes (its size is the u32 at
+    'ASST' +4): an 8-byte type tag ('_G3DSHA', '_TEXDATA', …) at +0x1c and a 16-byte hash come before the data and name offsets, which are the last two u64 of the entry in both forms.
+    → (path, data) of each entry"""
     n, arr = struct.unpack_from('<QQ', d, 0x20)
-    zstd = None
+    inline = d[arr:arr + 4] == b'ASST'
+    zstd, o = None, arr
     for i in range(n):
-        o = struct.unpack_from('<Q', d, arr + 8 * i)[0]
+        if not inline: o = struct.unpack_from('<Q', d, arr + 8 * i)[0]
         if d[o:o + 4] != b'ASST': red(f'{label}: entry {i} @{o:#x} is not an ASST entry')
-        csz, usz, off, nm = struct.unpack_from('<II4xQQ', d, o + 0x14)
+        size = struct.unpack_from('<I', d, o + 4)[0] if inline else 0x30
+        csz, usz = struct.unpack_from('<II', d, o + 0x14)
+        off, nm = struct.unpack_from('<QQ', d, o + size - 0x10)
+        if inline: o += size
         path = d[nm + 2:nm + 2 + struct.unpack_from('<H', d, nm)[0]].decode('utf-8', 'replace')
         data = d[off:off + csz]
         if data[:4] == ZSTD_MAGIC:
@@ -1619,8 +1626,16 @@ def unity_shaders(d, label, out, trees):
     if COMMON is None: red(f'{label}: a Unity asset, but main has no Unity common string table')
     sers = unityfs.bundle_files(d) if d[:8] == b'UnityFS\0' else [('', d)]
     for node, x in sers:
-        if not unityfs.is_serialized(x): continue
-        for cid, pid, o in unityfs.serialized_objects(x, COMMON, {unityfs.CLASS_SHADER}, trees):
+        if not unityfs.is_serialized(x):
+            fmt = unityfs.newer_format(x)
+            if fmt:   # a newer serialized format (Super Bunny Man, Unity 6000.5, format 23, was skipped without a word and drew a black screen)
+                print(f'[RED] {label}{":" + node if node else ""}: serialized file format {fmt}, which unityfs.py does not read; its shaders are left out', flush=True)
+            continue
+        try: objs = list(unityfs.serialized_objects(x, COMMON, {unityfs.CLASS_SHADER}, trees))
+        except unityfs.NoTree: raise   # a ValueError too: the first pass defers the file, the second reads it with the layouts by version
+        except (ValueError, struct.error, IndexError) as e:
+            print(f'[RED] {label}{":" + node if node else ""}: the serialized file cannot be read ({e}); its shaders are left out', flush=True); continue
+        for cid, pid, o in objs:
             name = o['m_ParsedForm']['m_Name'] if 'm_ParsedForm' in o else o.get('m_Name', '?')
             stages = unity_stages(o)
             for plat, k, sp in unityfs.shader_programs(o, unity_code_blobs(o)):
@@ -1789,7 +1804,7 @@ def scan_file(args):
             d = head_d if len(head_d) >= struct.unpack_from('<I', d, 10)[0] else xnb_decompress(d)
         else:
             d = xnb_decompress(d)
-    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and __import__('unityfs').is_serialized(d)):
+    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and (__import__('unityfs').is_serialized(d) or __import__('unityfs').newer_format(d))):
         import unityfs
         try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
         except unityfs.NoTree as e:
@@ -1821,13 +1836,22 @@ def nso_image(path):
         img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
     return bytes(img)
 
+def path_list(arg):
+    """a comma-separated list of paths whose names may hold commas themselves (Snipperclips Plus - Cut It Out, Together): pieces are joined back while the
+    joined path does not exist and a longer join does, so a path that exists is never split"""
+    parts, out, i = arg.split(','), [], 0
+    while i < len(parts):
+        j = next((j for j in range(len(parts), i, -1) if os.path.exists(','.join(parts[i:j]))), i + 1)
+        out.append(','.join(parts[i:j])); i = j
+    return out
+
 def main():
     romfs_l, main_l, pkg, mapout, factsout = sys.argv[1:6]
     pairsout = sys.argv[6] if len(sys.argv) > 6 else None
     psopairsout = sys.argv[7] if len(sys.argv) > 7 else None   # pso_pairs.tsv: the pairs the pipeline prebuild takes besides shader_pairs.tsv (the BAHS program variations)
     # Several versions (base game + update): the RomFS and main arguments are comma-separated and paired one to one; the output is their union (keys are content hashes, shaders shared by versions appear once).
     # The first version's source column is unchanged; later versions are prefixed with their workspace directory name (e.g. v327680): /v327680/Shader/…, main@v327680. They sort after the first version, so existing rows keep their package indices.
-    romfs_v, main_v = romfs_l.split(','), main_l.split(',')
+    romfs_v, main_v = path_list(romfs_l), path_list(main_l)
     if len(romfs_v) != len(main_v): red(f'{len(romfs_v)} RomFS and {len(main_v)} main: they must pair one to one')
     files, results, common = [], [], None
     for i, (romfs, mainnso) in enumerate(zip(romfs_v, main_v)):
@@ -1849,9 +1873,24 @@ def main():
         # calls glslcCompile in a module it loads (Fire Emblem: Three Houses; profile_guess.py shader_sources). Captain Toad: Treasure Tracker imports it with agl's GLSL sources, but no module defines it
         cap = os.environ.get('DM_GLSLC_CAPTURE') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'glslc_capture')
         names = sorted(f for f in os.listdir(cap) if f.endswith('.glslc')) if os.path.isdir(cap) else []
-        if not names and img.count(b'#version ') and 'glslcCompile' in main_imports(img) and glslc_module(os.path.dirname(os.path.abspath(mainnso))):
-            print(f'[RED] main holds GLSL sources and imports glslcCompile, but there are no captured GLSLC outputs in {cap}: the shaders the game compiles at run time will have no translation', flush=True)
         for nm in names: found += glslc_shaders(open(os.path.join(cap, nm), 'rb').read(), f'/glslc_capture/{nm}')
+        # Godot 4 console builds (W4 Games) ship their shaders precompiled: GLSLC outputs inside the .godot/w4_shaders/*.nvn.w4_shader containers of a .pck, each stage's code
+        # zstd-compressed (Unrailed 2: Back on Track, 2864 outputs in 1046 of 1138 containers of nx.pck); godot_w4.py reads them
+        import godot_w4
+        gpk = godot_w4.packs(romfs)
+        n0 = len(found)
+        if gpk:
+            unz = godot_w4._zstd()
+            if not unz: print('[RED] the RomFS has Godot packs but this Python has no zstd module (Python 3.14, or pip install zstandard): their compressed shaders are not read', flush=True)
+            for pk in gpk:
+                rel = os.path.relpath(pk, romfs).replace(os.sep, '/')
+                for name, _, g in godot_w4.outputs(pk, unz): found += glslc_shaders(g, f'/{rel}#{name}', need=False)
+            print(f'godot_w4: {len(found) - n0} shader stages from GLSLC outputs in {len(gpk)} Godot pack(s)', flush=True)
+        # checked after the Godot packs: a W4 build (Unrailed 2) imports glslcCompile but ships every output precompiled, and this line makes the packer record at run time
+        # (nxn_pack.py glslc_needed), which Switch Pad then shows as "play it on the iPad" forever
+        godot_n = len(found) - n0 if gpk else 0
+        if not names and not godot_n and img.count(b'#version ') and 'glslcCompile' in main_imports(img) and glslc_module(os.path.dirname(os.path.abspath(mainnso))):
+            print(f'[RED] main holds GLSL sources and imports glslcCompile, but there are no captured GLSLC outputs in {cap}: the shaders the game compiles at run time will have no translation', flush=True)
         # Unreal Engine shader code archives decoded on the Mac (uepak.py): <version dir>/ue_shaders, or DM_UE_SHADERS; needed when the RomFS has Unreal paks
         ued = os.environ.get('DM_UE_SHADERS') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'ue_shaders')
         names = sorted(f for f in os.listdir(ued) if f.endswith('.ushaderbytecode')) if os.path.isdir(ued) else []
@@ -1885,10 +1924,12 @@ def main():
         for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
         # and a hash none of those has takes the layout of the file's Unity release line, if unityfs.py has one (KNOWN_BY_VERSION) and it reads every object to its end (Unspottable, Unity 2019.4.22f1)
         for cid, line in unityfs.KNOWN_BY_VERSION: trees.setdefault(unityfs.version_key(cid, line), unityfs.known_version_tree(cid, line))
+        # and after those, every Shader and ComputeShader tree of the Unity releases from 2017.1 (unity_layouts.txt), tried in turn from the file's own version, each kept only if it reads every object to its end
+        trees[unityfs.GENERATED] = True
         byrel = {r: p for p, r in files}
         with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
         for rel, uniq, pr, extra in again:
-            if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow')
+            if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow, nor does any Unity release layout unityfs.py has read it')
         results = [r for r in results if r[3] != 'defer'] + again
     per_src = collections.Counter(); pairs = set()
     for rel, uniq, pr, _ in results:

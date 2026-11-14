@@ -1,5 +1,7 @@
 // Guest thread environment: gate slot = host gate entry; x18 slot cleared; tpidr_el0 slot = ELF TLS block; tpidrro_el0 slot = Horizon ThreadLocalRegion (0x200).
-// The SDK's internal critical section takes the current thread object pointer from TLR[0x1f8]; here each thread gets a zero-initialized object allocated and written in.
+// The kernel owns two fields of the ThreadLocalRegion that the SDK reads: the current thread object at TLR[0x1f8] and, since SDK 22, the thread's ID at TLR[0x110] (nn::os 22's internal critical
+// section stores it as a mutex's owner and compares it in IsLockedByCurrentThread, where SDK 16 compared the object pointer). Here each thread gets a zero-initialized object allocated and
+// written in, and its ID once the thread table has one (guest_thread_set_id)
 #include "dm.h"
 #define TLS_SIZE 8192
 #define TLR_SIZE 0x200
@@ -25,3 +27,6 @@ void guest_thread_init(void) {
     void **prev = pthread_getspecific(g_keyown); if (prev) own_free(prev);   // re-initialised on the same thread: free the previous set first (the new one is what the slots now point to)
     pthread_setspecific(g_keyown, own);
 }
+// The thread's kernel ID at TLR[0x110], the one svcGetThreadId answers (hle_thread.c's thr_t id, never 0: 0 is the owner word of an unlocked mutex). Without it every
+// unlocked SDK 22 mutex reads as the caller's and the first heap lock aborts (docs/reference/threads.md)
+void guest_thread_set_id(uint64_t id) { *(uint32_t *)((uint8_t *)pthread_getspecific(g_keytlr) + 0x110) = (uint32_t)id; }

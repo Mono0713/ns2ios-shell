@@ -63,9 +63,27 @@ def lover_wrapper(main_path):
     return src
 
 
+def _lua_runtime():
+    """lupa's LuaRuntime, installing lupa with pip on first use (Switch Pad's Python on Windows does not ship it)."""
+    try:
+        from lupa import LuaRuntime
+        return LuaRuntime
+    except ImportError:
+        pass
+    import importlib, subprocess
+    print('installing lupa, the Lua runtime the GLSL generation needs (pip install lupa, once)', flush=True)
+    r = subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', 'lupa'])
+    importlib.invalidate_caches()
+    try:
+        from lupa import LuaRuntime
+        return LuaRuntime
+    except ImportError:
+        sys.exit('[x] the lupa package could not be installed (pip exit %d). Install it with:  %s -m pip install lupa' % (r.returncode, sys.executable))
+
+
 def generate(game_dir, gles=False):
     """[(key, 'vert'|'frag', glsl bytes, where)] for every shader the game would compile."""
-    from lupa import LuaRuntime
+    LuaRuntime = _lua_runtime()
     main = os.path.join(game_dir, 'ExeFS', 'main')
     if not os.path.isfile(main):
         sys.exit('%s: no ExeFS/main' % game_dir)

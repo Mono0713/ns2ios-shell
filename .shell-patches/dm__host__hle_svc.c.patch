@@ -29,9 +29,13 @@ diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
  static uint8_t *g_as;              // ASLR region base = the whole block
  static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_cap;
  // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
-@@ -29,10 +48,16 @@
+@@ -28,11 +47,21 @@
+ int dm_guest_as_contains(uintptr_t a) { uintptr_t b = (uintptr_t)g_as; return g_as && a >= b && a - b < RESERVE; }
  
  static void *alias_windows_thread(void *arg);
++// hle_runmark.c: the launcher's automatic memory learns why a run ended (weak: the memory unit tests link this file alone)
++__attribute__((weak)) void dm_run_mark(char c); __attribute__((weak)) void dm_run_mark_memory_refused(void);
++#define RUN_MARK_MEM() do { if (dm_run_mark_memory_refused) dm_run_mark_memory_refused(); } while (0)
  static void mem_init_once(void) {
 +    // Read the profile's memory layout, overridable per game (see the comment above RESERVE). Before the boundary
 +    // check below, which has to judge the values this run actually uses.
@@ -39,6 +43,7 @@ diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
 +    g_mem_alias = env_u64("DM_MEM_ALIAS",   DM_GAME_MEM_ALIAS);
 +    g_mem_stack = env_u64("DM_MEM_STACK",   DM_GAME_MEM_STACK);
 +    (void)app_pool(); (void)mem_used();
++    if (dm_run_mark) dm_run_mark('b');   // the game has started: from here a kill counts for the launcher's automatic memory
      size_t pg = (size_t)getpagesize();
 -    if (RESERVE < 0x10000000 || DM_GAME_MEM_ALIAS > RESERVE - 0x10000000 ||
 -        DM_GAME_MEM_STACK > RESERVE - 0x10000000 - DM_GAME_MEM_ALIAS ||
@@ -49,7 +54,7 @@ diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
          die("guest address-space profile has invalid native boundaries");
      g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
      if (g_as == MAP_FAILED) die("reserve guest AS");
-@@ -42,8 +67,8 @@
+@@ -42,8 +71,8 @@
      //   and resource loading then MapPhysicalMemory's into the alias region after the node area on demand. With a 1.25 GB alias region only about 256 MB was left there, and 3 MB-class layout archives (WipeCourseIn / WipeWarp)
      //   got no address, were skipped, and crashed on a null pointer when used (main +0x373e04). So alias = node area + 1.75 GB + slack; the heap needs only 1.47 GB, and 2.625 GB is plenty.
      // The alias and stack sizes come from the game profile (mem_alias / mem_stack), the heap takes the rest; Mario: alias 0xB8000000, stack 0x10000000 → stack at +0xC8000000, heap at +0xD8000000
@@ -60,7 +65,7 @@ diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
      g_heap  = g_stack + g_stack_cap; g_heap_cap  = RESERVE - (size_t)(g_heap - g_as);
      if (!(g_alias_bits = calloc((g_alias_cap >> 18) + 1, sizeof *g_alias_bits))) die("alias region page bitmap calloc");
      if (!(g_alias_exposed = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_exposed))) die("alias exposure bitmap calloc");
-@@ -60,7 +85,7 @@
+@@ -60,7 +89,7 @@
  // and hands the whole block to its own StandardAllocator (main+0x32137a0) -- so heap size = pool − image footprint, it has only as much as the host reports.
  // Previously 3 GB was reported here and SetHeapSize never failed: the heap was about 150 MB smaller than on the real device, at the run entry peak the main heap had only about 18 MB left, and under high local load a timing shift made a 128 KB request return null,
  // which the guest writes to without a null check (CRASH main+0x1b36138, re-verified after merge with inv_tap).
@@ -69,22 +74,45 @@ diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
  static size_t image_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++) if (!g_mod[i].nro) n += g_mod[i].size;   // an NRO lives in memory the game allocated (its image and bss buffers)
      return (n + 0x1fffff) & ~(size_t)0x1fffff; }
  // Giant bss (modules with the patch area before the base, patch_nso.py FAR): the image bytes beyond the file part. Used memory was reported as "heap + 64 MB", where the 64 MB covers ordinary modules' code and data (Mario's two modules are about 74 MB together,
-@@ -270,11 +295,11 @@
+@@ -260,7 +289,7 @@
+     switch (num) {
+     case 0x01: {  // SetHeapSize(out_addr*, size)  → x1 = heap base
+         size_t size = regs[1];
+-        if (size > g_heap_cap) { LOG("SetHeapSize OOM: req %#zx > cap %#zx", size, g_heap_cap); regs[0] = 0xD401; return 0; }
++        if (size > g_heap_cap) { LOG("SetHeapSize OOM: req %#zx > cap %#zx", size, g_heap_cap); RUN_MARK_MEM(); regs[0] = 0xD401; return 0; }
+         pthread_mutex_lock(&g_map_lock);
+         size_t previous = g_heap_cur, image = image_bytes();
+         if (size < previous && map_source_busy((uintptr_t)g_heap + size, previous - size)) {
+@@ -270,11 +299,13 @@
              // Logged once (Mario's retries would repeat it): a game that sizes its heap as pool − used memory and does not retry stops here when its modules are larger than the used memory reported
              // (profile mem_used; the NSP script's probe boot reads this line, and sets mem_used when no SetHeapSize succeeds afterwards)
              static int once; if (!once++) LOG("[mem] SetHeapSize %#zx + modules %#zx > app pool %#llx (used memory reported %#llx + bss %#zx)", size, image_bytes() - big_bss_bytes(),
 -                                              (unsigned long long)APP_POOL, (unsigned long long)DM_GAME_MEM_USED, big_bss_bytes());
 +                                              (unsigned long long)APP_POOL, (unsigned long long)MEM_USED, big_bss_bytes());
++            RUN_MARK_MEM();   // only a flag: a game that retries smaller and goes on is not counted (the launcher looks at it only when the run then fails)
              pthread_mutex_unlock(&g_map_lock); regs[0] = 0x10801; return 0;
          }
 -        uint64_t charged = (uint64_t)DM_GAME_MEM_USED + big_bss_bytes() + atomic_load(&g_alias_mapped);
 -        if (DM_GAME_MEM_MAP_LIMIT && (charged > APP_POOL || size > APP_POOL - charged)) {
 +        uint64_t charged = (uint64_t)MEM_USED + big_bss_bytes() + atomic_load(&g_alias_mapped);
 +        if (mem_map_limit() && (charged > APP_POOL || size > APP_POOL - charged)) {
++            RUN_MARK_MEM();
              pthread_mutex_unlock(&g_map_lock); regs[0] = 0x10801; return 0;
          }
          int rc = 0;
-@@ -417,8 +442,8 @@
+@@ -297,7 +328,10 @@
+     case 0x04: {  // MapMemory(dst, src, size): when creating a thread the SDK moves the stack on the heap into the stack region
+         uint64_t dst = regs[0], src = regs[1], size = regs[2];
+         uint32_t result = map_arguments(dst, src, size);
+-        if (result) { regs[0] = result; return 0; }
++        if (result) {   // logged too (the first 16): Unrailed 2's thread stacks failed here without a word, and the SDK aborts in MapAliasStack
++            static int said; if (said < 16) { said++; LOG("[RED] MapMemory refused (%#x): %#llx <- %#llx +%#llx, stack region %p +%#llx", result, (unsigned long long)dst, (unsigned long long)src, (unsigned long long)size, (void *)g_stack, (unsigned long long)g_stack_cap); }
++            regs[0] = result; return 0;
++        }
+         pthread_mutex_lock(&g_map_lock);
+         if (map_find(dst, size) || map_source_busy(src, size) || !map_source_backed(src, size)) result = 0xD401;
+         else if (g_nmap == MAX_MAP) result = 0xCE01;
+@@ -417,10 +451,10 @@
          // and maps new ones for later allocations, until a map fails: then it unmaps the cached block and retries (measured on the Mac: the refused 4 MB map at +0x43e2c000 was followed by
          // UnmapPhysicalMemory of the 3.15 GB block and the same map again). Without the limit the mapped total went past the pool in the first minute and the freed block stayed mapped.
          // Off by default: Ace Attorney Investigations Collection maps a little more than the 1 GB pool its profile reports
@@ -93,9 +121,20 @@ diff --git a/dm/host/hle_svc.c b/dm/host/hle_svc.c
 +        if (mem_map_limit() && num == 0x2C) {
 +            int64_t room = (int64_t)APP_POOL - (int64_t)(g_heap_cur + MEM_USED + big_bss_bytes()) - atomic_load(&g_alias_mapped);
              if (need && need > room) {
-                 pthread_mutex_unlock(&g_map_lock);
+-                pthread_mutex_unlock(&g_map_lock);
++                pthread_mutex_unlock(&g_map_lock); RUN_MARK_MEM();
                  static _Atomic int nref; if (atomic_fetch_add(&nref, 1) < 8) LOG("[mem] MapPhysicalMemory +%#zx refused: %.2f GB mapped, the application pool is full (ResultLimitReached, the SDK frees cached pages and retries)",
-@@ -480,13 +505,13 @@
+                                                                        size, atomic_load(&g_alias_mapped) / 1073741824.0);
+                 regs[0] = 0x10801; return 0;
+@@ -462,6 +496,7 @@
+         LOG("Break#%d reason=%#llx Result=%#x svc at %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
+         dm_backtrace(regs[29]);
+         if (regs[0] & 0x80000000ull) return 0;   // notification only, can continue
++        if (dm_run_mark) dm_run_mark('x');
+         _exit(42);
+     }
+     case 0x1E: guest_clock_read_wait(); regs[0] = 0; regs[1] = guest_ns() * 12 / 625; return 0;   // GetSystemTick
+@@ -480,13 +515,13 @@
          case I_StackAddr: v = (uint64_t)g_stack; break;   case I_StackSize: v = g_stack_cap; break;
          case I_TotalMem: case I_TotalNonSys: v = APP_POOL; break;
          case I_UsedMem:  case I_UsedNonSys:  pthread_mutex_lock(&g_map_lock);

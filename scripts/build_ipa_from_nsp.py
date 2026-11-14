@@ -912,8 +912,14 @@ def rewrite(py, repo, exe_dir, out, env, logs, g, provisional=False):
     src = {m: exe_dir / m for m in mods} | nros
     names = list(src)
     kf = out.with_name(out.name + '.key')
+    # an sdk build no patch file names: the address-space cuts every registered build takes, found by their instructions (dm/tools/sdk_auto_cuts.py), loaded by patch_nso.py from DM_GAMES_DIR
+    sys.path.insert(0, str(repo / 'dm/tools')); import sdk_auto_cuts
+    games_dirs = [d for d in env.get('DM_GAMES_DIR', '').split(os.pathsep) if d]
+    auto_dir, auto_line, auto_text = sdk_auto_cuts.prepare(str(exe_dir), mods, str(out.with_name('auto_patches')), str(repo), games_dirs)
+    say(auto_line)
+    if auto_dir: env = dict(env, DM_GAMES_DIR=os.pathsep.join(games_dirs + [auto_dir]))
     key = fingerprint(('files', [repo / 'dm/tools' / f for f in ('patch_nso.py', 'nso_code.py', 'nso_asm.py', 'nso_match.py')] + patch_files(repo, exe_dir, mods, env.get('DM_GAME')) + list(src.values()) + ([manifest] if manifest.is_file() else [])), names, capstone.__version__,
-                      {k: env.get(k) for k in ('DM_PATCH_FRONT', 'DM_GAME')})
+                      {k: env.get(k) for k in ('DM_PATCH_FRONT', 'DM_GAME')}, auto_text)
     if all((out / f'{m}.patched.bin').is_file() for m in names) and reused(kf, key) is not None:
         PROG.end(f'{", ".join(mods)}{f" and {len(nros)} NROs" if nros else ""}, reused (inputs unchanged)'); return g
     tmp = out.with_name(out.name + '.partial'); rmtree(tmp); tmp.mkdir(parents=True); logs.mkdir(parents=True, exist_ok=True)

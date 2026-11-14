@@ -68,8 +68,26 @@ class ShaderByVersionTests(unittest.TestCase):
         with self.assertRaises(unityfs.NoTree):
             list(unityfs.serialized_objects(data, {}, {unityfs.CLASS_SHADER}, second_pass_trees()))
 
+    def test_2021_3_shader_reads_by_hash_and_by_release_line(self):
+        # Ultimate Chicken Horse (Unity 2021.3.45f1): the keyword state mask is in each pass, not in each program as in 2022.3
+        tree = unityfs.known_tree(unityfs.CLASS_SHADER, bytes.fromhex('f0c184272a05e54447e36366ec4876a6'))
+        self.assertIs(tree, unityfs.known_tree(unityfs.CLASS_SHADER, bytes.fromhex('f0c184272a05e54447e36366ec4876a6')))
+        data = serialized('2021.3.45f1', unityfs.known_version_tree(unityfs.CLASS_SHADER, '2021.3'))
+        objs = list(unityfs.serialized_objects(data, {}, {unityfs.CLASS_SHADER}, second_pass_trees()))
+        self.assertEqual(len(objs), 1)
+        p = objs[0][2]['m_ParsedForm']['m_SubShaders'][0]['m_Passes'][0]
+        self.assertEqual(p['m_SerializedKeywordStateMask'], [1])
+        self.assertNotIn('m_SerializedKeywordStateMask', p['progVertex'])
+        self.assertEqual(p['progVertex']['m_PlayerSubPrograms'][0][0]['m_BlobIndex'], 1)
+
+    def test_the_2022_3_layout_does_not_pass_for_2021_3(self):
+        other = unityfs.known_tree(unityfs.CLASS_SHADER, bytes.fromhex('ea424a5fc1e48db62144df956f9e1005'))
+        data = serialized('2021.3.45f1', other)
+        with self.assertRaises(unityfs.NoTree):
+            list(unityfs.serialized_objects(data, {}, {unityfs.CLASS_SHADER}, second_pass_trees()))
+
     def test_other_release_lines_have_no_guess(self):
-        data = serialized('2021.3.5f1', unityfs.known_version_tree(unityfs.CLASS_SHADER, '2019.4'))
+        data = serialized('2020.1.5f1', unityfs.known_version_tree(unityfs.CLASS_SHADER, '2019.4'))
         with self.assertRaises(unityfs.NoTree):
             list(unityfs.serialized_objects(data, {}, {unityfs.CLASS_SHADER}, second_pass_trees()))
 

@@ -94,6 +94,7 @@ HLE_FORCE("_ZN2nn2oe16DisableRecordingEv", "video recording switch; the host has
 // Silence the game's sound in system video captures (through am; FINAL FANTASY RESONANCE imports both): the host records nothing
 HLE_FORCE("_ZN2nn2oe13MuteRecordingEv", "mute the sound of system video recording; the host has no system recording", void, h_oe_MuteRec, void) {}
 HLE_FORCE("_ZN2nn2oe15UnmuteRecordingEv", "unmute the sound of system video recording; the host has no system recording", void, h_oe_UnmuteRec, void) {}
+HLE_FORCE("_ZN2nn2oe23EnableGamePlayRecordingEPvm", "game play recording (hands am a transfer memory of the given buffer; the HLE am has no application functions to take it, and the SDK then reads through a null pointer); the host has no system recording", void, h_oe_EnableGamePlayRec, void *buf, size_t n) { (void)buf; (void)n; }   // Super Mario Odyssey 1.0.0 calls it at the end of nninitStartup (main+0x536f7c) with 96 MB
 HLE_FORCE("_ZN2nn2oe16EnableScreenShotEv", "screenshot switch; the host has no system screenshot", void, h_oe_EnableShot, void) {}
 HLE_FORCE("_ZN2nn2oe17DisableScreenShotEv", "screenshot switch; the host has no system screenshot", void, h_oe_DisableShot, void) {}
 // Super Mario Odyssey: HOME button blocking around its own menus, screenshot orientation, and the auto-sleep query (all through am)

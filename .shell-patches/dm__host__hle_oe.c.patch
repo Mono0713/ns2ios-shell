@@ -1,7 +1,15 @@
 diff --git a/dm/host/hle_oe.c b/dm/host/hle_oe.c
 --- a/dm/host/hle_oe.c
 +++ b/dm/host/hle_oe.c
-@@ -117,7 +117,11 @@
+@@ -94,6 +94,7 @@
+ // Silence the game's sound in system video captures (through am; FINAL FANTASY RESONANCE imports both): the host records nothing
+ HLE_FORCE("_ZN2nn2oe13MuteRecordingEv", "mute the sound of system video recording; the host has no system recording", void, h_oe_MuteRec, void) {}
+ HLE_FORCE("_ZN2nn2oe15UnmuteRecordingEv", "unmute the sound of system video recording; the host has no system recording", void, h_oe_UnmuteRec, void) {}
++HLE_FORCE("_ZN2nn2oe23EnableGamePlayRecordingEPvm", "game play recording (hands am a transfer memory of the given buffer; the HLE am has no application functions to take it, and the SDK then reads through a null pointer); the host has no system recording", void, h_oe_EnableGamePlayRec, void *buf, size_t n) { (void)buf; (void)n; }   // Super Mario Odyssey 1.0.0 calls it at the end of nninitStartup (main+0x536f7c) with 96 MB
+ HLE_FORCE("_ZN2nn2oe16EnableScreenShotEv", "screenshot switch; the host has no system screenshot", void, h_oe_EnableShot, void) {}
+ HLE_FORCE("_ZN2nn2oe17DisableScreenShotEv", "screenshot switch; the host has no system screenshot", void, h_oe_DisableShot, void) {}
+ // Super Mario Odyssey: HOME button blocking around its own menus, screenshot orientation, and the auto-sleep query (all through am)
+@@ -117,7 +118,11 @@
  // Profile perf_mode boost: Boost whatever the operation mode, a combination a Switch 1 never reports, so a profile choice and not a default. Rhythm Heaven Groove keeps one flag per mode
  //   (main+0xa764 / main+0xa784): console means a TV, which gets a latency calibration (main+0x20d0, scene script main+0x4c0820), and Boost alone picks its 1920x1080 draw size
  //   (table main+0xada6d0, else 1280x720). Handheld with Boost: no TV calibration on a phone, full-size drawing
@@ -14,7 +22,7 @@ diff --git a/dm/host/hle_oe.c b/dm/host/hle_oe.c
  // SDK 11 calls of Monster Hunter Rise: the CPU overclock query reads an apm session the host never opened (null read in sdk+0x35258 at the start of nnMain, main+0x6bc8650);
  // the default display resolution is the TV's (1080p docked) or the panel's (720p handheld) and only changes with the operation mode
  // Taiko Risshiden V DX (SDK 12.3.3) turns it on in nnMain (main+0x2e1e4c): the setter goes through the same apm session (null read at sdk+0x362b8). The host does not scale clocks;
-@@ -213,6 +217,7 @@
+@@ -213,6 +218,7 @@
      const char *e = getenv("DM_LANG");
      char code[8] = {0};
      strncpy(code, e && *e ? e : "en-US", sizeof code - 1);

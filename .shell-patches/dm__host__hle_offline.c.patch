@@ -1,0 +1,26 @@
+diff --git a/dm/host/hle_offline.c b/dm/host/hle_offline.c
+--- a/dm/host/hle_offline.c
++++ b/dm/host/hle_offline.c
+@@ -120,6 +120,10 @@
+ HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr", "offline: no IP (SDK 10 overload)", Result, h_nifm_GetIp10, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
+ // EnvironmentIdentifier = char[8]: retail environment "lp1"
+ HLE_FORCE("_ZN2nn3nsd24GetEnvironmentIdentifierEPNS0_21EnvironmentIdentifierE", "server environment name: retail lp1", void, h_nsd_EnvId, char *out) { memset(out, 0, 8); memcpy(out, "lp1", 3); }
++// The server environment the application is told: retail (0, what Ryujinx's nsd answers too). Left to the SDK, it opens nsd:u / nsd:a itself, which the host
++// does not serve, and the game aborts with Result 0xe8d at its first frames (Ultimate Sheep Raccoon: nn::oe::GetServerEnvironmentType, a branch to the nsd one in sdk)
++HLE_FORCE("_ZN2nn3nsd35GetApplicationServerEnvironmentTypeEv", "server environment of the application: retail (0)", int, h_nsd_AppEnvType, void) { return 0; }
++HLE_FORCE("_ZN2nn2oe24GetServerEnvironmentTypeEv", "server environment of the application: retail (0)", int, h_oe_EnvType, void) { return 0; }
+ 
+ // ---------- friends: newer SDK overloads ----------
+ HLE_FORCE("_ZN2nn7friends12SetAllocatorEPFPvmEPFvS1_mE", "friends library allocator; no session is created, ignored", void, h_fr_SetAlloc, void *a, void *f) { (void)a; (void)f; }
+@@ -200,3 +204,11 @@
+ HLE_FORCE("_ZN2nn5album14ShowAlbumFilesEv", "album applet: not shown", Result, h_album_Show, void) { return RES_FAIL; }
+ // Pokémon Legends: Z-A (SDK 19): a screenshot of the current frame, taken by the capture service
+ HLE_FORCE("_ZN2nn5album21SaveCurrentScreenshotENS0_17AlbumReportOptionE", "screenshot of the current frame (capsrv): no album, fails", Result, h_album_SaveCur, int report) { (void)report; LOG("album::SaveCurrentScreenshot (no album)"); return RES_FAIL; }
++
++// ---------- ngc: the rest of Unity's Switch plugin (SUPER BOMBERMAN R 2, All You Need Is Help, Splatterbot). The host's filter has no word list: nothing is profanity ----------
++HLE_FORCE("_ZN2nn3ngc15ProfanityFilter15SkipAtSignCheckENS1_8SkipModeE", "profanity filter option; nothing is checked whatever the mode", void, h_ngc_SkipAt, void *self, int mode) { (void)self; (void)mode; }
++HLE_FORCE("_ZN2nn3ngc15ProfanityFilter22SetNormalizationOptionEi", "profanity filter option; nothing is checked whatever the option", void, h_ngc_Norm, void *self, int opt) { (void)self; (void)opt; }
++HLE_FORCE("_ZN2nn3ngc47CheckProfanityWordsInTextForPlatformRegionChinaEPbPKc", "profanity check (China region): no profanity", Result, h_ngc_CheckCn, uint8_t *out, const char *text) {
++    (void)text; if (out) *out = 0; return RES_OK;
++}
++HLE_FORCE("_ZN2nn3ngc46MaskProfanityWordsInTextForPlatformRegionChinaEPc", "profanity masking (China region): nothing is masked", Result, h_ngc_MaskCn, char *text) { (void)text; return RES_OK; }

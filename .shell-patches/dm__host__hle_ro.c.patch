@@ -1,0 +1,59 @@
+diff --git a/dm/host/hle_ro.c b/dm/host/hle_ro.c
+--- a/dm/host/hle_ro.c
++++ b/dm/host/hle_ro.c
+@@ -11,12 +11,18 @@
+ 
+ #define RO_FAIL ((Result)(22 | (1 << 9)))   // a failure under ro module 22
+ #define RO_NOT_NRO ((Result)0x816)           // the SDK's result for an image without NRO0 (sdk+0x3471e8)
++// The EOS stand-in (hle_eos.c): a game that loads the Epic Online Services SDK NRO gets this module object; its names resolve to offline stubs
++void *dm_eos_sym(const char *name);
++int dm_eos_image(const void *image, size_t n);
++static char g_eos_module;
++static int g_eos_loaded;
+ static pthread_mutex_t g_ro_mu = PTHREAD_MUTEX_INITIALIZER;   // the SDK holds g_RoLock over a load as well
+ 
+ HLE_FORCE("_ZN2nn2ro10InitializeEv", "connect to the ldr:ro service; the host has none, symbol lookups search the loaded modules directly", Result, h_ro_Initialize, void) { LOG("init takeover: ro::Initialize (no-op)"); return 0; }
+ 
+ HLE_FORCE("_ZN2nn2ro12LookupSymbolEPmPKc", "look up a definition by name in the loaded modules", Result, h_ro_LookupSymbol, uintptr_t *out, const char *name) {
+     void *p = name ? guest_sym(name) : NULL;
++    if (!p && g_eos_loaded) p = dm_eos_sym(name);   // the EOS stand-in's names, once a game has loaded it
+     static int n; if (n++ < 40) LOG("ro::LookupSymbol %s → %p", name ? name : "(null)", p);
+     if (!p) { static int red; if (!red++) LOG("[RED] ro::LookupSymbol cannot find %s (first case)", name ? name : "(null)"); return RO_FAIL; }
+     if (out) *out = (uintptr_t)p;
+@@ -32,6 +38,12 @@
+ }
+ 
+ HLE_FORCE("_ZN2nn2ro18LookupModuleSymbolEPmPKNS0_6ModuleEPKc", "look up a definition by name in one loaded NRO", Result, h_ro_LookupModuleSymbol, uintptr_t *out, const void *mod, const char *name) {
++    if (mod && ((const ro_module *)mod)->module == &g_eos_module && ((const ro_module *)mod)->state == 1) {   // the EOS stand-in
++        void *s = dm_eos_sym(name);
++        if (!s) return RO_FAIL;
++        if (out) *out = (uintptr_t)s;
++        return 0;
++    }
+     module_t *m = module_from(mod); void *p = m && name ? module_sym(m, name) : NULL;
+     // A name the loaded module does not define fails on Horizon too (ldr:ro's not-found result), and games probe for one: Portal's Source engine asks each module for BuiltDebug, which
+     // only its debug builds define. Only a module the host does not know is wrong
+@@ -60,6 +72,15 @@
+     // rom:/nro/EOSSDK-Switch-Shipping.nro for Epic-account cross-save (Auth, Connect, PlayerDataStorage), which the host cannot serve; the real SDK would at best fail its login and at
+     // worst wait on time-outs or contact Epic's servers. Refused, the game's EOS_Platform_Create stays a stub, it logs "[EOS] Failed to create platform" and plays offline with local
+     // saves, as before the host loaded NROs. The pack leaves such an NRO out (a "refused" row in nro.tsv); an older nro.tsv that has it is caught by the export below
++    // Unity's EOS bindings (All You Need Is Help) cannot do without the module: every EOS_* entry is resolved through it, and libEOS waits for a platform forever. Such a game
++    // (an EOS SDK image the pack refused or left out) gets the host's offline stand-in instead (hle_eos.c); Hades and Hades II never get here, their NRR registration fails first
++    if ((nro_refused(sha) || !nro_find(sha)) && dm_eos_image(image, n)) {
++        ro_module *rm = mod;
++        if (rm) { rm->module = &g_eos_module; rm->state = 1; rm->image = image; rm->buffer = buf; }
++        g_eos_loaded = 1;
++        LOG("ro::LoadModule: %s… (%u bytes) is the Epic Online Services SDK: the host's offline stand-in answers its functions (no Epic login, nothing sent)", hx, n);
++        return 0;
++    }
+     if (nro_refused(sha)) { LOG("ro::LoadModule: refused %s… (%u bytes): an online SDK (Epic Online Services), not loaded; the game plays offline", hx, n); return RO_FAIL; }
+     pthread_mutex_lock(&g_ro_mu);
+     module_t *m = nro_find(sha);
+@@ -84,6 +105,7 @@
+ HLE_FORCE("_ZN2nn2ro8FinalizeEv", "Initialize opened no ldr:ro session", void, h_ro_Finalize, void) { }
+ 
+ HLE_FORCE("_ZN2nn2ro12UnloadModuleEPNS0_6ModuleE", "unload an NRO: its fini, then out of the symbol lookups", void, h_ro_UnloadModule, void *mod) {
++    if (mod && ((ro_module *)mod)->module == &g_eos_module) { ((ro_module *)mod)->state = 0; ((ro_module *)mod)->module = NULL; return; }   // the EOS stand-in
+     module_t *m = module_from(mod);
+     if (!m || !m->loaded) { LOG("[RED] ro::UnloadModule: not a loaded module (%p)", mod); return; }
+     if (m->fini) ((void (*)(void))(m->base + m->fini))();   // as RoModule::CallFini

@@ -328,7 +328,10 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     case 0x04: {  // MapMemory(dst, src, size): when creating a thread the SDK moves the stack on the heap into the stack region
         uint64_t dst = regs[0], src = regs[1], size = regs[2];
         uint32_t result = map_arguments(dst, src, size);
-        if (result) { regs[0] = result; return 0; }
+        if (result) {   // logged too (the first 16): Unrailed 2's thread stacks failed here without a word, and the SDK aborts in MapAliasStack
+            static int said; if (said < 16) { said++; LOG("[RED] MapMemory refused (%#x): %#llx <- %#llx +%#llx, stack region %p +%#llx", result, (unsigned long long)dst, (unsigned long long)src, (unsigned long long)size, (void *)g_stack, (unsigned long long)g_stack_cap); }
+            regs[0] = result; return 0;
+        }
         pthread_mutex_lock(&g_map_lock);
         if (map_find(dst, size) || map_source_busy(src, size) || !map_source_backed(src, size)) result = 0xD401;
         else if (g_nmap == MAX_MAP) result = 0xCE01;
