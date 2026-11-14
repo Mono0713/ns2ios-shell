@@ -1120,6 +1120,9 @@ def env_for(rows):
         if v: lines.append('%s=%s' % (ev, v.strip()))
     # op_mode is read as atoi() against DM_GAME_OPMODE, which is int(om == "console"): atoi("handheld") and
     # atoi("console") are both 0, so the profile's word has to become the number the host compares.
+    # ub_defer off: every inline uniform update inside a render pass ends the pass, as before the deferral (nvn_mtl.m ubd_on).
+    # Super Mario Odyssey's auto-exposure pass and its smoke read wrong constants with the deferral on (white frames).
+    if one(rows, 'ub_defer') and not truthy(one(rows, 'ub_defer')): lines.append('DM_NVN_UB_DEFER=0')
     om = one(rows, 'op_mode')
     if om: lines.append('DM_OPMODE=' + ('1' if om.strip() == 'console' else '0'))
     # program_id is deliberately NOT written. The shell is compiled from the placeholder profile, so its DM_GAME_PROGRAM_ID
