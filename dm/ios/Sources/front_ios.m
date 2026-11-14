@@ -213,7 +213,7 @@ void front_ios_back_to_picker(void) {
 // What the iPad shows while the picture is on the TV: the phones' QR code (friends scan it from the sofa) and who is playing, kept current;
 // the touch controls stay over it while no controller is connected
 static UIColor *player_color(int p) {   // each player's own colour (1-based), the same on every screen of the panel
-    static const uint32_t c[8] = {0x3478F6, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F};
+    static const uint32_t c[8] = {0x0A84FF, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F};
     uint32_t x = c[(p - 1) & 7]; return [UIColor colorWithRed:(x >> 16) / 255.0 green:((x >> 8) & 255) / 255.0 blue:(x & 255) / 255.0 alpha:1];
 }
 static UIView *glass_card(void) {   // a frosted rounded card with a hairline edge
@@ -680,7 +680,7 @@ static void home_menu_draw(void) {
             BOOL on = row.tag - 100 == g_menu_sel;
             UIView *tile = [row viewWithTag:60];
             tile.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.1];
-            ((UIImageView *)[tile viewWithTag:61]).tintColor = on ? [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1] : UIColor.whiteColor;
+            ((UIImageView *)[tile viewWithTag:61]).tintColor = on ? [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1] : UIColor.whiteColor;
             ((UILabel *)[row viewWithTag:62]).textColor = on ? [UIColor colorWithWhite:1 alpha:0.85] : [UIColor colorWithWhite:1 alpha:0.5];
             if (!on) continue;
             if (pill.alpha == 0) { pill.frame = row.frame; pill.alpha = 1; continue; }   // first placement: no slide
@@ -821,8 +821,8 @@ static UIView *home_menu_make(UIView *root) {
         [card addSubview:plate];
     }
     UIView *pill = [[UIView alloc] initWithFrame:CGRectZero]; pill.tag = 50; pill.alpha = 0; pill.userInteractionEnabled = NO;
-    pill.backgroundColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; pill.layer.cornerRadius = 16; pill.layer.cornerCurve = kCACornerCurveContinuous;
-    pill.layer.shadowColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12; pill.layer.shadowOffset = CGSizeZero;
+    pill.backgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; pill.layer.cornerRadius = 16; pill.layer.cornerCurve = kCACornerCurveContinuous;
+    pill.layer.shadowColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12; pill.layer.shadowOffset = CGSizeZero;
     [card addSubview:pill];
     CGFloat tileS = rowH == 60 ? 36 : 32;
     for (NSUInteger i = 0; i < g_menu_rows.count; i++) {
