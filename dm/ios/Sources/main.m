@@ -284,6 +284,8 @@ int shell_game_unchoose(void) {
 int main(int argc, char **argv) {
     @autoreleasepool {
         boot_log();
+        { NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];   // the Home menu's Change games flag (front_ios.m): this launch is the relaunch it asked for
+          if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) fprintf(stderr, "boot: relaunched after Change games\n"); }
         g_game_root = NSBundle.mainBundle.resourcePath;
         NSArray<NSString *> *ids = shell_game_ids();
         setenv("DM_SHELL_GAMES", @(ids.count).stringValue.UTF8String, 1);   // the launcher offers to change games when there is more than one

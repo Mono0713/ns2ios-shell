@@ -292,13 +292,15 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
  }
  @end
-@@ -116,6 +282,20 @@
+@@ -116,6 +282,22 @@
  @end
  
  int main(int argc, char **argv) {
 -    @autoreleasepool { g_boot_ok = boot_env(); }
 +    @autoreleasepool {
 +        boot_log();
++        { NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];   // the Home menu's Change games flag (front_ios.m): this launch is the relaunch it asked for
++          if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) fprintf(stderr, "boot: relaunched after Change games\n"); }
 +        g_game_root = NSBundle.mainBundle.resourcePath;
 +        NSArray<NSString *> *ids = shell_game_ids();
 +        setenv("DM_SHELL_GAMES", @(ids.count).stringValue.UTF8String, 1);   // the launcher offers to change games when there is more than one
