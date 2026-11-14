@@ -520,6 +520,55 @@ def key_hint(keys):
     return hint
 
 
+def nsp_damaged_ncas(nsp):
+    """The NCAs of an NSP whose content does not match their name (an NCA is named after the first 16 bytes of its own
+    SHA-256), read without keys; [] for an intact NSP or one that is not a PFS0 (an XCI). A truncated file counts too."""
+    import hashlib
+    bad = []
+    try:
+        size = os.path.getsize(nsp)
+        with open(nsp, 'rb') as f:
+            hdr = f.read(16)
+            if hdr[:4] != b'PFS0': return []
+            n, strsz = struct.unpack_from('<II', hdr, 4)
+            ents = f.read(n * 24); strs = f.read(strsz)
+            data0 = 16 + n * 24 + strsz
+            for i in range(n):
+                off, ln, so = struct.unpack_from('<QQI', ents, i * 24)
+                name = strs[so:strs.index(b'\0', so)].decode('utf-8', 'replace')
+                if not name.endswith('.nca'): continue
+                if data0 + off + ln > size: bad.append(name); continue
+                f.seek(data0 + off); h = hashlib.sha256(); left = ln
+                while left:
+                    b = f.read(min(left, 16 << 20))
+                    if not b: break
+                    h.update(b); left -= len(b)
+                if h.hexdigest()[:32] != name.split('.')[0].lower(): bad.append(name)
+    except (OSError, ValueError, struct.error):
+        return []
+    return bad
+
+
+def extract_hint(keys, base, upd):
+    """run() hint for nx_extract: key_hint's, and for a dump that fails the NCA's hash check (2026-11-14: Mario Kart 8
+    Deluxe 4.0.1 and Super Smash Bros. Ultimate 13.0.5 updates, each with its big RomFS patch NCA broken) which file it is,
+    found by checking every NCA against its name, so the message says which NSP to download again."""
+    keyed = key_hint(keys)
+    def hint(text):
+        msg = keyed(text)
+        if msg: return msg
+        if 'the NSP is damaged' not in text and 'Hash error' not in text and 'VerificationFailed' not in text: return None
+        say('the dump fails the hash check: checking every NCA of the NSPs against its name (reads them whole)')
+        found = [(p, nsp_damaged_ncas(p)) for p in (base, upd) if p]
+        broken = [(p, b) for p, b in found if b]
+        if not broken:
+            return ('解包失敗：遊戲檔沒通過雜湊檢查，但每個 NCA 本身都完整，可能是更新檔跟本體不是同一套。'
+                    '重新下載更新檔，最好本體和更新從同一個來源拿，再轉一次。')
+        names = '、'.join('%s（%d 個 NCA 損毀：%s）' % (Path(p).name, len(b), ', '.join(b)) for p, b in broken)
+        return '解包失敗：這個檔案下載不完整或已損毀：%s。重新下載這個檔案再轉一次。' % names
+    return hint
+
+
 def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
     ex = work / 'extract'
     ex.mkdir(parents=True, exist_ok=True)
@@ -531,7 +580,7 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         tmp = ex / (ver + '.partial')
         shutil.rmtree(tmp, ignore_errors=True)
         run([nx, keys, base, upd if upd else '-', tmp] + (['--allow-damaged'] if allow_damaged else []), log=work / 'logs' / ('extract_%s.log' % ver),
-            what='extracting %s (%s)' % (ver, base.name), hint=key_hint(keys))
+            what='extracting %s (%s)' % (ver, base.name), hint=extract_hint(keys, base, upd))
         # A previous run can leave <ver> behind without an ExeFS (an interrupted extraction, or one made before the folder
         # held an update as well), and a rename onto a non-empty directory fails on Windows. Clear it and take the new one.
         if dst.exists(): shutil.rmtree(dst, ignore_errors=True)
@@ -548,8 +597,12 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
 
 
 # Files a derived profile leaves out: the build makes all of these again from the packed version's own files.
+# patches.py too: dm/tools/patch_nso.py loads the repository's copy whatever the game, and a second copy on DM_GAMES_DIR
+# claims the same build IDs again, which stops the rewrite ("CUTS of build ... in both ..."; Super Smash Bros. Ultimate
+# 13.0.4 against the 13.0.5 profile). Its CUTS / OBS / FRAME_STEP are keyed by build ID and its MATCH_CUTS are taken from
+# the repository's profile for a derived one, so the copy adds nothing.
 DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv',
-                'dmsh_chain.h', 'vk_capture.tsv'}
+                'dmsh_chain.h', 'vk_capture.tsv', 'patches.py'}
 
 
 def module_build_id(nso):
