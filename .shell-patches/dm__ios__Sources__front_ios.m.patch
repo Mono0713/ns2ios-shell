@@ -369,7 +369,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
              [root addSubview:g_prog];
          }
          g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
-@@ -256,12 +488,203 @@
+@@ -256,12 +488,209 @@
      if (!g_layer) return;
      switch (ev) {
          case 0: dm_gamepad_reset(); dm_focus_set(2); break;
@@ -467,13 +467,19 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    }];
 +    resume_when_released(g_menu_gen, 0);
 +}
-+static void home_menu_quit(void) {
++// Change games leaves Documents/relaunch.txt behind: a Shortcuts automation ("When SwitchPad is closed": if that file exists, open SwitchPad)
++// brings the app straight back to the picker with nobody touching the iPad; Close the game leaves none, and the next launch removes it (main.m)
++static void home_menu_quit(int relaunch) {
++    if (relaunch) {
++        NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
++        [@"change games\n" writeToFile:[doc stringByAppendingPathComponent:@"relaunch.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
++    }
 +    BOOL z = zh_ui();
 +    for (UIView *card in g_menu_cards) {
 +        for (UIView *v in card.subviews) [v removeFromSuperview];
 +        UILabel *l = [[UILabel alloc] initWithFrame:CGRectInset(card.bounds, 24, 16)];
 +        l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
-+        l.text = z ? @"已關閉遊戲\n點一下 iPad 上的 SwitchPad 圖示，就會回到選擇遊戲" : @"The game is closed\nTap SwitchPad on the iPad's Home Screen to choose a game";
++        l.text = z ? @"正在關閉遊戲…\n設好捷徑自動化會自動重開；沒有的話點一下 iPad 上的 SwitchPad 圖示" : @"Closing the game…\nA Shortcuts automation reopens SwitchPad; without one, tap its icon on the iPad";
 +        [card addSubview:l];
 +    }
 +    LOG("front end: Home menu: closing the app to change games");
@@ -486,7 +492,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
 +    NSString *act = g_menu_rows[i][2];
 +    if ([act isEqualToString:@"continue"]) home_menu_close();
-+    else { g_menu_closing = 1; home_menu_quit(); }
++    else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
 +}
 +@interface DmMenuTap : NSObject
 +@end
@@ -549,7 +555,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    BOOL z = zh_ui();
 +    const char *ng = getenv("DM_SHELL_GAMES"); BOOL several = ng && atoi(ng) > 1;
 +    NSMutableArray *rows = [NSMutableArray arrayWithObject:@[z ? @"繼續遊戲" : @"Continue", z ? @"回到遊戲" : @"Back to the game", @"continue"]];
-+    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"關閉這個遊戲，再點 SwitchPad 圖示選下一個（未存檔進度會遺失）" : @"Closes this game; tap SwitchPad to choose the next (unsaved progress is lost)", @"quit"]];
++    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"回到選擇遊戲（未存檔進度會遺失）" : @"Back to the game picker (unsaved progress is lost)", @"change"]];
 +    [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"結束 SwitchPad（未存檔進度會遺失）" : @"Quits SwitchPad (unsaved progress is lost)", @"quit"]];
 +    g_menu_rows = rows; g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++;
 +    game_pause(1);
