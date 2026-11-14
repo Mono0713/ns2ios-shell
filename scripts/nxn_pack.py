@@ -548,8 +548,12 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
 
 
 # Files a derived profile leaves out: the build makes all of these again from the packed version's own files.
+# patches.py too: dm/tools/patch_nso.py loads the repository's copy whatever the game, and a second copy on DM_GAMES_DIR
+# claims the same build IDs again, which stops the rewrite ("CUTS of build ... in both ..."; Super Smash Bros. Ultimate
+# 13.0.4 against the 13.0.5 profile). Its CUTS / OBS / FRAME_STEP are keyed by build ID and its MATCH_CUTS are taken from
+# the repository's profile for a derived one, so the copy adds nothing.
 DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv',
-                'dmsh_chain.h', 'vk_capture.tsv'}
+                'dmsh_chain.h', 'vk_capture.tsv', 'patches.py'}
 
 
 def module_build_id(nso):
