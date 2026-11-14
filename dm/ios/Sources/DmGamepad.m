@@ -644,7 +644,9 @@ static NSString *groupName(int g, BOOL zh) {
     if (!_editing) return;
     _editing = NO; _sel = -1;
     [_editGroup removeAllObjects]; [_editPrev removeAllObjects];
-    [_editPanel removeFromSuperview]; _editPanel = nil; _panelX = _panelY = nil;
+    UIView *p = _editPanel; _editPanel = nil; _panelX = _panelY = nil;
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ p.alpha = 0; p.transform = CGAffineTransformMakeScale(0.94, 0.94); }
+                     completion:^(BOOL f) { (void)f; [p removeFromSuperview]; }];
     [self saveAdj]; [self applyLayout]; [self setNeedsLayout];
 }
 - (int)groupAt:(CGPoint)p {
@@ -690,30 +692,52 @@ static NSString *groupName(int g, BOOL zh) {
 - (void)editEnded:(NSSet<UITouch *> *)ts {
     for (UITouch *t in ts) { [_editGroup removeObjectForKey:t]; [_editPrev removeObjectForKey:t]; }
 }
+// The app's card look (the Home menu's, front_ios.m): frosted glass, a hairline edge, a soft shadow; it springs in from a little smaller
+static UIView *glassCard(void) {
+    UIView *p = [UIView new];
+    p.layer.cornerRadius = 24; p.layer.cornerCurve = kCACornerCurveContinuous;
+    p.layer.shadowColor = UIColor.blackColor.CGColor; p.layer.shadowOpacity = 0.4; p.layer.shadowRadius = 24; p.layer.shadowOffset = CGSizeMake(0, 10);
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    g.translatesAutoresizingMaskIntoConstraints = NO; g.layer.cornerRadius = 24; g.layer.cornerCurve = kCACornerCurveContinuous; g.clipsToBounds = YES;
+    g.layer.borderWidth = 1; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    g.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.5];
+    [p addSubview:g];
+    [NSLayoutConstraint activateConstraints:@[[g.topAnchor constraintEqualToAnchor:p.topAnchor], [g.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
+        [g.leadingAnchor constraintEqualToAnchor:p.leadingAnchor], [g.trailingAnchor constraintEqualToAnchor:p.trailingAnchor]]];
+    return p;
+}
+static void springIn(UIView *v) {
+    v.alpha = 0; v.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ v.alpha = 1; v.transform = CGAffineTransformIdentity; } completion:nil];
+}
 static UIStackView *row(NSArray<UIView *> *v) { UIStackView *s = [[UIStackView alloc] initWithArrangedSubviews:v]; s.axis = UILayoutConstraintAxisHorizontal; s.spacing = 10; s.alignment = UIStackViewAlignmentCenter; return s; }
 static UILabel *text(NSString *s, CGFloat size, CGFloat alpha) { UILabel *l = [UILabel new]; l.text = s; l.font = [UIFont systemFontOfSize:size weight:UIFontWeightMedium]; l.textColor = [UIColor colorWithWhite:1 alpha:alpha]; l.numberOfLines = 0; return l; }
 static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:s forState:UIControlStateNormal];
     b.titleLabel.font = [UIFont systemFontOfSize:16 weight:main ? UIFontWeightBold : UIFontWeightMedium];
-    [b setTitleColor:main ? UIColor.blackColor : UIColor.whiteColor forState:UIControlStateNormal];
-    b.backgroundColor = main ? [UIColor colorWithRed:0.35 green:0.75 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.15];
-    b.layer.cornerRadius = 10; [b.heightAnchor constraintEqualToConstant:38].active = YES;
+    [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    b.backgroundColor = main ? [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.12];
+    b.layer.cornerRadius = 14; b.layer.cornerCurve = kCACornerCurveContinuous; [b.heightAnchor constraintEqualToConstant:44].active = YES;
     [b addTarget:target action:action forControlEvents:UIControlEventTouchUpInside]; return b;
 }
 - (void)buildPanel {   // a card in the middle of the screen (where the controls are not); it can be dragged away
     BOOL zh = shell_zh_hant();
-    UIView *p = [UIView new]; p.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92]; p.layer.cornerRadius = 18;
-    UILabel *title = text(zh ? @"調整虛擬搖桿" : @"Edit touch controls", 18, 1); title.font = [UIFont boldSystemFontOfSize:18];
+    UIView *p = glassCard();
+    UILabel *title = text(zh ? @"調整虛擬搖桿" : @"Edit touch controls", 20, 1); title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
     UILabel *hint = text(zh ? @"拖曳按鍵移動，雙指捏合縮放；這張卡也能拖開" : @"Drag a group to move it, pinch to resize; this card can be dragged too", 13, 0.6);
     _stickSeg = [[UISegmentedControl alloc] initWithItems:zh ? @[@"固定搖桿", @"浮動搖桿"] : @[@"Fixed stick", @"Floating stick"]];
+    _stickSeg.selectedSegmentTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1];
+    [_stickSeg setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]} forState:UIControlStateSelected];
+    [_stickSeg setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.75]} forState:UIControlStateNormal];
     _stickSeg.selectedSegmentIndex = _floatStick ? 1 : 0; [_stickSeg addTarget:self action:@selector(stickModeChanged) forControlEvents:UIControlEventValueChanged];
     UILabel *stickNote = text(zh ? @"浮動：左半邊畫面哪裡按下，搖桿就從哪裡開始" : @"Floating: the stick starts wherever a finger lands in the left half", 12, 0.5);
-    _alphaSlider = [UISlider new]; _alphaSlider.minimumValue = 0.1; _alphaSlider.maximumValue = 1; _alphaSlider.value = _alpha;
+    _alphaSlider = [UISlider new]; _alphaSlider.minimumTrackTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; _alphaSlider.minimumValue = 0.1; _alphaSlider.maximumValue = 1; _alphaSlider.value = _alpha;
     [_alphaSlider addTarget:self action:@selector(alphaChanged) forControlEvents:UIControlEventValueChanged];
     _selName = text(@"", 15, 0.9); _selName.font = [UIFont boldSystemFontOfSize:15];
-    _sizeSlider = [UISlider new]; _sizeSlider.minimumValue = K_SCALE_MIN; _sizeSlider.maximumValue = K_SCALE_MAX;
+    _sizeSlider = [UISlider new]; _sizeSlider.minimumTrackTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; _sizeSlider.minimumValue = K_SCALE_MIN; _sizeSlider.maximumValue = K_SCALE_MAX;
     [_sizeSlider addTarget:self action:@selector(sizeChanged) forControlEvents:UIControlEventValueChanged];
-    _hideSwitch = [UISwitch new]; [_hideSwitch addTarget:self action:@selector(hideChanged) forControlEvents:UIControlEventValueChanged];
+    _hideSwitch = [UISwitch new]; _hideSwitch.onTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; [_hideSwitch addTarget:self action:@selector(hideChanged) forControlEvents:UIControlEventValueChanged];
     UILabel *alphaL = text(zh ? @"透明度" : @"Opacity", 14, 0.8), *sizeL = text(zh ? @"大小" : @"Size", 14, 0.8), *hideL = text(zh ? @"隱藏" : @"Hide", 14, 0.8);
     for (UILabel *l in @[alphaL, sizeL]) [l.widthAnchor constraintEqualToConstant:52].active = YES;
     UIStackView *buttons = row(@[button(zh ? @"重設這個版面" : @"Reset layout", NO, self, @selector(resetAdj)), button(zh ? @"完成" : @"Done", YES, self, @selector(exitEdit))]);
@@ -722,7 +746,7 @@ static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     st.axis = UILayoutConstraintAxisVertical; st.spacing = 10; st.alignment = UIStackViewAlignmentFill; st.translatesAutoresizingMaskIntoConstraints = NO;
     [st setCustomSpacing:4 afterView:title]; [st setCustomSpacing:4 afterView:_stickSeg]; [st setCustomSpacing:16 afterView:stickNote];
     [p addSubview:st];
-    const CGFloat W = MIN(340, self.bounds.size.width - 32), pad = 18;
+    const CGFloat W = MIN(360, self.bounds.size.width - 32), pad = 22;
     [NSLayoutConstraint activateConstraints:@[[st.topAnchor constraintEqualToAnchor:p.topAnchor constant:pad], [st.leadingAnchor constraintEqualToAnchor:p.leadingAnchor constant:pad],
         [st.trailingAnchor constraintEqualToAnchor:p.trailingAnchor constant:-pad], [st.bottomAnchor constraintEqualToAnchor:p.bottomAnchor constant:-pad]]];
     // Auto Layout sizes the card from its contents when it is laid out (a height measured beforehand came out short and cut the buttons off); dragging moves its centre
@@ -732,6 +756,7 @@ static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     _panelX = [p.centerXAnchor constraintEqualToAnchor:self.centerXAnchor]; _panelY = [p.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
     [NSLayoutConstraint activateConstraints:@[[p.widthAnchor constraintEqualToConstant:W], _panelX, _panelY]];
     [self updatePanel];
+    springIn(p);
 }
 - (void)dragPanel:(UIPanGestureRecognizer *)g {
     CGPoint d = [g translationInView:self]; _panelX.constant += d.x; _panelY.constant += d.y;
@@ -766,12 +791,12 @@ int phone_pads_url(char *out, size_t cap);
     BOOL zh = shell_zh_hant();
     UIView *o = [[UIView alloc] initWithFrame:self.bounds]; o.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     o.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
-    UIView *card = [UIView new]; card.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.96]; card.layer.cornerRadius = 20; card.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView *card = glassCard(); card.translatesAutoresizingMaskIntoConstraints = NO;
     UIImageView *img = [[UIImageView alloc] initWithImage:[UIImage imageWithCGImage:cg]]; CGImageRelease(cg);
     img.layer.magnificationFilter = kCAFilterNearest; img.backgroundColor = UIColor.whiteColor; img.contentMode = UIViewContentModeScaleAspectFit; img.translatesAutoresizingMaskIntoConstraints = NO;
-    img.layer.cornerRadius = 8; img.layer.borderColor = UIColor.whiteColor.CGColor; img.layer.borderWidth = 8; img.clipsToBounds = YES;
-    UILabel *title = [UILabel new]; title.text = zh ? @"用手機掃描加入遊戲" : @"Scan with a phone to join"; title.font = [UIFont boldSystemFontOfSize:20]; title.textColor = UIColor.whiteColor;
-    UILabel *addr = [UILabel new]; addr.text = u; addr.font = [UIFont monospacedSystemFontOfSize:16 weight:UIFontWeightRegular]; addr.textColor = [UIColor colorWithWhite:1 alpha:0.85];
+    img.layer.cornerRadius = 18; img.layer.cornerCurve = kCACornerCurveContinuous; img.layer.borderColor = UIColor.whiteColor.CGColor; img.layer.borderWidth = 14; img.clipsToBounds = YES;
+    UILabel *title = [UILabel new]; title.text = zh ? @"用手機加入" : @"Join with a phone"; title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold]; title.textColor = UIColor.whiteColor;
+    UILabel *addr = [UILabel new]; addr.text = u; addr.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular]; addr.textColor = [UIColor colorWithWhite:1 alpha:0.55];
     UILabel *hint = [UILabel new]; hint.text = zh ? @"點一下任意處關閉" : @"Tap anywhere to close"; hint.font = [UIFont systemFontOfSize:13]; hint.textColor = [UIColor colorWithWhite:1 alpha:0.55];
     UIStackView *st = [[UIStackView alloc] initWithArrangedSubviews:@[title, img, addr, hint]]; st.axis = UILayoutConstraintAxisVertical; st.alignment = UIStackViewAlignmentCenter; st.spacing = 12;
     st.translatesAutoresizingMaskIntoConstraints = NO;
@@ -785,11 +810,13 @@ int phone_pads_url(char *out, size_t cap);
     [o addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideQR)]];
     o.alpha = 0; [self addSubview:o]; _qrOverlay = o;
     [UIView animateWithDuration:0.2 animations:^{ o.alpha = 1; }];
+    springIn(card);
     LOG("front end: phone QR code shown (%s)", url);
 }
 - (void)hideQR {
     UIView *o = _qrOverlay; _qrOverlay = nil;
-    [UIView animateWithDuration:0.2 animations:^{ o.alpha = 0; } completion:^(BOOL done) { (void)done; [o removeFromSuperview]; }];
+    UIView *c = o.subviews.firstObject;
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ o.alpha = 0; c.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:^(BOOL done) { (void)done; [o removeFromSuperview]; }];
 }
 
 // ---- Physical controllers and phones ----
