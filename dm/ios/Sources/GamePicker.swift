@@ -515,6 +515,7 @@ private struct PickerView: View {
         }
         .font(.callout).foregroundStyle(.white.opacity(0.6))
         .opacity(m.starting ? 0 : 1)
+    }
 
     // On the players card: up and down within a column, left and right between the columns; A identifies, − switches the layout, X removes, B closes
     private func cardInput(_ key: String) {
