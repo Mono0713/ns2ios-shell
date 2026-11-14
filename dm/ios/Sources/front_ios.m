@@ -618,6 +618,8 @@ static void home_menu_quit(int relaunch) {
     // launch shows the picker; 2 s for the line above
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ fflush(stderr); exit(0); });
 }
+static NSArray<NSString *> *audio_row(void);   // the TV rows, defined with the menu below
+static NSArray<NSString *> *video_row(void);
 static void home_menu_activate(int i) {
     if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
     NSString *act = g_menu_rows[i][2];

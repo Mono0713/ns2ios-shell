@@ -406,7 +406,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
      LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for 5 ms)", s.sampleRate, s.IOBufferDuration * 1000);
  }
  
-@@ -256,12 +508,291 @@
+@@ -256,12 +508,293 @@
      if (!g_layer) return;
      switch (ev) {
          case 0: dm_gamepad_reset(); dm_focus_set(2); break;
@@ -525,6 +525,8 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    // launch shows the picker; 2 s for the line above
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ fflush(stderr); exit(0); });
 +}
++static NSArray<NSString *> *audio_row(void);   // the TV rows, defined with the menu below
++static NSArray<NSString *> *video_row(void);
 +static void home_menu_activate(int i) {
 +    if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
 +    NSString *act = g_menu_rows[i][2];
