@@ -61,6 +61,17 @@ def folder_size(p):
     return n
 
 
+def link_or_copy(src, dst, **kw):
+    """copytree's copy_function for the stage tree: a hard link to the file in the work folder, which nothing writes to
+    again before the IPA is packed and the work folder removed, so the stage costs no space of its own (the RomFS of a
+    12 GB game and every shader library used to be copied a second time here). A plain copy where a link is not possible
+    (another volume, a file system without them)."""
+    try:
+        os.link(src, dst); return dst
+    except OSError:
+        return shutil.copy2(src, dst, **kw)
+
+
 def tidy(work, keep_logs=True):
     """Remove what the pack no longer needs, and return the bytes freed.
 
@@ -1185,11 +1196,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # shader libraries: the directory name is the chain version, which the shell reads at run time
     if msl_dir.is_dir():
         dst = A / 'msl' / msl_dir.name
-        shutil.copytree(msl_dir, dst)
+        shutil.copytree(msl_dir, dst, copy_function=link_or_copy)
         n = len(list(dst.glob('*_b.metallib')))
         if n: say('shader source for %d shaders -> msl/%s' % (n, msl_dir.name))   # empty for a GL package, whose shaders go to msl/gl instead
 
-    shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True)
+    shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True, copy_function=link_or_copy)
     say('RomFS in place')
 
     # tables the game profile carries (shader map, c1 list, warm-up list, uniform extents)

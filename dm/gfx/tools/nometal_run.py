@@ -28,9 +28,70 @@
 # every shader from source. The Mac libraries (never shipped) stay copies. A shader the Windows compiler refuses is kept
 # as source, which the phone still compiles, so a package never loses a shader to this. DM_METAL_TOOLS=<folder> names the
 # install folder (the one holding ios\bin\metal.exe); DM_METAL_TOOLS=0 turns it off.
-import os, runpy, shutil, subprocess, sys, tempfile, threading
+import builtins, os, runpy, shutil, subprocess, sys, tempfile, threading
 
 _real = subprocess.run
+
+# Disk use without APFS clones. On macOS dmsh_build.py and dmsh_mtlcache.py "clone" each library into the output folders
+# and the two caches (copy-on-write: no data written). Elsewhere every clone was a full copy, and in source mode each
+# "compile" another one, so every shader's MSL was on disk eight times or more (b-<V>/ for Mac and iOS, cas/shader mac and
+# ios, cas/metallib mac and ios, the .metal beside them). A Unity game ships its keyword variants as separate programs
+# (Pummel Party: 138,126 vertex / pixel pairs), and those copies reached 37 GB for it and over 70 GB for Overcooked! All
+# You Can Eat, filling the disk before the package was written. Hard links give the same files for one copy's space:
+#   - clones and source-mode "compiles" are hard links where the volume allows one (a plain copy otherwise);
+#   - opening a file for writing first detaches it from its other names, so writing one path never changes another
+#     (what copy-on-write guarantees on APFS);
+#   - text the chain writes uses LF, as on macOS, so a source-mode library is the MSL file itself, linked, instead of a
+#     rewritten copy (the CRLF -> LF normalisation in _copy_source then has nothing to do).
+# None of this changes a file's content, so like the rest of this wrapper it is outside the chain version.
+# DM_HARDLINKS=0 turns it off.
+_LINKS = os.name == 'nt' and os.environ.get('DM_HARDLINKS', '1') != '0'
+_open = builtins.open
+
+
+def _detach(path):
+    """Before path is changed in place: if other names share its data, give path a copy of its own."""
+    try:
+        if os.stat(path).st_nlink <= 1: return
+    except (OSError, TypeError, ValueError): return
+    tmp = '%s.detach-%d-%d' % (os.fsdecode(path), os.getpid(), threading.get_ident())
+    shutil.copyfile(path, tmp); os.replace(tmp, path)
+
+
+def _guarded_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
+    if isinstance(file, (str, bytes, os.PathLike)) and any(c in mode for c in 'wax+'):
+        if 'w' in mode:      # truncating: the other names keep the old data, this one starts empty
+            try:
+                if os.stat(file).st_nlink > 1: os.unlink(file)
+            except (OSError, TypeError, ValueError): pass
+        elif 'x' not in mode: _detach(file)
+        if 'b' not in mode and newline is None: newline = '\n'
+    return _open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+
+
+def _link(src, dst):
+    """dst becomes another name of src's data (replacing dst), or a copy where a link is not possible."""
+    tmp = '%s.link-%d-%d' % (os.fsdecode(dst), os.getpid(), threading.get_ident())
+    try: os.link(src, tmp)
+    except OSError: shutil.copyfile(src, tmp)
+    for i in range(40):      # a scanner holding dst open makes the rename fail on Windows for a few milliseconds
+        try: os.replace(tmp, dst); return
+        except PermissionError:
+            if i == 39: raise
+            try: os.unlink(dst)
+            except OSError: pass
+            import time; time.sleep(0.05)
+
+
+def _install_links():
+    builtins.open = _guarded_open
+    try: import dmsh_mtlcache
+    except ImportError: return
+    orig = dmsh_mtlcache.clone
+    def clone(src, dst):
+        if getattr(dmsh_mtlcache, '_clonefile', None) is not None: return orig(src, dst)
+        _link(src, dst)
+    dmsh_mtlcache.clone = clone
 _fallback = [0]; _compiled = [0]; _first_err = []; _fb_lock = threading.Lock()
 
 
@@ -138,15 +199,17 @@ def _copy_source(c):
     o = c.index('-o'); src = [x for i, x in enumerate(c[c.index('metal') + 1:], c.index('metal') + 1) if not x.startswith('-') and i != o + 1]
     if len(src) != 1: raise RuntimeError('nometal_run：认不出源码参数 %r' % c)
     with open(src[0], 'rb') as f: b = f.read()
+    if _LINKS and b'\r\n' not in b: _link(src[0], c[o + 1]); return
     with open(c[o + 1], 'wb') as f: f.write(b.replace(b'\r\n', b'\n'))
 
 
 def _run_rest(args, c, enc, *a, **k):
     if c:
-        if c[0] == 'xcrun' and 'metallib' in c and '-o' in c: shutil.copyfile(c[c.index('metallib') + 1], c[c.index('-o') + 1]); return _done(args, enc(''))
+        cp = _link if _LINKS else shutil.copyfile
+        if c[0] == 'xcrun' and 'metallib' in c and '-o' in c: cp(c[c.index('metallib') + 1], c[c.index('-o') + 1]); return _done(args, enc(''))
         if c[0] == 'xcrun': raise RuntimeError('nometal_run：没认出的 xcrun 命令 %r' % c)
         if c[0] == 'which' and len(c) == 2: return _done(args, enc((shutil.which(c[1]) or '') + '\n'))
-        if c[0] == 'cp' and len(c) == 4 and c[1] == '-c': shutil.copyfile(c[2], c[3]); return _done(args, enc(''))
+        if c[0] == 'cp' and len(c) == 4 and c[1] == '-c': cp(c[2], c[3]); return _done(args, enc(''))
     return _real(args, *a, **k)
 
 
@@ -155,6 +218,7 @@ if __name__ == '__main__':
     if sys.argv[1] == '--mode': print(mode()); sys.exit(0)
     subprocess.run = run
     script = os.path.abspath(sys.argv[1]); sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(script))
+    if _LINKS: _install_links()
     try: runpy.run_path(script, run_name='__main__')
     finally:
         if _WIN and (_compiled[0] or _fallback[0]):
