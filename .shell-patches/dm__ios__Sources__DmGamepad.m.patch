@@ -647,7 +647,7 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 +    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:s forState:UIControlStateNormal];
 +    b.titleLabel.font = [UIFont systemFontOfSize:16 weight:main ? UIFontWeightBold : UIFontWeightMedium];
 +    [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-+    b.backgroundColor = main ? [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.12];
++    b.backgroundColor = main ? [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.12];
 +    b.layer.cornerRadius = 14; b.layer.cornerCurve = kCACornerCurveContinuous; [b.heightAnchor constraintEqualToConstant:44].active = YES;
 +    [b addTarget:target action:action forControlEvents:UIControlEventTouchUpInside]; return b;
 +}
@@ -657,17 +657,17 @@ diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
 +    UILabel *title = text(zh ? @"調整虛擬搖桿" : @"Edit touch controls", 20, 1); title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
 +    UILabel *hint = text(zh ? @"拖曳按鍵移動，雙指捏合縮放；這張卡也能拖開" : @"Drag a group to move it, pinch to resize; this card can be dragged too", 13, 0.6);
 +    _stickSeg = [[UISegmentedControl alloc] initWithItems:zh ? @[@"固定搖桿", @"浮動搖桿"] : @[@"Fixed stick", @"Floating stick"]];
-+    _stickSeg.selectedSegmentTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1];
++    _stickSeg.selectedSegmentTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1];
 +    [_stickSeg setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]} forState:UIControlStateSelected];
 +    [_stickSeg setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.75]} forState:UIControlStateNormal];
 +    _stickSeg.selectedSegmentIndex = _floatStick ? 1 : 0; [_stickSeg addTarget:self action:@selector(stickModeChanged) forControlEvents:UIControlEventValueChanged];
 +    UILabel *stickNote = text(zh ? @"浮動：左半邊畫面哪裡按下，搖桿就從哪裡開始" : @"Floating: the stick starts wherever a finger lands in the left half", 12, 0.5);
-+    _alphaSlider = [UISlider new]; _alphaSlider.minimumTrackTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; _alphaSlider.minimumValue = 0.1; _alphaSlider.maximumValue = 1; _alphaSlider.value = _alpha;
++    _alphaSlider = [UISlider new]; _alphaSlider.minimumTrackTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; _alphaSlider.minimumValue = 0.1; _alphaSlider.maximumValue = 1; _alphaSlider.value = _alpha;
 +    [_alphaSlider addTarget:self action:@selector(alphaChanged) forControlEvents:UIControlEventValueChanged];
 +    _selName = text(@"", 15, 0.9); _selName.font = [UIFont boldSystemFontOfSize:15];
-+    _sizeSlider = [UISlider new]; _sizeSlider.minimumTrackTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; _sizeSlider.minimumValue = K_SCALE_MIN; _sizeSlider.maximumValue = K_SCALE_MAX;
++    _sizeSlider = [UISlider new]; _sizeSlider.minimumTrackTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; _sizeSlider.minimumValue = K_SCALE_MIN; _sizeSlider.maximumValue = K_SCALE_MAX;
 +    [_sizeSlider addTarget:self action:@selector(sizeChanged) forControlEvents:UIControlEventValueChanged];
-+    _hideSwitch = [UISwitch new]; _hideSwitch.onTintColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; [_hideSwitch addTarget:self action:@selector(hideChanged) forControlEvents:UIControlEventValueChanged];
++    _hideSwitch = [UISwitch new]; _hideSwitch.onTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; [_hideSwitch addTarget:self action:@selector(hideChanged) forControlEvents:UIControlEventValueChanged];
 +    UILabel *alphaL = text(zh ? @"透明度" : @"Opacity", 14, 0.8), *sizeL = text(zh ? @"大小" : @"Size", 14, 0.8), *hideL = text(zh ? @"隱藏" : @"Hide", 14, 0.8);
 +    for (UILabel *l in @[alphaL, sizeL]) [l.widthAnchor constraintEqualToConstant:52].active = YES;
 +    UIStackView *buttons = row(@[button(zh ? @"重設這個版面" : @"Reset layout", NO, self, @selector(resetAdj)), button(zh ? @"完成" : @"Done", YES, self, @selector(exitEdit))]);
