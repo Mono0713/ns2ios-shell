@@ -10,6 +10,8 @@
 //          (join: the player asked to come back after the launcher removed the phone); assign comes again whenever the launcher moves the phone to another player or changes its button layout
 //   binary 8 bytes: 0x01, sequence (u8, wraps), buttons (u16 LE, NpadButton bits as dm_input.h), lx, ly, rx, ry (i8 each, -127..127, y up)
 // The phone sends on every change and at least every 100 ms; a phone silent for a second has everything released. One thread, poll(), plain BSD sockets.
+// Connections that hold no player cannot pile up and lock phones out: a request that does not arrive within REQ_NS, or a WebSocket silent for GONE_NS, is closed, and when every
+// connection is taken a new one closes the oldest connection without a player (a browser's spare preconnect, the page of a phone that walked away while 'full' or removed).
 // The service is announced over Bonjour as _nxpad._tcp: besides letting tools find it, that is what makes iOS ask for local network access (NSLocalNetworkUsageDescription).
 // DM_PHONE_PADS=0 turns it off; DM_PHONE_PADS_PORT picks another port (8080 by default).
 #include <errno.h>
@@ -37,16 +39,19 @@
 #include "shell_slots.h"
 #ifdef __APPLE__
 #include <dns_sd.h>
+#include <pthread/qos.h>
 #endif
 
 enum { MAX_CLIENTS = 24, IN_CAP = 4096 };
 #define SILENT_NS 1000000000ull   // quiet this long: nothing held down
 #define GONE_NS 15000000000ull    // quiet this long: the page is gone (a tab left in the background keeps its socket open), its player is freed
+#define REQ_NS 10000000000ull     // a connection that has not sent its request (or switched to WebSocket) this long after it opened is closed
 typedef struct {
     int fd, ws, player;          // ws: the connection has switched to WebSocket; player: slot index, -1 before the hello
     uint32_t ip;                 // the phone's address (network order): one phone, one player
     size_t n; uint8_t in[IN_CAP];
     int last_seq; uint64_t last_ns; int released;
+    uint64_t open_ns, seen_ns;   // when the connection opened, when anything last arrived on it
     char name[64], id[64];       // id: the phone's own (its page's localStorage), the slot table's name for it
     _Atomic int moved, kicked, relayout, identify;   // set by the launcher (shell_slots.h handlers, main thread), handled on the server thread
 } client;
@@ -247,7 +252,7 @@ static int on_readable(client *c) {   // 0: close the connection
     if (c->n >= IN_CAP) return 0;
     ssize_t r = recv(c->fd, c->in + c->n, IN_CAP - 1 - c->n, 0);
     if (r <= 0) return r < 0 && (errno == EAGAIN || errno == EINTR);
-    c->n += (size_t)r;
+    c->n += (size_t)r; c->seen_ns = now_ns();
     if (c->ws) return ws_frames(c);
     c->in[c->n] = 0;
     if (!strstr((char *)c->in, "\r\n\r\n")) return c->n < IN_CAP - 1;
@@ -256,6 +261,9 @@ static int on_readable(client *c) {   // 0: close the connection
 
 static void *serve(void *arg) {
     int ls = (int)(intptr_t)arg;
+#ifdef __APPLE__
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   // input: not queued behind the game's busy threads when every core is taken
+#endif
     for (int i = 0; i < MAX_CLIENTS; i++) { g_cl[i].fd = -1; g_cl[i].player = -1; }
     for (;;) {
         struct pollfd pf[MAX_CLIENTS + 1]; int map[MAX_CLIENTS + 1], n = 0;
@@ -269,13 +277,19 @@ static void *serve(void *arg) {
                 struct sockaddr_in from = {0}; socklen_t fl = sizeof from;
                 int fd = accept(ls, (struct sockaddr *)&from, &fl); if (fd < 0) continue;
                 int slot = -1; for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd < 0) { slot = i; break; }
-                if (slot < 0) { close(fd); continue; }
+                if (slot < 0) {   // all taken: the oldest connection without a player goes (never a phone that is playing)
+                    for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].player < 0 && (slot < 0 || g_cl[i].seen_ns < g_cl[slot].seen_ns)) slot = i;
+                    if (slot < 0) { close(fd); continue; }
+                    LOG("phone pads: all %d connections taken: closed an idle one (%s) for a new one", MAX_CLIENTS, g_cl[slot].ws ? g_cl[slot].name[0] ? g_cl[slot].name : "no hello" : "no request");
+                    drop(&g_cl[slot]);
+                }
 #ifdef SO_NOSIGPIPE
                 int one = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
                 fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
                 memset(&g_cl[slot], 0, sizeof g_cl[slot]); g_cl[slot].fd = fd; g_cl[slot].player = -1;
                 g_cl[slot].ip = from.sin_family == AF_INET ? from.sin_addr.s_addr : 0;
+                g_cl[slot].open_ns = g_cl[slot].seen_ns = now_ns();
                 continue;
             }
             if (!on_readable(&g_cl[map[k]])) drop(&g_cl[map[k]]);
@@ -287,6 +301,8 @@ static void *serve(void *arg) {
             LOG("phone pads: '%s' silent for %llu s: its page is gone", g_cl[i].name, GONE_NS / 1000000000ull);
             drop(&g_cl[i]);   // the phone gets the player back if it comes back while it is free (its id stays on the slot)
         }
+        for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0 && g_cl[i].player < 0 && (g_cl[i].ws ? t - g_cl[i].seen_ns > GONE_NS : t - g_cl[i].open_ns > REQ_NS))
+            drop(&g_cl[i]);   // no player: a request that never came, or a 'full' / removed page that went silent
     }
 }
 
