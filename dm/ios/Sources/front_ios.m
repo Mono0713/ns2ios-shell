@@ -30,6 +30,9 @@ int shell_game_unchoose(void);   // main.m: forget the chosen game before it loa
 static CAMetalLayer *g_layer;
 static UIWindow *g_tv;            // the TV's window while one is connected (nil otherwise); it shows the game once the game view exists
 static UIWindowScene *g_tv_scene; // the TV's scene: the window is made only when the game starts, so the picker and the launcher stay mirrored on the TV until then
+// Picture: TV / iPad, the Home menu's choice while a TV is connected (kept for the device): the iPad keeps the game, and the TV window steps aside (hidden)
+static BOOL video_pref_ipad(void) { return [NSUserDefaults.standardUserDefaults boolForKey:@"DMVideoOnIPad"]; }
+static BOOL tv_on(void) { return g_tv && !g_tv.hidden; }   // the game's picture is on the TV now
 static BOOL zh_ui(void) {         // Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
     return [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
@@ -46,6 +49,7 @@ static void home_menu_toggle(void);
 static void home_menu_relayout(void);
 static void home_menu_watch(void);
 static UIView *tv_panel(CGRect frame);
+void front_ios_audio_session(void);
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
 static UILabel *front_ios_fps_label(void);
@@ -137,7 +141,7 @@ void front_ios_back_to_picker(void) {
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     [self layoutStage];
-    if (self.menuButton) { UIEdgeInsets in = self.view.safeAreaInsets; self.menuButton.frame = CGRectMake(MAX(16, in.left), MAX(16, in.top), 88, 40); }
+    if (self.menuButton) { UIEdgeInsets in = self.view.safeAreaInsets; self.menuButton.frame = tv_on() ? CGRectMake(MAX(16, in.left), MAX(16, in.top), 88, 40) : CGRectMake(floor(self.view.bounds.size.width / 2) - 22, self.view.bounds.size.height - MAX(12, in.bottom) - 44, 44, 44); }   // handheld: bottom centre, the one place the touch controls leave free (ZL sits in the top corners, − / + and the layout button at the top centre)
 }
 - (void)layoutStage {
     if (!self.game || !self.stage.superview) return;
@@ -154,14 +158,15 @@ void front_ios_back_to_picker(void) {
 // so the graphics backend keeps presenting to the same layer (front_metal_layer); its drawable follows the new size and scale (DmGameView layoutSubviews)
 - (void)placeStage {
     if (!self.stage) return;
-    if (g_tv_scene && !g_tv) {
+    if (g_tv_scene && !g_tv && !video_pref_ipad()) {
         g_tv = [[UIWindow alloc] initWithWindowScene:g_tv_scene];
         UIViewController *vc = [UIViewController new]; vc.view.backgroundColor = UIColor.blackColor;
         g_tv.rootViewController = vc; g_tv.hidden = NO;
         CGSize sz = g_tv_scene.screen.bounds.size;
         LOG("front end: the game's picture goes to the TV (%.0fx%.0f points, scale %.1f)", sz.width, sz.height, g_tv_scene.screen.nativeScale);
     }
-    UIView *dest = g_tv ? g_tv.rootViewController.view : self.view;
+    if (g_tv) g_tv.hidden = video_pref_ipad();
+    UIView *dest = tv_on() ? g_tv.rootViewController.view : self.view;
     if (self.stage.superview != dest) {
         [self.stage removeFromSuperview];
         if (dest == self.view) [self.view insertSubview:self.stage atIndex:0]; else [dest addSubview:self.stage];
@@ -169,20 +174,22 @@ void front_ios_back_to_picker(void) {
         for (UIView *v in @[g_loading ?: NSNull.null, g_prog ?: NSNull.null, g_menu ?: NSNull.null])   // what covers the picture goes with it
             if ([v isKindOfClass:UIView.class]) { [v removeFromSuperview]; v.frame = overlay_root().bounds; [overlay_root() addSubview:v]; }
     }
-    BOOL tv = g_tv != nil;
-    if (tv && !self.tvNote) {
-        self.tvNote = tv_panel(self.view.bounds); [self.view insertSubview:self.tvNote atIndex:0];
-        BOOL z = zh_ui();
+    BOOL tv = tv_on(), z = zh_ui();
+    if (tv && !self.tvNote) { self.tvNote = tv_panel(self.view.bounds); [self.view insertSubview:self.tvNote atIndex:0]; }
+    if (!self.menuButton) {   // the menu by touch: "Menu" beside the TV panel, a small translucent ⌂ at the bottom centre over the game in handheld play
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        [b setTitle:z ? @"選單" : @"Menu" forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; b.tintColor = UIColor.whiteColor;
-        b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14]; b.layer.cornerRadius = 10; b.layer.cornerCurve = kCACornerCurveContinuous;
+        b.tintColor = UIColor.whiteColor; b.layer.cornerCurve = kCACornerCurveContinuous;
         [b addTarget:self action:@selector(menuTapped) forControlEvents:UIControlEventTouchUpInside];
         self.menuButton = b; [self.view addSubview:b];   // above the pad
-        [self.view setNeedsLayout];
     }
-    self.tvNote.hidden = self.menuButton.hidden = !tv;
-    if (self.menuButton) [self.view bringSubviewToFront:self.menuButton];
+    [self.menuButton setTitle:tv ? (z ? @"選單" : @"Menu") : @"⌂" forState:UIControlStateNormal];
+    self.menuButton.titleLabel.font = [UIFont systemFontOfSize:tv ? 16 : 20 weight:UIFontWeightSemibold];
+    self.menuButton.backgroundColor = [UIColor colorWithWhite:tv ? 1 : 0 alpha:tv ? 0.14 : 0.35];
+    self.menuButton.layer.cornerRadius = tv ? 10 : 12; self.menuButton.alpha = tv ? 1 : 0.6;
+    self.tvNote.hidden = !tv;
+    [self.view bringSubviewToFront:self.menuButton];
+    [self.view setNeedsLayout];
+    front_ios_audio_session();   // the TV came or went: the sound follows the choice for TV play (audio_on_ipad)
 }
 - (void)menuTapped { home_menu_toggle(); }
 // What the iPad shows while the picture is on the TV: the phones' QR code (friends scan it from the sofa) and who is playing, kept current;
@@ -450,13 +457,21 @@ void front_save_failed(int err) {
 // so every callback came up 1.3 ms short and was zero-filled, about 47 gaps per second (crackling; reproducible on the Mac by forcing 1024-frame callbacks: 1999 underruns in 2000 callbacks). Ask for 5 ms and the system picks the nearest it supports;
 // the category stays the default SoloAmbient (silent switch and interrupting other apps' audio behave as before). Set once at boot and again on return to the foreground (the system may reset it after an interruption)
 static int g_session_off;   // the last activation failed (another app or a call still held the session): tried again when the app becomes active
+// Sound on the iPad while the picture is on the TV (the Home menu's Sound row, kept for the device): for a screen with no speakers. iOS sends the sound to the
+// HDMI output with the picture; only the play-and-record category can override that to the built-in speaker (overrideOutputAudioPort), and iOS asks once for
+// the microphone with it (NSMicrophoneUsageDescription): nothing is recorded, and a refusal changes nothing for the sound
+static BOOL audio_on_ipad(void) { return g_tv_scene && [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]; }
 void front_ios_audio_session(void) {
     AVAudioSession *s = AVAudioSession.sharedInstance; NSError *e = nil;
-    if (![s setCategory:AVAudioSessionCategorySoloAmbient error:&e]) LOG("[RED] audio session category could not be set: %s", e.localizedDescription.UTF8String);
+    BOOL ipad = audio_on_ipad();
+    if (ipad ? ![s setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker error:&e]
+             : ![s setCategory:AVAudioSessionCategorySoloAmbient error:&e]) LOG("[RED] audio session category could not be set: %s", e.localizedDescription.UTF8String);
     [s setPreferredSampleRate:48000 error:nil];
     if (![s setPreferredIOBufferDuration:0.005 error:&e]) LOG("[RED] audio session I/O buffer duration could not be set: %s", e.localizedDescription.UTF8String);
     g_session_off = ![s setActive:YES error:&e];
     if (g_session_off) LOG("[RED] audio session activation failed: %s", e.localizedDescription.UTF8String);
+    if (ipad && ![s overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:&e]) LOG("[RED] audio session: the iPad's speaker could not be chosen: %s", e.localizedDescription.UTF8String);
+    if (g_tv_scene) LOG("audio session: sound on the %s while a TV is connected", ipad ? "iPad's speaker" : "TV");
     LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for 5 ms)", s.sampleRate, s.IOBufferDuration * 1000);
 }
 
@@ -500,7 +515,7 @@ void front_ios_focus_event(int ev) {
 
 // ---- The TV (an external display scene) ----
 // Where the views that cover the picture go: the TV's window while it shows the game, else the iPad's root view (over the touch controls)
-static UIView *overlay_root(void) { return g_tv ? g_tv.rootViewController.view : g_root.view; }
+static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.view : g_root.view; }
 @interface DmTvSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @end
 @implementation DmTvSceneDelegate
@@ -602,6 +617,18 @@ static void home_menu_activate(int i) {
     if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
     NSString *act = g_menu_rows[i][2];
     if ([act isEqualToString:@"continue"]) home_menu_close();
+    else if ([act isEqualToString:@"audio"]) {   // switches at once (the game is paused, its sound resumes on the new output) and stays the choice
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults; [d setBool:![d boolForKey:@"DMAudioOnIPad"] forKey:@"DMAudioOnIPad"];
+        front_ios_audio_session();
+        NSMutableArray *rows = [g_menu_rows mutableCopy]; rows[i] = audio_row(); g_menu_rows = rows;
+        int sel = g_menu_sel; home_menu_relayout(); g_menu_sel = sel; home_menu_draw();
+    } else if ([act isEqualToString:@"video"]) {   // the picture moves at once, the menu with it, and the choice stays
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults; [d setBool:!video_pref_ipad() forKey:@"DMVideoOnIPad"];
+        LOG("front end: picture output -> %s", video_pref_ipad() ? "iPad" : "TV");
+        NSMutableArray *rows = [g_menu_rows mutableCopy]; rows[i] = video_row(); g_menu_rows = rows;
+        [g_root placeStage];
+        int sel = g_menu_sel; home_menu_relayout(); g_menu_sel = sel; home_menu_draw();
+    }
     else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
 }
 @interface DmMenuTap : NSObject
@@ -652,7 +679,7 @@ static void home_menu_build(void) {
     UIView *root = overlay_root(); if (!root) return;
     g_menu_cards = [NSMutableArray array];
     g_menu = home_menu_make(root);
-    if (g_tv && g_root.view) { g_menu_ipad = home_menu_make(g_root.view); g_menu_ipad.backgroundColor = UIColor.blackColor; }   // the iPad's copy, for touch
+    if (tv_on() && g_root.view) { g_menu_ipad = home_menu_make(g_root.view); g_menu_ipad.backgroundColor = UIColor.blackColor; }   // the iPad's copy, for touch
     home_menu_draw();
 }
 static void home_menu_relayout(void) {   // the TV came or went while the menu is up: draw it again where the picture is now
@@ -660,18 +687,29 @@ static void home_menu_relayout(void) {   // the TV came or went while the menu i
     [g_menu removeFromSuperview]; [g_menu_ipad removeFromSuperview]; g_menu = nil; g_menu_ipad = nil;
     home_menu_build();
 }
+static NSArray<NSString *> *audio_row(void) {
+    BOOL z = zh_ui(), ipad = [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"];
+    return @[ipad ? (z ? @"聲音輸出：iPad 喇叭" : @"Sound output: iPad speaker") : (z ? @"聲音輸出：電視" : @"Sound output: TV"),
+             z ? @"按 A 切換電視／iPad 喇叭（螢幕沒有喇叭時選 iPad）" : @"A switches TV / iPad speaker (the iPad when the screen has no speakers)", @"audio"];
+}
+static NSArray<NSString *> *video_row(void) {
+    BOOL z = zh_ui(), ipad = video_pref_ipad();
+    return @[ipad ? (z ? @"畫面輸出：iPad" : @"Picture output: iPad") : (z ? @"畫面輸出：電視" : @"Picture output: TV"),
+             z ? @"按 A 切換電視／iPad" : @"A switches TV / iPad", @"video"];
+}
 static void home_menu_open(void) {
     if (g_menu || !g_root.game) return;   // only once the game was started (the picker and the launcher have their own screens)
     BOOL z = zh_ui();
     const char *ng = getenv("DM_SHELL_GAMES"); BOOL several = ng && atoi(ng) > 1;
     NSMutableArray *rows = [NSMutableArray arrayWithObject:@[z ? @"繼續遊戲" : @"Continue", z ? @"回到遊戲" : @"Back to the game", @"continue"]];
     if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"回到選擇遊戲（未存檔進度會遺失）" : @"Back to the game picker (unsaved progress is lost)", @"change"]];
+    if (g_tv_scene) { [rows addObject:video_row()]; [rows addObject:audio_row()]; }   // a TV is connected: where the picture and the sound go
     [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"結束 SwitchPad（未存檔進度會遺失）" : @"Quits SwitchPad (unsaved progress is lost)", @"quit"]];
     g_menu_rows = rows; g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++;
     game_pause(1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput
     home_menu_build();
-    LOG("front end: Home menu opened%s", g_tv ? " (on the TV)" : "");
+    LOG("front end: Home menu opened%s", tv_on() ? " (on the TV)" : "");
 }
 static void home_menu_toggle(void) { if (g_menu) home_menu_close(); else home_menu_open(); }
 static void home_menu_input(NSDictionary *u) {
