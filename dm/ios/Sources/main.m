@@ -255,6 +255,12 @@ int shell_game_unchoose(void) {
 @end
 @implementation App
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
+    // A TV on the USB-C / HDMI adapter: its own scene (front_ios.m DmTvSceneDelegate), which shows the game's picture at the TV's shape and resolution once the game starts
+    if ([s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive]) {
+        UISceneConfiguration *c = [[UISceneConfiguration alloc] initWithName:@"TV" sessionRole:s.role];
+        c.delegateClass = NSClassFromString(@"DmTvSceneDelegate");
+        return c;
+    }
     return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
 }
 @end

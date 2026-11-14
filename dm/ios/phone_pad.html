@@ -91,6 +91,7 @@
   <div id="status"><div id="player">--</div><div id="conn"></div></div>
   <button class="tb" id="face" aria-label="Button layout">Switch</button>
   <button class="tb" id="edit" data-t="layout">Layout</button>
+  <button class="tb" id="home" aria-label="Menu">⌂</button>
 </div>
 <div id="bar">
   <span data-t="drag">Drag to move, pinch to resize</span>
@@ -157,6 +158,8 @@
   }
   // The button layout from the phone itself: the iPad keeps it for this phone and answers with an assign, which redraws the buttons
   $('#face').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
+  // The iPad's menu (continue, change games), as a controller's Home button opens it
+  $('#home').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'home' })); });
   $('#rejoin').addEventListener('click', () => { join = true; if (ws && ws.readyState === 1) hello(); });
 
   function send() {
