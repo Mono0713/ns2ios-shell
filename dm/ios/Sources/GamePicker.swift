@@ -2,7 +2,7 @@
 // A row of game tiles, the chosen one in the middle, over its icon blurred as the backdrop; the time, Wi-Fi and battery at the top right, as on a console.
 // Styled like Switch Pad on the PC: the package's icon and name at the top left, app-icon corners, a white focus ring, small rounded chips.
 // Touch: swipe the row to move through it, tap a tile to start that game. Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput):
-// left and right move, A or + starts. The games stay in order by name; the highlight starts on the one last played.
+// left and right move, A or + starts. The games stay in order by name; the highlight starts on the phones' QR code, and the row goes round (after the last game, the QR code again).
 // The first tile is the phones' QR code (phone_pads.c, started at launch for the picker), with a dot for each player that has joined; choosing it (or Y)
 // opens the players card: eight places, each lighting up as its player presses something, with Identify (tap or A), the button layout (− ) and Remove (X).
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
@@ -69,31 +69,29 @@ private func loadGames() -> [PickerGame] {
         return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "", icon: gameIcon(dir),
                           played: UserDefaults.standard.object(forKey: "picker.played." + id) as? Date)
     }
-    return list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }   // a fixed order, by name: the highlight starts on the game last played
+    return list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }   // a fixed order, by name (the highlight starts on the phones' tile)
 }
 
-// The row: the phones' tile at 0, then the games (game i at i + 1)
+// The row: the phones' tile at 0, then the games (game i at i + 1). It goes round: after the last game comes the phones' tile again, so the
+// row is a ring and pos counts places along it without end (focus is the item there). It opens on the phones' tile, whose QR code is what a
+// player needs first
 private final class PickerModel: ObservableObject {
     let games: [PickerGame]
-    @Published var focus: Int
-    init() {
-        let g = loadGames()
-        games = g
-        focus = (g.indices.filter { g[$0].played != nil }.max { g[$0].played! < g[$1].played! } ?? 0) + 1
-    }
+    @Published var pos = 0
+    init() { games = loadGames() }
+    var focus: Int { ((pos % count) + count) % count }
+    func item(_ v: Int) -> Int { ((v % count) + count) % count }
     @Published var starting = false
     @Published var padsOpen = false
     @Published var sel = 0   // the highlighted place on the players card (player sel + 1)
     var count: Int { games.count + 1 }
     func game(_ i: Int) -> PickerGame? { games.indices.contains(i - 1) ? games[i - 1] : nil }
     var start: (PickerGame) -> Void = { _ in }
-    func move(_ d: Int) { if !starting { focus = Swift.max(0, Swift.min(count - 1, focus + d)) } }
-    func go(_ i: Int) { if !starting, (0..<count).contains(i) { focus = i } }
-    func choose(_ i: Int? = nil) {
-        let i = i ?? focus
-        guard !starting, (0..<count).contains(i) else { return }
-        focus = i
-        if let g = game(i) { starting = true; start(g) } else { padsOpen = true }
+    func move(_ d: Int) { if !starting { pos += d } }
+    func choose(at v: Int? = nil) {   // the item at place v of the ring (the focused one when nil)
+        guard !starting else { return }
+        if let v { pos = v }
+        if let g = game(focus) { starting = true; start(g) } else { padsOpen = true }
     }
 }
 
@@ -385,22 +383,24 @@ private struct PickerView: View {
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
     private func row(width: CGFloat, side: CGFloat, gap: CGFloat) -> some View {
         let pitch = side + gap
-        return HStack(spacing: gap) {
-            PadsTile(qr: pads.qr, joined: players.players.count, focused: m.focus == 0, side: side)
+        let reach = Int(width / 2 / pitch) + 2   // places drawn on each side of the focused one: enough to fill the screen while a swipe moves it
+        return ZStack {
+            ForEach((m.pos - reach)...(m.pos + reach), id: \.self) { v in
+                let i = m.item(v)
+                Group {
+                    if let game = m.game(i) {
+                        GameTile(game: game, focused: v == m.pos, side: side).accessibilityLabel(game.name)
+                    } else {
+                        PadsTile(qr: pads.qr, joined: players.players.count, focused: v == m.pos, side: side)
+                    }
+                }
                 .contentShape(Rectangle())
-                .onTapGesture { m.choose(0) }
+                .onTapGesture { m.choose(at: v) }
                 .accessibilityAddTraits(.isButton)
-            ForEach(Array(m.games.enumerated()), id: \.element.id) { i, game in
-                GameTile(game: game, focused: i + 1 == m.focus, side: side)
-                    .contentShape(Rectangle())
-                    .onTapGesture { m.choose(i + 1) }
-                    .accessibilityLabel(game.name)
-                    .accessibilityAddTraits(.isButton)
+                .offset(x: CGFloat(v - m.pos) * pitch + drag)
             }
         }
-        .fixedSize()
-        .offset(x: (width - side) / 2 - CGFloat(m.focus) * pitch + drag)
-        .frame(width: width, height: side * 1.15, alignment: .leading)
+        .frame(width: width, height: side * 1.15)
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 12)
@@ -408,12 +408,12 @@ private struct PickerView: View {
                 .onEnded { v in
                     let steps = Int((-v.predictedEndTranslation.width / pitch).rounded())
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                        m.go(Swift.max(0, Swift.min(m.count - 1, m.focus + steps)))
+                        m.move(steps)
                         drag = 0
                     }
                 }
         )
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: m.focus)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: m.pos)
     }
 
     private func backdrop(_ game: PickerGame?) -> some View {
