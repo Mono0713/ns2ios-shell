@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,335 @@
+@@ -3,10 +3,337 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -64,14 +64,15 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設", "Auto": "自動",
 +    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "僅在畫面或聲音異常時調整；設定錯誤可能導致遊戲無法啟動。",
 +    // the launcher's own
-+    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "已固定", "Memory available": "可用記憶體",
++    "Play": "開始遊戲", "Add players": "加入玩家", "Connect to Wi-Fi first": "請先連上 Wi-Fi",
++    "Connect a controller, or scan the QR code with a phone.": "連接手把，或用手機掃描 QR code 加入。", "Version": "版本", "Set by an env file": "已固定", "Memory available": "可用記憶體",
 +    "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
 +    "Open game folder": "打開遊戲資料夾", "Game list": "遊戲清單",
 +    "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔都在這裡（「檔案」App）。",
 +    "Motion controls": "體感操作（陀螺儀）",
 +    "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
-+        "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
-+    "Frame rate cap": "幀率上限", "30 fps runs cooler and saves battery; 60 fps is the most a game runs at.": "30 fps 較省電、機身較不燙；60 fps 為遊戲可達到的最高幀率。",
++        "觸控遊玩時轉動 iPad；手把用自己的陀螺儀。",
++    "Frame rate cap": "幀率上限", "30 fps runs cooler and saves battery; 60 fps is the most a game runs at.": "30 fps 較省電、機身較涼。",
 +    "Touch controls opacity": "觸控按鍵不透明度", "Touch controls size": "觸控按鍵大小",
 +    "Identify": "辨識", "Buzzes this player's controller or flashes its phone.": "讓這位玩家的手把震動或手機閃一下。",
 +    "Phone controllers": "手機手把", "Scan with a phone camera, or open in its browser:": "用手機相機掃描 QR Code，或在瀏覽器輸入：",
@@ -102,11 +103,12 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Keeps a pipeline archive; uses more memory.": "Keeps a pipeline cache, which uses more memory.", "The first start waits a few minutes for it, once.": "The first launch takes a few extra minutes, once.",
 +    "Game memory pool": "Game memory",
 +    "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "Only change this if graphics or sound are missing. A wrong value can keep the game from starting.",
++    "30 fps runs cooler and saves battery; 60 fps is the most a game runs at.": "30 fps runs cooler and saves battery.",
 +    "Memory available": "Available memory", "Reset to tested defaults": "Restore recommended settings", "Brings back all settings this game was tested with.": "Returns every setting to the values this game was tested with.",
 +    "Saves, env.txt and log.txt are here (Files app).": "Your saves are here (Files app).",
 +    "Motion controls": "Motion controls (gyro)",
 +    "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
-+        "When playing by touch, tilting the iPad drives Player 1's motion. DualSense, DualShock 4 and Switch Pro controllers use their own gyroscope.",
++        "Tilt the iPad when playing by touch; controllers use their own gyro.",
 +
 +    "Scan with a phone camera, or open in its browser:": "Scan with your phone's camera, or open this address in its browser:",
 +    "Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.": "Connect this iPad to Wi-Fi (or turn on Personal Hotspot) so phones can join.",
@@ -170,16 +172,18 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @EnvironmentObject var activity: ActivityModel
 +    var body: some View {
 +        let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
-+        Text("\(player)P").font(.headline.monospacedDigit()).foregroundStyle(.white)
-+            .frame(width: 44, height: 44).background(Circle().fill(color))
-+            .overlay(Circle().stroke(Color.white, lineWidth: on ? 3 : 0))
++        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85))
++            .frame(width: 44, height: 36).background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(color))
++            .overlay(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).stroke(Color.white, lineWidth: on ? 3 : 0))
 +            .shadow(color: color, radius: on ? 12 : 0)
 +            .scaleEffect(on ? 1.15 : 1)
 +            .animation(.easeOut(duration: 0.15), value: on)
 +    }
 +}
 +
-+let playerColors: [Color] = [.red, .blue, .yellow, .green, .orange, .purple, .pink, .teal]
++// Each player's colour, P1 to P8 (docs/DESIGN.zh-TW.md): the same in the picker, the launcher, the in-game menu (front_ios.m) and on the phone page
++private func rgb(_ v: UInt32) -> Color { Color(red: Double(v >> 16 & 255) / 255, green: Double(v >> 8 & 255) / 255, blue: Double(v & 255) / 255) }
++let playerColors: [Color] = [0x0A84FF, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F].map(rgb)
 +func controllerIcon(_ label: String) -> String {
 +    let l = label.lowercased()
 +    return l.contains("xbox") ? "logo.xbox" : l.contains("dualsense") || l.contains("dualshock") ? "logo.playstation" : "gamecontroller.fill"
@@ -195,8 +199,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    private var phone: Bool { p.kind == 2 }
 +    private var title: String { playerTitle(p) }
 +    private func moveText(_ n: Int) -> String {
-+        guard let other = m.players.first(where: { $0.player == n }) else { return "\(n)P" }
-+        return zhHant ? "\(n)P（和 \(playerTitle(other)) 交換）" : "\(n)P (swap with \(playerTitle(other)))"
++        guard let other = m.players.first(where: { $0.player == n }) else { return "P\(n)" }
++        return zhHant ? "P\(n)（和 \(playerTitle(other)) 交換）" : "P\(n) (swap with \(playerTitle(other)))"
 +    }
 +
 +    var body: some View {
@@ -228,7 +232,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                }
 +            } label: {   // while player 1 picks the number: "Move to 3P"
 +                let n = nav.focus == "p\(p.player)" ? nav.moveTo : nil
-+                Label(tr("Move to") + (n.map { " \($0)P" } ?? ""), systemImage: "arrow.left.arrow.right")
++                Label(tr("Move to") + (n.map { " P\($0)" } ?? ""), systemImage: "arrow.left.arrow.right")
 +            }
 +            .modifier(NavPart(player: p.player, part: 2))
 +            Button(role: .destructive) { m.send(["op": "kick", "p": p.player]) } label: {
@@ -247,7 +251,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    var body: some View {
 +        Section {
 +            if m.players.isEmpty && m.removed.isEmpty {
-+                Text(tr("No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.")).foregroundStyle(.secondary)
++                Text(tr("Connect a controller, or scan the QR code with a phone.")).foregroundStyle(.secondary).listRowBackground(rowPlate)
 +            }
 +            ForEach(m.players) { PlayerRowView(p: $0, m: m).nav("p\($0.player)") }
 +            ForEach(m.removed) { r in
@@ -264,9 +268,6 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            }
 +        } header: {
 +            Text(tr("Players"))
-+        } footer: {
-+            Text(tr("The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.")
-+                 + " " + tr("Player 1's controller: A on a player, then left and right pick what to change. Players 2 to 8: left and right on your own row pick the layout or Identify, A to use it."))
 +        }
 +    }
 +}
@@ -306,26 +307,27 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @State private var qr: UIImage?   // made once per address, not on every redraw
 +
 +    var body: some View {
-+        VStack(spacing: 8) {
-+            Label(tr("Phone controllers"), systemImage: "iphone.gen3").font(.headline)
-+            if let url {
-+                if let qr {
-+                    Image(uiImage: qr).interpolation(.none).resizable().frame(width: 120, height: 120)
-+                        .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 8))
-+                        .accessibilityLabel("QR code of \(url)")
-+                }
-+                Text(tr("Scan with a phone camera, or open in its browser:")).font(.footnote).foregroundStyle(.secondary)
-+                Text(url).font(.callout.monospaced()).textSelection(.enabled)
-+            } else {
-+                Text(tr("Connect this device to Wi-Fi (or turn on its Personal Hotspot) to let phones join.")).font(.footnote).foregroundStyle(.secondary)
++        HStack(spacing: 14) {
++            if let url, let qr {
++                Image(uiImage: qr).interpolation(.none).resizable().frame(width: 96, height: 96)
++                    .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
++                    .accessibilityLabel("QR code of \(url)")
 +            }
-+            Text(tr("Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player."))
-+                .font(.caption).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 6) {
++                Label(tr("Add players"), systemImage: "qrcode").font(.headline)
++                if let url {
++                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled)
++                        .padding(.horizontal, 8).padding(.vertical, 3)
++                        .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
++                } else {
++                    Text(tr("Connect to Wi-Fi first")).font(.footnote).foregroundStyle(.secondary)
++                }
++            }
++            Spacer(minLength: 0)
 +        }
-+        .multilineTextAlignment(.center)
-+        .padding(14)
++        .padding(12)
 +        .frame(maxWidth: .infinity)
-+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(uiColor: .secondarySystemGroupedBackground)))
++        .glassCard(20)
 +        .task {
 +            while !Task.isCancelled {   // the Wi-Fi address can change while the launcher is shown
 +                let now = phonePadsURL()
@@ -338,7 +340,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +343,55 @@
+@@ -18,17 +345,55 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -396,7 +398,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +401,7 @@
+@@ -38,7 +403,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -405,7 +407,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +414,23 @@
+@@ -51,8 +416,23 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -430,7 +432,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,43 +442,270 @@
+@@ -64,68 +444,441 @@
      }
  }
  
@@ -452,10 +454,18 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @EnvironmentObject var nav: NavModel
 +    func body(content: Content) -> some View {
 +        let on = nav.focus == id
-+        content.id(id).listRowBackground(on ? Color.accentColor.opacity(nav.editing ? 0.6 : 0.35) : Color(uiColor: .secondarySystemGroupedBackground))
++        content.id(id).listRowBackground(on ? DS.accent.opacity(nav.editing ? 0.6 : 0.35) : rowPlate)
 +    }
 +}
 +private extension View { func nav(_ id: String) -> some View { modifier(NavHighlight(id: id)) } }
++// A row's plate over the launcher's blurred backdrop (a row without a highlight of its own takes it with .listRowBackground)
++private let rowPlate = Color.white.opacity(0.07)
++// A button that gives a little while pressed (Play)
++private struct PressScale: ButtonStyle {
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label.scaleEffect(configuration.isPressed ? 0.96 : 1).animation(.easeOut(duration: 0.12), value: configuration.isPressed)
++    }
++}
 +private struct NavPart: ViewModifier {   // a ring around the player row's control player 1 picked
 +    let player, part: Int
 +    @EnvironmentObject var nav: NavModel
@@ -595,18 +605,17 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
 +                .nav("slotCopy")
 +            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
++                .listRowBackground(rowPlate)
 +            if s.slots.count > 1 {
 +                Menu {
 +                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
 +                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
++                .listRowBackground(rowPlate)
 +            }
 +        } header: {
 +            Text(tr("Saves"))
 +        } footer: {
-+            VStack(alignment: .leading, spacing: 4) {
-+                Text(tr("Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along."))
-+                if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
-+            }
++            if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
 +        }
 +        .alert(tr("Rename this save"), isPresented: $renaming) {
 +            TextField(tr("Name"), text: $newName)
@@ -631,13 +640,14 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
      @ObservedObject var m: LauncherModel
 +    @ObservedObject var shell: ShellSettings
      let play: () -> Void
+-    @State private var memory = os_proc_available_memory()
 +    let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
-     @State private var memory = os_proc_available_memory()
 +    @StateObject private var players = PlayersModel()
 +    @StateObject private var nav = NavModel()
 +    @StateObject private var activity = ActivityModel()
 +    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
++    @State private var shown = false   // the left column rises in once, as the picker's card does
  
      var body: some View {
          GeometryReader { geometry in
@@ -645,27 +655,44 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  VStack(spacing: 16) {
 +                    Spacer(minLength: 0)
                      if let icon = appIcon() {
-                         Image(uiImage: icon).resizable().frame(width: 96, height: 96)
-                             .clipShape(RoundedRectangle(cornerRadius: 22))
+-                        Image(uiImage: icon).resizable().frame(width: 96, height: 96)
+-                            .clipShape(RoundedRectangle(cornerRadius: 22))
++                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: 128, height: 128)
++                            .clipShape(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
++                            .overlay(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
++                            .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
                              .accessibilityHidden(true)
                      }
 -                    Text((info("CFBundleDisplayName") as? String) ?? "Game")
-+                    Text((info("CFBundleDisplayName") as? String) ?? tr("Game"))
-                         .font(.title.weight(.bold)).multilineTextAlignment(.center)
+-                        .font(.title.weight(.bold)).multilineTextAlignment(.center)
 -                    Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
-+                    Text(tr("Version") + " " + ((info("CFBundleShortVersionString") as? String) ?? ""))
-                         .font(.callout).foregroundStyle(.secondary)
-                     playButton
+-                        .font(.callout).foregroundStyle(.secondary)
+-                    playButton
+-                }
+-                .padding(16)
++                    Text((info("CFBundleDisplayName") as? String) ?? tr("Game"))
++                        .font(.title.weight(.bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
++                    if let v = info("CFBundleShortVersionString") as? String, !v.isEmpty {
++                        Text("v" + v).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
++                            .padding(.horizontal, 9).padding(.vertical, 4)
++                            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
++                    }
++                    playButton.padding(.top, 6)
 +                    Spacer(minLength: 8)
 +                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
-                 }
-                 .padding(16)
++                }
++                .padding(20)
++                .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 24)
                  .frame(width: geometry.size.width / 3, height: geometry.size.height)
 +                .overlay(alignment: .topLeading) {
 +                    if let back {
-+                        Button(action: back) { Label(tr("Game list"), systemImage: "chevron.left").font(.headline) }
-+                            .buttonStyle(.bordered).controlSize(.large).padding(16)
-+                            .overlay { if nav.focus == "back" { Capsule().stroke(Color.white, lineWidth: 3).padding(10) } }
++                        Button(action: back) {
++                            Label(tr("Game list"), systemImage: "chevron.left").font(.headline).foregroundStyle(.white)
++                                .padding(.horizontal, 14).padding(.vertical, 10)
++                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.chip))
++                        }
++                        .buttonStyle(.plain).padding(16)
++                        .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white, lineWidth: 3).padding(12) } }
 +                    }
 +                }
 +                ScrollViewReader { proxy in
@@ -688,62 +715,81 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                      }
                      Section {
 -                        Button("Reset to tested defaults") { m.reset() }
-+                        Button(tr("Reset to tested defaults")) { m.reset() }
++                        Button { m.reset() } label: { Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise") }
                              .disabled(!m.changed)
-+                            .nav("reset")
-                     } footer: {
+-                    } footer: {
 -                        Text("Brings back all settings this game was tested with.")
-+                        Text(tr("Brings back all settings this game was tested with."))
-+                    }
-+                    Section {
-+                        Button(tr("Open game folder"), action: openGameFolder)
++                            .nav("reset")
++                        Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
 +                            .nav("folder")
-+                    } footer: {
-+                        Text(tr("Saves, env.txt and log.txt are here (Files app)."))
                      }
-                     Section {
-                         HStack {
+-                    Section {
+-                        HStack {
 -                            Text("Memory available")
-+                            Text(tr("Memory available"))
-                             Spacer()
-                             Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
-                         }
-@@ -108,24 +713,149 @@
+-                            Spacer()
+-                            Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
+-                        }
+-                    }
                  }
                  .listStyle(.insetGrouped)
++                .scrollContentBackground(.hidden)   // the game's blurred icon shows through, as in the picker
                  .contentMargins(.horizontal, 12, for: .scrollContent)
 +                .onChange(of: nav.focus) { _, id in withAnimation { proxy.scrollTo(id == "play" ? "p1" : id, anchor: .center) } }
 +                }
                  .frame(width: geometry.size.width * 2 / 3)
              }
          }
++        .background { backdrop }
 +        .environmentObject(nav)
 +        .environmentObject(activity)
          .preferredColorScheme(.dark)
+-        .task {
+-            while !Task.isCancelled {
+-                memory = os_proc_available_memory()
+-                try? await Task.sleep(for: .seconds(2))
+-            }
+-        }
+-    }
+-
+-    @ViewBuilder var playButton: some View {
+-        let button = Button(action: play) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
+-        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
 +        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
 +        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
 +        .onDisappear {
 +            held?.task.cancel()
 +            NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
 +        }
-         .task {
-             while !Task.isCancelled {
--                memory = os_proc_available_memory()
-+                let now = os_proc_available_memory()
-+                if now / 10_485_760 != memory / 10_485_760 { memory = now }   // in 10 MB steps: a redraw every two seconds for a changing last digit is wasted
-                 try? await Task.sleep(for: .seconds(2))
-             }
-         }
-     }
- 
-     @ViewBuilder var playButton: some View {
--        let button = Button(action: play) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
--        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
-+        let button = Button(action: play) { Text(tr("Play")).font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
-+        Group {
-+            if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
++        .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
++    }
++
++    // The game's icon blurred over black, as behind the picker's row
++    private var backdrop: some View {
++        ZStack {
++            Color.black
++            if let icon = appIcon() {
++                Image(uiImage: icon).resizable().scaledToFill()
++                    .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
++                    .blur(radius: 60).scaleEffect(1.4).opacity(0.45)
++            }
++            LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
 +        }
-+        .overlay { if nav.focus == "play" { Capsule().stroke(Color.white, lineWidth: 3).padding(-6) } }
++        .ignoresSafeArea()
++    }
++
++    // Play: a rounded rectangle in the accent colour (not a capsule), a white ring while player 1's highlight is on it; it gives a little when pressed
++    var playButton: some View {
++        let focused = nav.focus == "play"
++        return Button(action: play) {
++            Label(tr("Play"), systemImage: "play.fill").font(.title3.weight(.semibold)).foregroundStyle(.white)
++                .frame(maxWidth: 240).frame(height: 54)
++                .background(RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous).fill(DS.accent))
++                .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: focused ? 16 : 10)
++        }
++        .buttonStyle(PressScale())
++        .overlay { if focused { RoundedRectangle(cornerRadius: DS.rowRadius + 6, style: .continuous).stroke(Color.white, lineWidth: 3).padding(-6) } }
++        .scaleEffect(focused ? 1.03 : 1)
++        .animation(DS.spring, value: focused)
 +    }
 +
 +    // ---- Player 1's controller ----
@@ -861,7 +907,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +867,30 @@
+@@ -137,21 +890,30 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
