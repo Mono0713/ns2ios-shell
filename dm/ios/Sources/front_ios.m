@@ -50,8 +50,11 @@ static UIView *overlay_root(void);
 static void home_menu_toggle(void);
 static void home_menu_relayout(void);
 static int g_menu_page;   // 0 main, 1 players / who is 1P, 2 join (QR)
+static int g_menu_anim;   // how the next drawn card comes in: 0 at once, 1 opening, 2 next page, 3 page back
 static void menu_page(int page, int sel);
 static UIImage *phones_qr(NSString **url_out);
+static NSArray<NSString *> *audio_row(void);
+static NSArray<NSString *> *video_row(void);
 static void home_menu_watch(void);
 static UIView *tv_panel(CGRect frame);
 void front_ios_audio_session(void);
@@ -210,7 +213,7 @@ static UIView *tv_panel(CGRect frame) {
     t.text = z ? @"遊戲畫面在電視上" : @"The game is on the TV"; t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold];
     [box addSubview:t];
     UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(0, 34, 640, 40)]; sub.numberOfLines = 2;
-    sub.text = z ? @"手把的 Home（Xbox）鍵、同時按 − 和 +、手機的 ⌂ 或左上角「選單」都能叫出選單" : @"A controller's Home (Xbox), − and + together, a phone's ⌂ or Menu at the top left opens the menu";
+    sub.text = z ? @"按 Home 鍵叫出選單" : @"Press Home for the menu";
     sub.textColor = [UIColor colorWithWhite:0.6 alpha:1]; sub.font = [UIFont systemFontOfSize:14];
     [box addSubview:sub];
     // the phones' QR code (phone_pads.c), white on a rounded card
@@ -573,10 +576,23 @@ static NSString *game_name(void) {
 static NSMutableArray<UIView *> *g_menu_cards;   // the card on the TV and the iPad's copy (touch), or only the iPad's
 static UIView *g_menu_ipad;   // the iPad's copy of the menu while g_menu is on the TV
 static unsigned g_menu_gen;   // each opening: a close's late resume does not undo a menu opened again
+// The selection is a pill that slides to the chosen row (a spring), under the rows' text; the chosen row's icon tile lights up
 static void home_menu_draw(void) {
-    for (UIView *card in g_menu_cards) for (UIView *row in card.subviews) if (row.tag >= 100) {
-        BOOL on = row.tag - 100 == g_menu_sel;
-        row.backgroundColor = on ? [UIColor colorWithRed:0.25 green:0.5 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.08];
+    for (UIView *card in g_menu_cards) {
+        UIView *pill = [card viewWithTag:50]; if (!pill) continue;
+        for (UIView *row in card.subviews) if (row.tag >= 100) {
+            BOOL on = row.tag - 100 == g_menu_sel;
+            UIView *tile = [row viewWithTag:60];
+            tile.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.1];
+            ((UIImageView *)[tile viewWithTag:61]).tintColor = on ? [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1] : UIColor.whiteColor;
+            ((UILabel *)[row viewWithTag:62]).textColor = on ? [UIColor colorWithWhite:1 alpha:0.85] : [UIColor colorWithWhite:1 alpha:0.5];
+            if (!on) continue;
+            if (pill.alpha == 0) { pill.frame = row.frame; pill.alpha = 1; continue; }   // first placement: no slide
+            [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                             animations:^{ pill.frame = row.frame; } completion:nil];
+            [UIView animateWithDuration:0.08 animations:^{ tile.transform = CGAffineTransformMakeScale(1.12, 1.12); }
+                             completion:^(BOOL f) { (void)f; [UIView animateWithDuration:0.18 animations:^{ tile.transform = CGAffineTransformIdentity; }]; }];
+        }
     }
 }
 // The game comes back once every button is up: the A that chose Continue would otherwise reach the game as a press (at most a second's wait)
@@ -591,7 +607,11 @@ static void home_menu_close(void) {
     g_menu_closing = 1;
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @0}];
     UIView *m = g_menu, *mi = g_menu_ipad;
-    [UIView animateWithDuration:0.15 animations:^{ m.alpha = 0; mi.alpha = 0; } completion:^(BOOL f) {
+    NSArray<UIView *> *cards = [g_menu_cards copy];
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        m.alpha = 0; mi.alpha = 0;
+        for (UIView *c in cards) c.transform = CGAffineTransformScale(c.transform, 0.94, 0.94);
+    } completion:^(BOOL f) {
         (void)f; [m removeFromSuperview]; [mi removeFromSuperview];
         if (g_menu == m) { g_menu = nil; g_menu_ipad = nil; g_menu_cards = nil; g_menu_closing = 0; }
     }];
@@ -606,11 +626,16 @@ static void home_menu_quit(int relaunch) {
     }
     BOOL z = zh_ui();
     for (UIView *card in g_menu_cards) {
-        for (UIView *v in card.subviews) [v removeFromSuperview];
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectInset(card.bounds, 24, 16)];
-        l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
-        l.text = z ? @"正在關閉遊戲…\n設好捷徑自動化會自動重開；沒有的話點一下 iPad 上的 SwitchPad 圖示" : @"Closing the game…\nA Shortcuts automation reopens SwitchPad; without one, tap its icon on the iPad";
-        [card addSubview:l];
+        UIView *keep = [card viewWithTag:1];
+        [UIView transitionWithView:card duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+            for (UIView *v in card.subviews) if (v != keep) [v removeFromSuperview];
+            UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+            spin.color = UIColor.whiteColor; spin.center = CGPointMake(card.bounds.size.width / 2, card.bounds.size.height / 2 - 22); [spin startAnimating]; [card addSubview:spin];
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(24, card.bounds.size.height / 2 + 12, card.bounds.size.width - 48, 30)];
+            l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
+            l.text = relaunch ? (z ? @"正在回到選擇遊戲…" : @"Back to the games…") : (z ? @"正在關閉…" : @"Closing…");   // how a relaunch happens (a Shortcuts automation) is in the README, not on screen
+            [card addSubview:l];
+        } completion:nil];
     }
     LOG("front end: Home menu: closing the app to change games");
     fflush(stderr);
@@ -618,8 +643,6 @@ static void home_menu_quit(int relaunch) {
     // launch shows the picker; 2 s for the line above
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ fflush(stderr); exit(0); });
 }
-static NSArray<NSString *> *audio_row(void);   // the TV rows, defined with the menu below
-static NSArray<NSString *> *video_row(void);
 static void home_menu_activate(int i) {
     if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
     NSString *act = g_menu_rows[i][2];
@@ -651,54 +674,99 @@ static void home_menu_activate(int i) {
 @implementation DmMenuTap
 + (void)tap:(UIButton *)b { g_menu_sel = (int)b.tag - 100; home_menu_draw(); home_menu_activate(g_menu_sel); }
 @end
+static NSString *menu_symbol(NSString *act) {   // each row's SF Symbol
+    NSDictionary *m = @{@"continue": @"play.fill", @"players": @"person.2.fill", @"join": @"qrcode", @"video": @"tv", @"audio": @"speaker.wave.2.fill",
+                        @"change": @"square.grid.2x2.fill", @"quit": @"power", @"back": @"chevron.left"};
+    return m[act] ?: ([act hasPrefix:@"p1:"] ? @"gamecontroller.fill" : @"circle.fill");
+}
 static UIView *home_menu_make(UIView *root) {
     BOOL z = zh_ui();
     UIView *menu = [[UIView alloc] initWithFrame:root.bounds];
     menu.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
-    CGFloat W = 440, rowH = g_menu_page == 1 ? 52 : 64, gap = g_menu_page == 1 ? 6 : 10, pad = 16, top = 76;
+    menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    CGFloat W = 440, rowH = g_menu_page == 1 ? 52 : 60, gap = g_menu_page == 1 ? 6 : 8, pad = 16, top = 84;
     NSString *qrURL = nil; UIImage *qr = g_menu_page == 2 ? phones_qr(&qrURL) : nil;
     if (g_menu_page == 2) top += 250;   // the QR code and its address above the rows
     CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + 34;
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - W) / 2), floor((root.bounds.size.height - H) / 2), W, H)];
     card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    card.backgroundColor = [UIColor colorWithRed:0.11 green:0.12 blue:0.14 alpha:0.97];
-    card.layer.cornerRadius = 22; card.layer.cornerCurve = kCACornerCurveContinuous;
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(pad + 4, 18, W - 2 * pad - 8, 26)];
-    t.text = game_name(); t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:21 weight:UIFontWeightBold];
-    UILabel *tag = [[UILabel alloc] init];   // a small tag box: what is going on
-    tag.text = z ? @"  已暫停  " : @"  Paused  "; tag.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; tag.textColor = [UIColor colorWithWhite:0.8 alpha:1];
-    tag.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; tag.layer.cornerRadius = 6; tag.layer.masksToBounds = YES;
-    [tag sizeToFit]; tag.frame = CGRectMake(pad + 4, 48, tag.bounds.size.width, 20);
+    card.layer.cornerRadius = 26; card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.45; card.layer.shadowRadius = 30; card.layer.shadowOffset = CGSizeMake(0, 14);
+    // the backdrop: frosted glass over the paused game, a hairline edge
+    UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    glass.frame = card.bounds; glass.tag = 1; glass.layer.cornerRadius = 26; glass.layer.cornerCurve = kCACornerCurveContinuous; glass.clipsToBounds = YES;
+    glass.layer.borderWidth = 1; glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    glass.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.55];
+    [card addSubview:glass];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(pad + 4, 20, W - 2 * pad - 8, 28)];
+    t.text = game_name(); t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    // a small tag box: what is going on (a pause glyph and a word)
+    UIView *tag = [[UIView alloc] initWithFrame:CGRectMake(pad + 4, 52, 10, 22)];
+    tag.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; tag.layer.cornerRadius = 7; tag.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageView *pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:9 weight:UIImageSymbolWeightBold]]];
+    pi.tintColor = [UIColor colorWithWhite:0.85 alpha:1]; pi.center = CGPointMake(14, 11); [tag addSubview:pi];
+    UILabel *tl = [[UILabel alloc] init]; tl.text = g_menu_page == 1 ? (z ? @"玩家" : @"Players") : g_menu_page == 2 ? (z ? @"加入玩家" : @"Add players") : (z ? @"已暫停" : @"Paused");
+    tl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; tl.textColor = [UIColor colorWithWhite:0.85 alpha:1]; [tl sizeToFit];
+    tl.frame = CGRectMake(24, 0, tl.bounds.size.width, 22); [tag addSubview:tl];
+    CGRect tf = tag.frame; tf.size.width = 24 + tl.bounds.size.width + 9; tag.frame = tf;
     [card addSubview:t]; [card addSubview:tag];
     if (g_menu_page == 2) {   // joining: the QR code on white, and the address
-        UIView *qc = [[UIView alloc] initWithFrame:CGRectMake((W - 200) / 2, 82, 200, 200)];
-        qc.backgroundColor = UIColor.whiteColor; qc.layer.cornerRadius = 16; qc.layer.cornerCurve = kCACornerCurveContinuous;
+        UIView *qc = [[UIView alloc] initWithFrame:CGRectMake((W - 200) / 2, 88, 200, 200)];
+        qc.backgroundColor = UIColor.whiteColor; qc.layer.cornerRadius = 18; qc.layer.cornerCurve = kCACornerCurveContinuous;
         if (qr) { UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectInset(qc.bounds, 14, 14)]; iv.image = qr; iv.layer.magnificationFilter = kCAFilterNearest; iv.contentMode = UIViewContentModeScaleAspectFit; [qc addSubview:iv]; }
-        UILabel *u = [[UILabel alloc] initWithFrame:CGRectMake(pad, 290, W - 2 * pad, 22)]; u.textAlignment = NSTextAlignmentCenter;
+        UILabel *u = [[UILabel alloc] initWithFrame:CGRectMake(pad, 296, W - 2 * pad, 22)]; u.textAlignment = NSTextAlignmentCenter;
         u.text = qrURL ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off"); u.textColor = [UIColor colorWithWhite:0.8 alpha:1];
         u.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
         [card addSubview:qc]; [card addSubview:u];
     }
+    for (NSUInteger i = 0; i < g_menu_rows.count; i++) {   // each row's own faint plate, under the sliding pill
+        UIView *plate = [[UIView alloc] initWithFrame:CGRectMake(pad, top + i * (rowH + gap), W - 2 * pad, rowH)];
+        plate.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05]; plate.layer.cornerRadius = 16; plate.layer.cornerCurve = kCACornerCurveContinuous; plate.userInteractionEnabled = NO;
+        [card addSubview:plate];
+    }
+    UIView *pill = [[UIView alloc] initWithFrame:CGRectZero]; pill.tag = 50; pill.alpha = 0; pill.userInteractionEnabled = NO;
+    pill.backgroundColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1]; pill.layer.cornerRadius = 16; pill.layer.cornerCurve = kCACornerCurveContinuous;
+    pill.layer.shadowColor = [UIColor colorWithRed:0.2 green:0.45 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12; pill.layer.shadowOffset = CGSizeZero;
+    [card addSubview:pill];
+    CGFloat tileS = rowH == 60 ? 36 : 32;
     for (NSUInteger i = 0; i < g_menu_rows.count; i++) {
         UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
         row.frame = CGRectMake(pad, top + i * (rowH + gap), W - 2 * pad, rowH); row.tag = 100 + (NSInteger)i;
-        row.layer.cornerRadius = 14; row.layer.cornerCurve = kCACornerCurveContinuous;
         [row addTarget:DmMenuTap.class action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
-        UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(16, rowH == 64 ? 10 : 5, W - 2 * pad - 32, 24)]; a.userInteractionEnabled = NO;
+        UIView *tile = [[UIView alloc] initWithFrame:CGRectMake(12, (rowH - tileS) / 2, tileS, tileS)]; tile.tag = 60; tile.userInteractionEnabled = NO;
+        tile.layer.cornerRadius = 10; tile.layer.cornerCurve = kCACornerCurveContinuous;
+        UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:menu_symbol(g_menu_rows[i][2]) withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]]];
+        ic.tag = 61; ic.contentMode = UIViewContentModeCenter; ic.frame = tile.bounds; [tile addSubview:ic];
+        CGFloat x = 12 + tileS + 12, tw = W - 2 * pad - x - 12;
+        BOOL two = [g_menu_rows[i][1] length] > 0;
+        UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
         a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-        UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(16, rowH == 64 ? 34 : 28, W - 2 * pad - 32, 20)]; d.userInteractionEnabled = NO;
-        d.text = g_menu_rows[i][1]; d.textColor = [UIColor colorWithWhite:0.75 alpha:1]; d.font = [UIFont systemFontOfSize:13];
-        [row addSubview:a]; [row addSubview:d]; [card addSubview:row];
+        UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
+        d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13];
+        [row addSubview:tile]; [row addSubview:a]; [row addSubview:d]; [card addSubview:row];
     }
     UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(pad, H - 34, W - 2 * pad, 22)];
-    hint.text = z ? @"方向鍵選擇 · A 確定 · B 或 Home 繼續" : @"D-pad to choose · A to select · B or Home to continue";
-    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:0.55 alpha:1]; hint.font = [UIFont systemFontOfSize:12];
+    hint.text = g_menu_page ? (z ? @"A 確定 · B 返回" : @"A select · B back") : (z ? @"A 確定 · B 或 Home 繼續遊戲" : @"A select · B or Home to play");
+    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.4]; hint.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
     [card addSubview:hint];
     CGFloat k = ui_scale(root);
-    if (k > 1) { card.transform = CGAffineTransformMakeScale(k, k); card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds)); }
+    CGAffineTransform base = CGAffineTransformMakeScale(k, k);
+    card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
     [menu addSubview:card]; [root addSubview:menu];
     [g_menu_cards addObject:card];
+    // coming in: opening pops up from a little smaller and lower (a spring) as the dim fades in; a page slides in from the side it goes to
+    if (g_menu_anim == 1) {
+        menu.backgroundColor = UIColor.clearColor; card.alpha = 0;
+        card.transform = CGAffineTransformTranslate(CGAffineTransformScale(base, 0.9, 0.9), 0, 24);
+        UIColor *dim = [UIColor colorWithWhite:0 alpha:0.55];
+        [UIView animateWithDuration:0.22 animations:^{ menu.backgroundColor = dim; }];
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ card.alpha = 1; card.transform = base; } completion:nil];
+    } else if (g_menu_anim == 2 || g_menu_anim == 3) {
+        card.alpha = 0; card.transform = CGAffineTransformTranslate(base, g_menu_anim == 2 ? 36 : -36, 0);
+        [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.2 options:UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ card.alpha = 1; card.transform = base; } completion:nil];
+    }
     return menu;
 }
 static void home_menu_build(void) {
@@ -706,6 +774,7 @@ static void home_menu_build(void) {
     g_menu_cards = [NSMutableArray array];
     g_menu = home_menu_make(root);
     if (tv_on() && g_root.view) { g_menu_ipad = home_menu_make(g_root.view); g_menu_ipad.backgroundColor = UIColor.blackColor; }   // the iPad's copy, for touch
+    g_menu_anim = 0;
     home_menu_draw();
 }
 static void home_menu_relayout(void) {   // the TV came or went while the menu is up: draw it again where the picture is now
@@ -716,7 +785,7 @@ static void home_menu_relayout(void) {   // the TV came or went while the menu i
 static NSArray<NSString *> *audio_row(void) {
     BOOL z = zh_ui(), ipad = [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"];
     return @[ipad ? (z ? @"聲音輸出：iPad 喇叭" : @"Sound output: iPad speaker") : (z ? @"聲音輸出：電視" : @"Sound output: TV"),
-             z ? @"按 A 切換電視／iPad 喇叭（螢幕沒有喇叭時選 iPad）" : @"A switches TV / iPad speaker (the iPad when the screen has no speakers)", @"audio"];
+             z ? @"按 A 切換電視／iPad 喇叭" : @"A switches TV / iPad speaker", @"audio"];
 }
 static NSArray<NSString *> *video_row(void) {
     BOOL z = zh_ui(), ipad = video_pref_ipad();
@@ -752,6 +821,7 @@ static NSArray *menu_rows(int page) {
 }
 // g_menu_page declared near the top
 static void menu_page(int page, int sel) {
+    g_menu_anim = page > g_menu_page ? 2 : 3;   // deeper slides in from the right, back from the left
     g_menu_page = page; g_menu_rows = menu_rows(page); g_menu_sel = MAX(0, MIN(sel, (int)g_menu_rows.count - 1));
     home_menu_relayout(); home_menu_draw();
 }
@@ -766,7 +836,7 @@ static UIImage *phones_qr(NSString **url_out) {   // the phone controllers' addr
 }
 static void home_menu_open(void) {
     if (g_menu || !g_root.game) return;   // only once the game was started (the picker and the launcher have their own screens)
-    g_menu_page = 0; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++;
+    g_menu_page = 0; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++; g_menu_anim = 1;
     game_pause(1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput
     home_menu_build();
