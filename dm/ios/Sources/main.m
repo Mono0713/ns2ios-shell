@@ -106,6 +106,20 @@ static void game_log_keep(NSString *doc) {
     [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
     [d writeToFile:cur atomically:YES];
+    // A run that crashed is also kept as <title ID>.crash.txt (and the crash before it as .crash.prev.txt), which later runs that went well do not push out: the
+    // log someone reporting a crash needs is still there however often the game was opened since. Crashed = a host crash (CRASH), a fatal host error (FATAL), the
+    // watchdog's hang exit, or the game's own abort (Break without the notification bit 31)
+    BOOL crashed = [txt containsString:@"[dm] CRASH"] || [txt containsString:@"[dm] FATAL "] || [txt containsString:@"watchdog: no progress"];
+    if (!crashed) {
+        NSRegularExpression *br = [NSRegularExpression regularExpressionWithPattern:@"Break#[0-9]+ reason=(0x[0-9A-Fa-f]+|0) " options:0 error:nil];
+        for (NSTextCheckingResult *b in [br matchesInString:txt options:0 range:NSMakeRange(0, txt.length)])
+            if (!(strtoull([txt substringWithRange:[b rangeAtIndex:1]].UTF8String, NULL, 0) & 0x80000000ull)) { crashed = YES; break; }
+    }
+    if (crashed) {
+        NSString *cc = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".crash.txt"]], *cp = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".crash.prev.txt"]];
+        [fm removeItemAtPath:cp error:nil]; [fm moveItemAtPath:cc toPath:cp error:nil];
+        [d writeToFile:cc atomically:YES];
+    }
 }
 
 // Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
@@ -255,6 +269,12 @@ int shell_game_unchoose(void) {
 @end
 @implementation App
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
+    // A TV on the USB-C / HDMI adapter: its own scene (front_ios.m DmTvSceneDelegate), which shows the game's picture at the TV's shape and resolution once the game starts
+    if ([s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive]) {
+        UISceneConfiguration *c = [[UISceneConfiguration alloc] initWithName:@"TV" sessionRole:s.role];
+        c.delegateClass = NSClassFromString(@"DmTvSceneDelegate");
+        return c;
+    }
     return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
 }
 @end

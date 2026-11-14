@@ -61,6 +61,17 @@ def folder_size(p):
     return n
 
 
+def link_or_copy(src, dst, **kw):
+    """copytree's copy_function for the stage tree: a hard link to the file in the work folder, which nothing writes to
+    again before the IPA is packed and the work folder removed, so the stage costs no space of its own (the RomFS of a
+    12 GB game and every shader library used to be copied a second time here). A plain copy where a link is not possible
+    (another volume, a file system without them)."""
+    try:
+        os.link(src, dst); return dst
+    except OSError:
+        return shutil.copy2(src, dst, **kw)
+
+
 def tidy(work, keep_logs=True):
     """Remove what the pack no longer needs, and return the bytes freed.
 
@@ -1109,6 +1120,9 @@ def env_for(rows):
         if v: lines.append('%s=%s' % (ev, v.strip()))
     # op_mode is read as atoi() against DM_GAME_OPMODE, which is int(om == "console"): atoi("handheld") and
     # atoi("console") are both 0, so the profile's word has to become the number the host compares.
+    # ub_defer off: every inline uniform update inside a render pass ends the pass, as before the deferral (nvn_mtl.m ubd_on).
+    # Super Mario Odyssey's auto-exposure pass and its smoke read wrong constants with the deferral on (white frames).
+    if one(rows, 'ub_defer') and not truthy(one(rows, 'ub_defer')): lines.append('DM_NVN_UB_DEFER=0')
     om = one(rows, 'op_mode')
     if om: lines.append('DM_OPMODE=' + ('1' if om.strip() == 'console' else '0'))
     # program_id is deliberately NOT written. The shell is compiled from the placeholder profile, so its DM_GAME_PROGRAM_ID
@@ -1185,11 +1199,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # shader libraries: the directory name is the chain version, which the shell reads at run time
     if msl_dir.is_dir():
         dst = A / 'msl' / msl_dir.name
-        shutil.copytree(msl_dir, dst)
+        shutil.copytree(msl_dir, dst, copy_function=link_or_copy)
         n = len(list(dst.glob('*_b.metallib')))
         if n: say('shader source for %d shaders -> msl/%s' % (n, msl_dir.name))   # empty for a GL package, whose shaders go to msl/gl instead
 
-    shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True)
+    shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True, copy_function=link_or_copy)
     say('RomFS in place')
 
     # tables the game profile carries (shader map, c1 list, warm-up list, uniform extents)
@@ -1216,6 +1230,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # does not crash at once -- the game asks for the wrong heap and aborts in SetHeapSize (Hades II asked for pool - 64 MB
     # instead of pool - 108 MB and overflowed the pool by 44 MB).
     env_lines = env_for(rows)
+    # A guessed profile (switchpad/make_provisional.py, profile_guess.py) is marked for the host, which then gives a game with virtual address memory more alias region
+    # than the guess when the device allows it (hle_svc.c mem_init_once): the guessed size ran out in two Unity games that needed it raised by hand
+    try:
+        if (gdir / 'game.tsv').read_text(encoding='utf-8').startswith('# Provisional game profile'): env_lines.append('DM_MEM_PROVISIONAL=1')
+    except OSError: pass
     # The npdm's main thread stack size: the host runs the main thread on a 64 MB stack and reports this size instead (hle_os.c GetCurrentStackInfo),
     # since Godot sizes its worker stacks from it (Unrailed 2: 1 MB on the Switch, 64 MB x 28 workers on the host ran the heap out)
     try:

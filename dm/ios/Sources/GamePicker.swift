@@ -1,7 +1,8 @@
 // Game picker: the first screen of a package of several games (scripts/nxn_merge.py puts each in <App>/games/<title ID>/ with its game.json and icon).
 // A row of game tiles, the chosen one in the middle, over its icon blurred as the backdrop; the time, Wi-Fi and battery at the top right, as on a console.
+// Styled like Switch Pad on the PC: the package's icon and name at the top left, app-icon corners, a white focus ring, small rounded chips.
 // Touch: swipe the row to move through it, tap a tile to start that game. Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput):
-// left and right move, A or + starts. The games stay in order by name; the highlight starts on the one last played.
+// left and right move, A or + starts. The games stay in order by name; the highlight starts on the phones' QR code, and the row goes round (after the last game, the QR code again).
 // The first tile is the phones' QR code (phone_pads.c, started at launch for the picker), with a dot for each player that has joined; choosing it (or Y)
 // opens the players card: eight places, each lighting up as its player presses something, with Identify (tap or A), the button layout (− ) and Remove (X).
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
@@ -17,6 +18,33 @@ private let zhHant: Bool = {
     return l.hasPrefix("zh-hant") || l.hasPrefix("zh-tw") || l.hasPrefix("zh-hk") || l.hasPrefix("zh-mo")
 }()
 private func tr(_ zh: String, _ en: String) -> String { zhHant ? zh : en }
+
+// The look (same as Switch Pad on the PC): graphite, rounded rectangles, small chips; app-icon corners on the tiles and a white focus ring
+private let systemBlue = Color(red: 0.04, green: 0.52, blue: 1)
+private func tileRadius(_ side: CGFloat) -> CGFloat { side * 0.2237 }   // the home screen's icon corner
+private struct FocusRing: ViewModifier {
+    let focused: Bool
+    let side: CGFloat
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                RoundedRectangle(cornerRadius: tileRadius(side) + 7, style: .continuous)
+                    .stroke(focused ? Color.white.opacity(0.95) : .clear, lineWidth: 4).padding(-8)
+            }
+            .shadow(color: .black.opacity(focused ? 0.55 : 0.4), radius: focused ? 22 : 8, y: focused ? 14 : 4)
+            .scaleEffect(focused ? 1 : 0.84)
+            .opacity(focused ? 1 : 0.6)
+            .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
+    }
+}
+private struct Chip: View {   // a small rounded box: version, last played, a key's name
+    let text: String
+    var body: some View {
+        Text(text).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
+    }
+}
 
 private struct PickerGame: Identifiable {
     let id: String          // title ID: the folder's name
@@ -41,31 +69,29 @@ private func loadGames() -> [PickerGame] {
         return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "", icon: gameIcon(dir),
                           played: UserDefaults.standard.object(forKey: "picker.played." + id) as? Date)
     }
-    return list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }   // a fixed order, by name: the highlight starts on the game last played
+    return list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }   // a fixed order, by name (the highlight starts on the phones' tile)
 }
 
-// The row: the phones' tile at 0, then the games (game i at i + 1)
+// The row: the phones' tile at 0, then the games (game i at i + 1). It goes round: after the last game comes the phones' tile again, so the
+// row is a ring and pos counts places along it without end (focus is the item there). It opens on the phones' tile, whose QR code is what a
+// player needs first
 private final class PickerModel: ObservableObject {
     let games: [PickerGame]
-    @Published var focus: Int
-    init() {
-        let g = loadGames()
-        games = g
-        focus = (g.indices.filter { g[$0].played != nil }.max { g[$0].played! < g[$1].played! } ?? 0) + 1
-    }
+    @Published var pos = 0
+    init() { games = loadGames() }
+    var focus: Int { ((pos % count) + count) % count }
+    func item(_ v: Int) -> Int { ((v % count) + count) % count }
     @Published var starting = false
     @Published var padsOpen = false
     @Published var sel = 0   // the highlighted place on the players card (player sel + 1)
     var count: Int { games.count + 1 }
     func game(_ i: Int) -> PickerGame? { games.indices.contains(i - 1) ? games[i - 1] : nil }
     var start: (PickerGame) -> Void = { _ in }
-    func move(_ d: Int) { if !starting { focus = Swift.max(0, Swift.min(count - 1, focus + d)) } }
-    func go(_ i: Int) { if !starting, (0..<count).contains(i) { focus = i } }
-    func choose(_ i: Int? = nil) {
-        let i = i ?? focus
-        guard !starting, (0..<count).contains(i) else { return }
-        focus = i
-        if let g = game(i) { starting = true; start(g) } else { padsOpen = true }
+    func move(_ d: Int) { if !starting { pos += d } }
+    func choose(at v: Int? = nil) {   // the item at place v of the ring (the focused one when nil)
+        guard !starting else { return }
+        if let v { pos = v }
+        if let g = game(focus) { starting = true; start(g) } else { padsOpen = true }
     }
 }
 
@@ -157,21 +183,14 @@ private struct GameTile: View {
             if let icon = game.icon {
                 Image(uiImage: icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
             } else {
-                LinearGradient(colors: [Color(white: 0.28), Color(white: 0.14)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [Color(white: 0.29), Color(white: 0.11)], startPoint: .top, endPoint: .bottom)
                 Text(game.name).font(.title3.weight(.bold)).foregroundStyle(.white).multilineTextAlignment(.center).padding(12)
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: side * 0.09, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: side * 0.09 + 6, style: .continuous)
-                .stroke(focused ? Color.cyan : .clear, lineWidth: 4).padding(-7)
-                .shadow(color: focused ? .cyan.opacity(0.8) : .clear, radius: 10)
-        }
-        .shadow(color: .black.opacity(0.5), radius: focused ? 18 : 8, y: focused ? 10 : 4)
-        .scaleEffect(focused ? 1 : 0.84)
-        .opacity(focused ? 1 : 0.65)
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
+        .clipShape(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        .modifier(FocusRing(focused: focused, side: side))
     }
 }
 
@@ -196,16 +215,8 @@ private struct PadsTile: View {   // the QR code itself, a green dot for each pl
                 .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, side * 0.04)
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: side * 0.09, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: side * 0.09 + 6, style: .continuous)
-                .stroke(focused ? Color.cyan : .clear, lineWidth: 4).padding(-7)
-                .shadow(color: focused ? .cyan.opacity(0.8) : .clear, radius: 10)
-        }
-        .shadow(color: .black.opacity(0.5), radius: focused ? 18 : 8, y: focused ? 10 : 4)
-        .scaleEffect(focused ? 1 : 0.84)
-        .opacity(focused ? 1 : 0.65)
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
+        .clipShape(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous))
+        .modifier(FocusRing(focused: focused, side: side))
         .accessibilityLabel(tr("手機當手把", "Phone controllers"))
     }
 }
@@ -261,7 +272,7 @@ private struct PadsCard: View {
         }
         .padding(30)
         .frame(maxWidth: 980)
-        .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(Color(red: 0.106, green: 0.125, blue: 0.157)))
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(red: 0.11, green: 0.11, blue: 0.118)))
         .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(Color.white.opacity(0.12)))
         .foregroundStyle(.white)
     }
@@ -281,11 +292,11 @@ private struct PadsCard: View {
                 Spacer(minLength: 4)
                 Button { players.send(["op": "layout", "p": n, "xbox": p.xbox ? 0 : 1]) } label: {
                     Text((p.xbox ? "Xbox" : "Switch") + " ⇄").font(.footnote.weight(.semibold)).padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(Capsule().fill(Color.white.opacity(0.12)))
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("切換配置", "Button layout"))
                 Button { players.send(["op": "kick", "p": n]) } label: {
-                    Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 30, height: 30).background(Circle().fill(Color.white.opacity(0.12)))
+                    Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("移除", "Remove"))
             } else if let r = back {
@@ -309,7 +320,7 @@ private struct PadsCard: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(sel ? Color.cyan : row == nil ? Color.white.opacity(0.12) : lit ? color : .clear,
+                .strokeBorder(sel ? systemBlue : row == nil ? Color.white.opacity(0.12) : lit ? color : .clear,
                               style: StrokeStyle(lineWidth: sel ? 2 : row == nil ? 1.5 : 1, dash: row == nil && !sel ? [5, 4] : []))
         }
         .animation(.easeOut(duration: 0.12), value: lit)
@@ -321,7 +332,7 @@ private struct PadsCard: View {
     }
     private func hint(_ key: String, _ text: String) -> some View {
         HStack(spacing: 6) {
-            Text(key).font(.caption.weight(.bold)).frame(minWidth: 22, minHeight: 22).background(Circle().fill(Color.white.opacity(0.2)))
+            Text(key).font(.caption.weight(.bold)).frame(minWidth: 22, minHeight: 22).background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.18)))
             Text(text)
         }
     }
@@ -372,22 +383,24 @@ private struct PickerView: View {
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
     private func row(width: CGFloat, side: CGFloat, gap: CGFloat) -> some View {
         let pitch = side + gap
-        return HStack(spacing: gap) {
-            PadsTile(qr: pads.qr, joined: players.players.count, focused: m.focus == 0, side: side)
+        let reach = Int(width / 2 / pitch) + 2   // places drawn on each side of the focused one: enough to fill the screen while a swipe moves it
+        return ZStack {
+            ForEach((m.pos - reach)...(m.pos + reach), id: \.self) { v in
+                let i = m.item(v)
+                Group {
+                    if let game = m.game(i) {
+                        GameTile(game: game, focused: v == m.pos, side: side).accessibilityLabel(game.name)
+                    } else {
+                        PadsTile(qr: pads.qr, joined: players.players.count, focused: v == m.pos, side: side)
+                    }
+                }
                 .contentShape(Rectangle())
-                .onTapGesture { m.choose(0) }
+                .onTapGesture { m.choose(at: v) }
                 .accessibilityAddTraits(.isButton)
-            ForEach(Array(m.games.enumerated()), id: \.element.id) { i, game in
-                GameTile(game: game, focused: i + 1 == m.focus, side: side)
-                    .contentShape(Rectangle())
-                    .onTapGesture { m.choose(i + 1) }
-                    .accessibilityLabel(game.name)
-                    .accessibilityAddTraits(.isButton)
+                .offset(x: CGFloat(v - m.pos) * pitch + drag)
             }
         }
-        .fixedSize()
-        .offset(x: (width - side) / 2 - CGFloat(m.focus) * pitch + drag)
-        .frame(width: width, height: side * 1.15, alignment: .leading)
+        .frame(width: width, height: side * 1.15)
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 12)
@@ -395,12 +408,12 @@ private struct PickerView: View {
                 .onEnded { v in
                     let steps = Int((-v.predictedEndTranslation.width / pitch).rounded())
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                        m.go(Swift.max(0, Swift.min(m.count - 1, m.focus + steps)))
+                        m.move(steps)
                         drag = 0
                     }
                 }
         )
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: m.focus)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: m.pos)
     }
 
     private func backdrop(_ game: PickerGame?) -> some View {
@@ -418,9 +431,18 @@ private struct PickerView: View {
         .animation(.easeInOut(duration: 0.35), value: game?.id)
     }
 
+    private var appIcon: UIImage? { UIImage(named: "AppIcon60x60") }   // the package's own icon (nxn_merge.py)
+    private var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "SwitchPad" }
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
+        HStack(alignment: .center, spacing: 14) {
+            if let icon = appIcon {
+                Image(uiImage: icon).resizable().interpolation(.high).frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                Text(appName).font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.55))
+                Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
+            }
             Spacer()
             StatusBar()
         }
@@ -439,11 +461,10 @@ private struct PickerView: View {
             VStack(spacing: 6) {
                 Text(game.name).font(.title.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
                     .contentTransition(.opacity)
-                HStack(spacing: 12) {
-                    if !game.version.isEmpty { Text(tr("版本 ", "Version ") + game.version) }
-                    if let p = game.played { Text(tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named).locale(Locale(identifier: zhHant ? "zh-Hant" : "en")))) }
+                HStack(spacing: 8) {
+                    if !game.version.isEmpty { Chip(text: "v" + game.version) }
+                    if let p = game.played { Chip(text: tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named).locale(Locale(identifier: zhHant ? "zh-Hant" : "en")))) }
                 }
-                .font(.callout).foregroundStyle(.white.opacity(0.7))
             }
             .padding(.horizontal, 32)
             .animation(.easeInOut(duration: 0.25), value: game.id)   // the name and version cross-fade as the row slides
@@ -463,7 +484,7 @@ private struct PickerView: View {
     private func hint(_ key: String, _ text: String) -> some View {
         HStack(spacing: 6) {
             Text(key).font(.caption.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 3)
-                .background(Capsule().fill(Color.white.opacity(0.2)))
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.18)))
             Text(text)
         }
     }

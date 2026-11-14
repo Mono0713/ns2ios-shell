@@ -151,6 +151,21 @@ class PhonePadsTests(unittest.TestCase):
         self.assertEqual(self.host()['mask'], 0)
         g.close()
 
+    def test_idle_connections_do_not_lock_phones_out(self):   # spare browser connections that never send a request: more than the server holds, while phones play
+        a, b = Phone(self.port, 'phone-a'), Phone(self.port, 'phone-b')
+        idle = [socket.create_connection(('127.0.0.1', self.port), timeout=2) for _ in range(30)]
+        time.sleep(0.3)
+        c = Phone(self.port)
+        self.assertEqual(c.hello('phone-0'), {'t': 'assign', 'layout': 'switch', 'player': 3})   # the oldest idle ones made room, the players kept theirs
+        a.state(1, 1 << 0); b.state(1, 1 << 1); c.state(1, 1 << 2)
+        self.assertEqual([p[0] for p in self.host()['players'][:3]], [1 << 0, 1 << 1, 1 << 2])
+        # and an idle connection is closed after 10 s on its own
+        time.sleep(10.5)
+        idle[-1].settimeout(1)
+        self.assertEqual(idle[-1].recv(1), b'')
+        for s in idle + [a, b, c]: s.close()
+        self.assertEqual(self.host()['mask'], 0)
+
 
 class PhonePadsWithControllersTests(PhonePadsTests):
     """Two physical controllers hold players 1 and 2: phones take the players after them, and the mask the host gets keeps the controllers'"""
@@ -159,6 +174,7 @@ class PhonePadsWithControllersTests(PhonePadsTests):
     test_page_is_served = None
     test_embedded_page_is_current = None
     test_silent_page_is_dropped = None
+    test_idle_connections_do_not_lock_phones_out = None
 
     def test_phones_after_controllers(self):   # and the launcher's swap, layout and remove
         self.assertEqual(self.host()['mask'], 0b11)

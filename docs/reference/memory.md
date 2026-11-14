@@ -47,6 +47,13 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Found on:** [Fire Emblem Engage](../../dm/games/0100A6301214E000/README.md); [Ace Attorney Investigations Collection](../../dm/games/010005501E68C000/README.md) (Unity 2022.3, SDK 17.5.3); [Brain Memory Training Academy](../../dm/games/0100F5D01DA3A000/README.md); [Patrick's Parabox](../../dm/games/0100E44016C22000/README.md); [Advance Wars 1+2: Re-Boot Camp](../../dm/games/0100300012F2A000/README.md).
 - **Note:** to measure regions and commits, see [Measuring address regions and commits](#measuring-address-regions-and-commits).
 
+### A provisional profile's alias region grows when the device allows it
+
+- **Symptom:** a Unity game with virtual address memory on a provisional profile crashes after its title screen with the alias region used up (`[mem] alias region mapped up to` near the alias region's size; Unity's allocator returns null).
+- **Cause:** `profile_guess.py` gives such a game a 4.375 GB alias region; SUPER BOMBERMAN R 2 and All You Need Is Help (Unity 2020.3 / 2022.3) needed 5.375 GB, set by hand.
+- **Fix:** the packer writes `DM_MEM_PROVISIONAL=1` into `dm/env.txt` for a provisional profile (`nxn_pack.py`), and `hle_svc.c` `mem_init_once` then reserves up to `DM_MEM_ALIAS_GROW` (2 GB unless set) more at the end of the alias region, stepping down 256 MB at a time to what the device grants (address space only). For every game, a reservation the device refuses shrinks the alias region 256 MB at a time, down to 1 GB, instead of ending the run. A settled profile keeps its layout.
+- **Found on:** SUPER BOMBERMAN R 2 and All You Need Is Help (provisional profiles, no game notes).
+
 ## Virtual address memory and the alias region
 
 ### Virtual address memory follows the NPDM's system resource

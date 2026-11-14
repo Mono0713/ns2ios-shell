@@ -91,6 +91,7 @@
   <div id="status"><div id="player">--</div><div id="conn"></div></div>
   <button class="tb" id="face" aria-label="Button layout">Switch</button>
   <button class="tb" id="edit" data-t="layout">Layout</button>
+  <button class="tb" id="home" aria-label="Menu">⌂</button>
 </div>
 <div id="bar">
   <span data-t="drag">Drag to move, pinch to resize</span>
@@ -157,10 +158,14 @@
   }
   // The button layout from the phone itself: the iPad keeps it for this phone and answers with an assign, which redraws the buttons
   $('#face').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
+  // The iPad's menu (continue, change games), as a controller's Home button opens it
+  $('#home').addEventListener('click', () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'home' })); });
   $('#rejoin').addEventListener('click', () => { join = true; if (ws && ws.readyState === 1) hello(); });
 
+  // When the Wi-Fi stalls, the browser queues what was sent; piling more on only replays stale input later. Each packet is the whole state, so while a backlog is
+  // still waiting nothing more is queued (dirty stays set) and the newest state goes once it drains
   function send() {
-    if (!ws || ws.readyState !== 1) return;
+    if (!ws || ws.readyState !== 1 || ws.bufferedAmount > 64) return;
     const buf = new ArrayBuffer(8), v = new DataView(buf);
     v.setUint8(0, 1);
     v.setUint8(1, seq = (seq + 1) & 255);
@@ -264,6 +269,7 @@
     if (mask !== state.buttons) {
       if (mask & ~state.buttons && navigator.vibrate) navigator.vibrate(8);
       state.buttons = mask; dirty = true;
+      send();   // a press or release goes out now, not on the next frame
     }
   }
 
