@@ -38,7 +38,9 @@ static UIWindowScene *g_tv_scene; // the TV's scene: its window is made as soon 
 // The picture on the iPad while a TV is connected: for this connection only (plugging a TV in always starts on the TV), so a tap by mistake is never kept
 static BOOL g_video_ipad;
 static BOOL video_pref_ipad(void) { return g_video_ipad; }
-static BOOL tv_on(void) { return g_tv && !g_tv.hidden; }   // the game's picture is on the TV now
+static BOOL tv_on(void) { return g_tv && !g_tv.hidden; }
+static _Atomic int g_picture_on_tv;   // tv_on() for the present thread (nvn_mtl.m upscales with MetalFX on a TV), set where the picture moves (placeStage)
+int front_picture_on_tv(void) { return g_picture_on_tv; }   // the game's picture is on the TV now
 static BOOL zh_ui(void) {         // Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
     return [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
@@ -158,9 +160,9 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
     // cost the upscale four times the pixels)
     UIScreen *scr = self.window.windowScene.screen ?: UIScreen.mainScreen;
     CGFloat sc = scr.nativeScale > 0 ? scr.nativeScale : 1;
-    // With MetalFX upscaling (the launcher's Upscaling, DM_PRESENT_UPSCALE) the drawable is the TV's own pixels up to 3840 across, so MetalFX does the whole
-    // enlargement to a 4K screen instead of stopping at 1920 and leaving the rest to the display's bilinear scaling
-    const char *up = getenv("DM_PRESENT_UPSCALE"); BOOL fx = up && (!strcmp(up, "metalfx") || !strcmp(up, "1"));
+    // On a TV the present upscales with MetalFX (nvn_mtl.m fx_active; unless DM_PRESENT_UPSCALE=0) into the TV's own pixels up to 3840 across, so a 1440p or
+    // 4K screen gets the whole enlargement sharp instead of stopping at 1920 and leaving the rest to the display's bilinear scaling
+    const char *up = getenv("DM_PRESENT_UPSCALE"); BOOL fx = !(up && !strcmp(up, "0"));
     if (self.window && self.window == g_tv && self.bounds.size.width > 0) sc = MIN(sc, MAX(1.0, (fx ? 3840.0 : 1920.0) / self.bounds.size.width));
     if (l.contentsScale != sc) l.contentsScale = sc;
     l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
@@ -289,6 +291,7 @@ static void back_to_tv_sync(UIWindowScene *scene, BOOL show) {
 - (void)placeStage {
     tv_window_ensure();
     if (g_tv) g_tv.hidden = video_pref_ipad();
+    g_picture_on_tv = tv_on();
     if (self.stage) {
         UIView *dest = tv_on() ? g_tv.rootViewController.view : self.view;
         if (self.stage.superview != dest) {
