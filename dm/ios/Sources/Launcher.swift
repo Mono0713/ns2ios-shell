@@ -169,7 +169,7 @@ private struct PlayerBadge: View {
     @EnvironmentObject var activity: ActivityModel
     var body: some View {
         let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
-        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85))
+        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85)).minimumScaleFactor(0.5).lineLimit(1)
             .frame(width: 44, height: 36).background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(color))
             .overlay(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).stroke(Color.white, lineWidth: on ? 3 : 0))
             .shadow(color: color, radius: on ? 12 : 0)
@@ -300,20 +300,21 @@ func qrImage(_ text: String) -> UIImage? {
 }
 
 private struct PhonePadsCard: View {   // under Play, in the launcher's left column
+    @Environment(\.tenFoot) private var tenFoot   // on a TV the code is larger: it is scanned from the sofa
     @State private var url = phonePadsURL()
     @State private var qr: UIImage?   // made once per address, not on every redraw
 
     var body: some View {
         HStack(spacing: 14) {
             if let url, let qr {
-                Image(uiImage: qr).interpolation(.none).resizable().frame(width: 96, height: 96)
+                Image(uiImage: qr).interpolation(.none).resizable().frame(width: tenFoot ? 150 : 96, height: tenFoot ? 150 : 96)
                     .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .accessibilityLabel("QR code of \(url)")
             }
             VStack(alignment: .leading, spacing: 6) {
                 Label(tr("Add players"), systemImage: "qrcode").font(.headline)
                 if let url {
-                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled)
+                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.5)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
                 } else {
@@ -391,10 +392,11 @@ private struct SettingRow: View {
         return (zhHant ? "打不開而且是記憶體造成的話，下次會自動換一個大小。" : "If the game fails to start for memory, the next start tries another size.", false)
     }
 
+    @Environment(\.tenFoot) private var tenFoot   // on a TV only the names: the notes are too small to read from the sofa
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(tr(s.label))
-            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            if !note.isEmpty && !tenFoot { Text(note).font(.footnote).foregroundStyle(.secondary) }
         }
     }
 
@@ -545,10 +547,15 @@ private final class ShellSettings: ObservableObject {
         fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps) fps, touch controls \(Int(touchOpacity * 100)) % opaque at \(Int(touchScale * 100)) % size\n", stderr)
     }
 }
-private func noteLabel(_ title: String, _ note: String) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-        Text(tr(title))
-        Text(tr(note)).font(.footnote).foregroundStyle(.secondary)
+private func noteLabel(_ title: String, _ note: String) -> some View { NoteLabel(title: title, note: note) }
+private struct NoteLabel: View {   // a setting's name and its note (left out on a TV, as SettingRow's)
+    let title: String, note: String
+    @Environment(\.tenFoot) private var tenFoot
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr(title))
+            if !tenFoot { Text(tr(note)).font(.footnote).foregroundStyle(.secondary) }
+        }
     }
 }
 // The rows: frame rate in the Game section, the rest in Controls
@@ -655,6 +662,7 @@ private struct LauncherView: View {
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
     @State private var shown = false   // the left column rises in once, as the picker's card does
+    @StateObject private var tv = TenFoot()   // GamePicker.swift: a TV is connected
 
     var body: some View {
         GeometryReader { geometry in
@@ -662,9 +670,10 @@ private struct LauncherView: View {
                 VStack(spacing: 16) {
                     Spacer(minLength: 0)
                     if let icon = appIcon() {
-                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: 128, height: 128)
-                            .clipShape(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
-                            .overlay(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                        let side: CGFloat = tv.on ? 180 : 128
+                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: side, height: side)
+                            .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
+                            .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
                             .accessibilityHidden(true)
                     }
@@ -726,6 +735,8 @@ private struct LauncherView: View {
             }
         }
         .background { backdrop }
+        .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // ten-foot: every text style grows together on a TV
+        .environment(\.tenFoot, tv.on)
         .environmentObject(nav)
         .environmentObject(activity)
         .preferredColorScheme(.dark)
@@ -757,7 +768,7 @@ private struct LauncherView: View {
         let focused = nav.focus == "play"
         return Button(action: play) {
             Label(tr("Play"), systemImage: "play.fill").font(.title3.weight(.semibold)).foregroundStyle(.white)
-                .frame(maxWidth: 240).frame(height: 54)
+                .frame(maxWidth: 260).frame(minHeight: 54).padding(.vertical, 2)
                 .background(RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous).fill(DS.accent))
                 .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: focused ? 16 : 10)
         }

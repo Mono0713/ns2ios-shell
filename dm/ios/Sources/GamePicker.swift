@@ -33,6 +33,27 @@ enum DS {
     static let cardIn = AnyTransition.asymmetric(insertion: .scale(scale: 0.9).combined(with: .offset(y: 24)).combined(with: .opacity),
                                                  removal: .scale(scale: 0.94).combined(with: .opacity))
 }
+// Ten-foot mode: while a TV is connected (the picker and the launcher are mirrored to it before the game starts), everyone sits far from the screen,
+// so text is larger (Dynamic Type at .accessibility1), tiles and the QR code are larger and notes are left out, as on a console's home screen
+final class TenFoot: ObservableObject {
+    @Published private(set) var on = TenFoot.connected
+    private var tokens: [NSObjectProtocol] = []
+    static var connected: Bool {
+        UIScreen.screens.count > 1 || UIApplication.shared.connectedScenes.contains { $0.session.role == .windowExternalDisplayNonInteractive }
+    }
+    init() {
+        let nc = NotificationCenter.default
+        for n in [UIScreen.didConnectNotification, UIScreen.didDisconnectNotification, UIScene.willConnectNotification, UIScene.didDisconnectNotification] {
+            tokens.append(nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in
+                DispatchQueue.main.async { let now = TenFoot.connected; if self?.on != now { withAnimation(DS.pop) { self?.on = now } } }   // after the scene list settles
+            })
+        }
+    }
+    deinit { tokens.forEach(NotificationCenter.default.removeObserver) }
+}
+private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
+
 // A frosted card: thick dark material, the card tint, a hairline edge and a soft shadow (front_ios.m's menu card)
 struct GlassCard: ViewModifier {
     var radius: CGFloat = DS.cardRadius
@@ -378,10 +399,11 @@ private struct PickerView: View {
     @StateObject private var activity = ActivityModel()
     @State private var held: (key: String, task: Task<Void, Never>)?
     @State private var drag: CGFloat = 0   // how far a finger has moved the row
+    @StateObject private var tv = TenFoot()
 
     var body: some View {
         GeometryReader { g in
-            let side = min(g.size.height * 0.36, g.size.width / 4.4, 300)
+            let side = tv.on ? min(g.size.height * 0.44, g.size.width / 3.4, 420) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot: fewer, larger tiles
             let gap = side * 0.14
             let current = m.game(m.focus)
             ZStack {
@@ -397,6 +419,7 @@ private struct PickerView: View {
                     Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.padsOpen = false }
                         .transition(.opacity)
                     PadsCard(m: m, pads: pads, players: players).padding(32)
+                        .dynamicTypeSize(tv.on ? .xLarge ... .xLarge : .xSmall ... .accessibility5)   // its places have fixed sizes: a little larger on a TV, not the whole step
                         .transition(DS.cardIn)
                 }
             }
@@ -405,6 +428,8 @@ private struct PickerView: View {
             .frame(width: g.size.width, height: g.size.height)
             .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down
         }
+        .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // every text style grows together on a TV
+        .environment(\.tenFoot, tv.on)
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { input($0.userInfo) }
