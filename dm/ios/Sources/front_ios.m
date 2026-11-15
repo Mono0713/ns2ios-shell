@@ -205,6 +205,7 @@ void front_ios_back_to_picker(void) {
     self.menuButton.backgroundColor = [UIColor colorWithWhite:tv ? 1 : 0 alpha:tv ? 0.14 : 0.35];
     self.menuButton.layer.cornerRadius = tv ? 14 : 12; self.menuButton.alpha = tv ? 1 : 0.6;
     self.tvNote.hidden = !tv;
+    self.menuButton.hidden = !tv;   // handheld: the touch controls' own ⌂ key (DmGamepad.m) opens the menu, so no loose button over the game
     [self.view bringSubviewToFront:self.menuButton];
     [self.view setNeedsLayout];
     front_ios_audio_session();   // the TV came or went: the sound follows the choice for TV play (audio_on_ipad)
