@@ -8,8 +8,6 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 {
     class BindlessElimination
     {
-        private const int NvnSlotArrayLength = 32;      // nxnative: the arrays of GenerateBindlessAccess that are not indexed in the pools
-
         public static void RunPass(BasicBlock block, ResourceManager resourceManager, IGpuAccessor gpuAccessor)
         {
             // We can turn a bindless into regular access by recognizing the pattern
@@ -102,11 +100,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             block.Operations.AddBefore(node, new Operation(Instruction.BitwiseAnd, textureHandle, bindlessHandle, OperandHelper.Const(0xfffff)));
             block.Operations.AddBefore(node, new Operation(Instruction.ShiftRightU32, samplerHandle, bindlessHandle, OperandHelper.Const(20)));
 
-            // nxnative: a sampled texture other than a buffer texture is indexed in the game's whole texture and sampler pools (the replay binds them by ID: dmsh_build.py pool_arrays,
-            // nvn_mtl.m pool_gpu), so its arrays take the pool lengths. Buffer textures and images keep arrays of NvnSlotArrayLength, which the replay binds slot by slot (tex_dyn_slots)
-            bool pooled = !texOp.Inst.IsImage() && (texOp.Type & SamplerType.Mask) != SamplerType.TextureBuffer;
-
-            int texturePoolLength = pooled ? Math.Max(BindlessToArray.MinimumArrayLength, gpuAccessor.QueryTextureArrayLengthFromPool()) : NvnSlotArrayLength;
+            int texturePoolLength = Math.Max(BindlessToArray.MinimumArrayLength, gpuAccessor.QueryTextureArrayLengthFromPool());
 
             block.Operations.AddBefore(node, new Operation(Instruction.MinimumU32, textureIndex, textureHandle, OperandHelper.Const(texturePoolLength - 1)));
 
@@ -128,7 +122,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             {
                 Operand samplerIndex = OperandHelper.Local();
 
-                int samplerPoolLength = pooled ? Math.Max(BindlessToArray.MinimumArrayLength, gpuAccessor.QuerySamplerArrayLengthFromPool()) : NvnSlotArrayLength;
+                int samplerPoolLength = Math.Max(BindlessToArray.MinimumArrayLength, gpuAccessor.QuerySamplerArrayLengthFromPool());
 
                 block.Operations.AddBefore(node, new Operation(Instruction.MinimumU32, samplerIndex, samplerHandle, OperandHelper.Const(samplerPoolLength - 1)));
 

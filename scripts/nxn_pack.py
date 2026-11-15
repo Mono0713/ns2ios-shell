@@ -1029,9 +1029,6 @@ def glslc_needed(work):
     except OSError: return False
 
 
-SOURCE_ABOVE = 40000   # see step_translate
-
-
 def shader_rows(tb):
     """how many shaders the split found (rows of its shader_map.tsv)"""
     try: rows = [l for l in (tb / 'shader_map.tsv').read_text(encoding='utf-8', errors='replace').splitlines() if l.strip() and not l.startswith('#')]
@@ -1078,16 +1075,6 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # them at once), without them they hold source. Installing or removing the tools changes the chain version, so a
     # rebuild goes to a new b-<version> folder; the libraries already there count only when they were made the same way.
     mfile = work / 'shader' / 'compiler.txt'
-    # The Windows compiler costs about 0.8 s a library (most of it parsing metal_stdlib again for each one; one call with
-    # several files does not share that), and a shader takes two or three libraries. For a Unity game that ships every
-    # keyword variant as its own program that is a day of full CPU (Pummel Party: 276,368 shaders), while the phone
-    # compiles the same source ten times faster in its first-launch preparation (dm_shader_prep.m). Past SOURCE_ABOVE
-    # shaders the libraries go in as source; DM_METAL_TOOLS set by hand (a folder, or 0) still decides.
-    n = shader_rows(work / 'shader' / 'tables')
-    if n > SOURCE_ABOVE and 'DM_METAL_TOOLS' not in os.environ:
-        os.environ['DM_METAL_TOOLS'] = '0'
-        say('%d shaders: packed as source for the iPad to compile at first launch (compiling them here would take '
-            'about %.0f hours; set DM_METAL_TOOLS to a Metal Developer Tools folder to compile them anyway)' % (n, n * 2 * 0.8 / 3600 / max(1, os.cpu_count() or 1)))
     mode = subprocess.run([PY, nometal, '--mode'], capture_output=True, text=True).stdout.strip() if nometal.is_file() else ''
     if mode.startswith('windows-metal'): say('compiling shaders on this computer with Apple\'s Metal Developer Tools for Windows')
     def done():
