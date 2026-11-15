@@ -10,6 +10,7 @@
 #import <CoreImage/CoreImage.h>
 #import <AVFAudio/AVFAudio.h>
 #import <objc/runtime.h>
+#import <Network/Network.h>
 #include <errno.h>
 #include <string.h>
 #include <os/proc.h>
@@ -87,6 +88,7 @@ static void volume_set(float v) {
 }
 static void output_video_set(BOOL ipad);
 static void output_audio_set(BOOL ipad);
+static void play_mode_set(BOOL handheld);
 static int g_menu_sel, g_menu_closing;   // (defined with the menu below)
 static void slot_swap(int a, int b);     // the Players page's and the TV panel's actions on a player (0-based)
 static void slot_layout(int p);
@@ -132,12 +134,14 @@ static void tv_window_ensure(void) {
     LOG("front end: TV window made (%.0fx%.0f points, scale %.1f)%s", sz.width, sz.height, g_tv_scene.screen.nativeScale, g_tv.hidden ? "; hidden: the picture output is the iPad" : "");
 }
 // A screen presented before the game (the picker, the launcher) moves to where the picture now goes: the same controller, so it keeps its state
+static int g_pregame_moving;   // a move under way (the dip through black waits for it: mode_fade)
 static void pregame_move(UIViewController *from, UIViewController *to) {
     UIViewController *p = from.presentedViewController;
     if (!p || !to || to == from || to.presentedViewController || p.isBeingDismissed || p.isBeingPresented) return;
     LOG("front end: the screen before the game moves to the %s", [to isKindOfClass:DmTvRootVC.class] ? "TV" : "iPad");
     UIWindow *keep = from.view.window;
-    [from dismissViewControllerAnimated:NO completion:^{ (void)keep; [to presentViewController:p animated:NO completion:nil]; }];
+    g_pregame_moving++;
+    [from dismissViewControllerAnimated:NO completion:^{ (void)keep; [to presentViewController:p animated:NO completion:^{ g_pregame_moving--; }]; }];
 }
 
 @interface DmGameView : UIView
@@ -204,8 +208,20 @@ static void mode_fade(UIWindow *w) {
     // a dip through black, as a console changes screens: the old screen sinks back and fades into black (while pregame_move presents the new one under it,
     // hidden), then the black lifts off the new screen. No moment shows both screens over each other
     [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ still.alpha = 0; still.transform = CGAffineTransformMakeScale(0.97, 0.97); } completion:nil];
-    [UIView animateWithDuration:0.32 delay:0.26 options:UIViewAnimationOptionCurveEaseOut animations:^{ black.alpha = 0; }
-                     completion:^(BOOL f) { (void)f; w.hidden = YES; [alive removeObject:w]; }];
+    // the black lifts once the screen is presented again and has drawn its first frame (a 4K TV's picker takes a moment), not on a fixed clock that
+    // lifted it over a screen still building (the hitch in art48)
+    CFTimeInterval t0 = CACurrentMediaTime();
+    __block void (^lift)(void);
+    lift = ^{
+        if ((g_pregame_moving || CACurrentMediaTime() - t0 < 0.22) && CACurrentMediaTime() - t0 < 1.2) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC), dispatch_get_main_queue(), lift); return;
+        }
+        [CATransaction setCompletionBlock:^{   // after the frame now being committed (the new screen's first)
+            [UIView animateWithDuration:0.3 delay:0.03 options:UIViewAnimationOptionCurveEaseOut animations:^{ black.alpha = 0; }
+                             completion:^(BOOL f) { (void)f; w.hidden = YES; [alive removeObject:w]; lift = nil; }];
+        }];
+    };
+    dispatch_async(dispatch_get_main_queue(), lift);
 }
 static void mode_transition(void (^change)(void)) {
     UIWindow *ipad = g_root.view.window, *a = mode_still(ipad.windowScene, ipad);
@@ -286,7 +302,7 @@ void front_ios_back_to_picker(void) {
 // front_ios_back_to_tv. A floating button of its own covered what was under it (art47)
 static void output_video_set(BOOL ipad);
 int front_ios_tv_waiting(void) { return g_tv_scene && video_pref_ipad() && g_root && !g_root.game; }
-void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ LOG("front end: Back to the TV tapped"); output_video_set(NO); }); }
+void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ LOG("front end: Back to the TV tapped"); play_mode_set(NO); }); }
 - (void)placeStage {
     tv_window_ensure();
     if (g_tv) g_tv.hidden = video_pref_ipad();
@@ -374,12 +390,21 @@ static UIView *tv_panel(CGRect frame) {
     UILabel *lt = panel_label(17, UIFontWeightSemibold, 0.9); [live addSubview:dot]; [live addSubview:lt];
     UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:24 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:0.9 alpha:1]; clock.textAlignment = NSTextAlignmentRight;
     UIImageView *bat = [UIImageView new]; bat.contentMode = UIViewContentModeScaleAspectFit;
-    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:18 weight:UIFontWeightMedium]; batl.textColor = [UIColor colorWithWhite:0.65 alpha:1];
-    for (UIView *x in @[title, live, clock, bat, batl]) [v addSubview:x];
+    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:22 weight:UIFontWeightSemibold]; batl.textColor = [UIColor colorWithWhite:0.9 alpha:1];
+    UIImageView *wifi = [UIImageView new]; wifi.contentMode = UIViewContentModeScaleAspectFit; wifi.tintColor = [UIColor colorWithWhite:0.9 alpha:1];
+    wifi.image = [UIImage systemImageNamed:@"wifi" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
+    for (UIView *x in @[title, live, clock, bat, batl, wifi]) [v addSubview:x];
+    {   // Wi-Fi shown only while the iPad is on Wi-Fi, as the picker does (GamePicker.swift)
+        static nw_path_monitor_t mon; __weak UIImageView *ww = wifi;
+        if (mon) nw_path_monitor_cancel(mon);
+        mon = nw_path_monitor_create(); nw_path_monitor_set_queue(mon, dispatch_get_main_queue());
+        nw_path_monitor_set_update_handler(mon, ^(nw_path_t path) { ww.hidden = !nw_path_uses_interface_type(path, nw_interface_type_wifi); });
+        nw_path_monitor_start(mon);
+    }
     UIDevice.currentDevice.batteryMonitoringEnabled = YES;
     __weak UILabel *wc = clock, *wbl = batl; __weak UIImageView *wb = bat;
     void (^tick)(void) = ^{
-        NSDateFormatter *df = [NSDateFormatter new]; df.dateFormat = @"HH:mm"; wc.text = [df stringFromDate:NSDate.date];
+        NSDateFormatter *df = [NSDateFormatter new]; df.dateStyle = NSDateFormatterNoStyle; df.timeStyle = NSDateFormatterShortStyle;   // as the picker's Text(.time) wc.text = [df stringFromDate:NSDate.date];
         float lv = UIDevice.currentDevice.batteryLevel; UIDeviceBatteryState st = UIDevice.currentDevice.batteryState;
         BOOL plug = st == UIDeviceBatteryStateCharging || st == UIDeviceBatteryStateFull;
         NSString *sym = plug ? @"battery.100.bolt" : lv > 0.8 ? @"battery.100" : lv > 0.55 ? @"battery.75" : lv > 0.3 ? @"battery.50" : lv > 0.12 ? @"battery.25" : @"battery.0";
@@ -414,10 +439,15 @@ static UIView *tv_panel(CGRect frame) {
     __weak UISlider *wvol = vol;
     [vol addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; volume_set(wvol.value); }] forControlEvents:UIControlEventValueChanged];
     UILabel *vl = panel_label(20, UIFontWeightSemibold, 0.85); vl.textAlignment = NSTextAlignmentRight;
-    UILabel *vidl = panel_label(18, UIFontWeightSemibold, 0.65); vidl.text = z ? @"畫面輸出" : @"Picture";
-    UISegmentedControl *vid = panel_segments(z ? @[@"電視", @"iPad"] : @[@"TV", @"iPad"], ^(NSInteger i) { output_video_set(i == 1); });
+    UILabel *vidl = panel_label(18, UIFontWeightSemibold, 0.65); vidl.text = z ? @"模式" : @"Mode";
+    // the switch slides first, then the screens change (their dip through black would otherwise cut the slide short)
+    UISegmentedControl *vid = panel_segments(z ? @[@"主機", @"掌機"] : @[@"Console", @"Handheld"], ^(NSInteger i) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 280 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ play_mode_set(i == 1); });
+    });
     UILabel *audl = panel_label(18, UIFontWeightSemibold, 0.65); audl.text = z ? @"聲音輸出" : @"Sound";
-    UISegmentedControl *aud = panel_segments(z ? @[@"電視", @"iPad 喇叭"] : @[@"TV", @"iPad speaker"], ^(NSInteger i) { output_audio_set(i == 1); });
+    UISegmentedControl *aud = panel_segments(z ? @[@"電視", @"iPad 喇叭"] : @[@"TV", @"iPad speaker"], ^(NSInteger i) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ output_audio_set(i == 1); });
+    });
     UIButton *change = panel_button(z ? @"換遊戲" : @"Change games", @"square.grid.2x2.fill", [UIColor colorWithWhite:1 alpha:0.12], UIColor.whiteColor, ^{
         panel_confirm(z ? @"換遊戲？" : @"Change games?", z ? @"未存檔的進度會遺失。" : @"Unsaved progress is lost.", z ? @"換遊戲" : @"Change games", ^{ home_menu_quit(1); });
     });
@@ -545,7 +575,10 @@ static UIView *tv_panel(CGRect frame) {
         [CATransaction commit];
         title.frame = CGRectMake(L, T, R - L - 260, 50);
         CGRect lf = live.frame; lf.origin = CGPointMake(L, T + 58); live.frame = lf;
-        batl.frame = CGRectMake(R - 56, T + 10, 56, 30); bat.frame = CGRectMake(R - 56 - 40, T + 10, 36, 30); clock.frame = CGRectMake(R - 56 - 40 - 96, T + 10, 90, 30);
+        // as the picker's top right: time, Wi-Fi, percent, battery
+        bat.frame = CGRectMake(R - 40, T + 10, 40, 30); batl.textAlignment = NSTextAlignmentRight; batl.frame = CGRectMake(R - 40 - 6 - 62, T + 10, 62, 30);
+        wifi.frame = CGRectMake(CGRectGetMinX(batl.frame) - 12 - 28, T + 10, 28, 30);
+        [clock sizeToFit]; CGFloat cw0 = MAX(90, clock.bounds.size.width); clock.frame = CGRectMake(CGRectGetMinX(wifi.frame) - 12 - cw0, T + 10, cw0, 30);
         CGFloat top = T + 108, ch = B - top;
         BOOL wide = S.width > S.height;
         CGRect pf, cf;
@@ -1011,6 +1044,9 @@ static void output_video_set(BOOL ipad) {   // the picture moves at once, the me
     mode_transition(^{ [g_root placeStage]; home_menu_relayout(); home_menu_draw(); });
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
 }
+// Handheld or console play while a TV is connected: the picture and the sound go together (the sound output can still be changed on its own after)
+static void play_mode_set(BOOL handheld) { output_audio_set(handheld); output_video_set(handheld); }
+int front_ios_console_mode(void) { return tv_on(); }   // for the picker and the launcher (GamePicker.swift / Launcher.swift): the TV layout; changes come with DMShellChanged
 static void output_audio_set(BOOL ipad) {   // switches at once (a paused game's sound resumes on the new output) and stays the choice
     if (ipad == [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]) return;
     [NSUserDefaults.standardUserDefaults setBool:ipad forKey:@"DMAudioOnIPad"];
@@ -1027,7 +1063,7 @@ static void home_menu_activate(int i) {
     else if ([act hasPrefix:@"slot:"]) slot_activate([[act substringFromIndex:5] intValue]);
     else if ([act isEqualToString:@"volume"]) { volume_set(volume_pref() >= 0.999f ? 0.f : volume_pref() + 0.1f); menu_refresh(i); }   // A steps up and wraps; left and right are the finer way
     else if ([act isEqualToString:@"audio"]) { output_audio_set(![NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]); menu_refresh(i); }
-    else if ([act isEqualToString:@"video"]) { output_video_set(!video_pref_ipad()); menu_refresh(i); }
+    else if ([act isEqualToString:@"video"]) { play_mode_set(!video_pref_ipad()); menu_refresh(i); }
     else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
 }
 @interface DmMenuTap : NSObject
@@ -1197,7 +1233,7 @@ static NSArray<NSString *> *volume_row(void) {
 }
 static NSArray<NSString *> *video_row(void) {
     BOOL z = zh_ui(), ipad = video_pref_ipad();
-    return @[ipad ? (z ? @"畫面輸出：iPad" : @"Picture output: iPad") : (z ? @"畫面輸出：電視" : @"Picture output: TV"),
+    return @[ipad ? (z ? @"模式：掌機" : @"Mode: handheld") : (z ? @"模式：主機" : @"Mode: console"),
              @"", @"video"];
 }
 // The menu's pages: 0 the main list, 1 the players (the eight numbers, who holds each; joining with a phone on the same page)
