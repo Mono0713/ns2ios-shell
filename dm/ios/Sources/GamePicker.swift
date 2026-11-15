@@ -39,15 +39,27 @@ enum DS {
 final class TenFoot: ObservableObject {
     @Published fileprivate(set) var on = false
 }
-// Reads the role of the scene the view's window belongs to; the picker moving between the iPad and the TV (the same controller, presented again) moves it too
+// Reads the role of the scene the view's window belongs to; the picker moving between the iPad and the TV (the same controller, presented again) moves it too.
+// On the TV it also raises the screen's controller's display scale by the canvas's scale-up (TenFootStage), so SwiftUI draws the text and the images at the
+// size they end up on the TV instead of at 1920 x 1080 stretched (which was soft on a 1440p or 4K TV)
 private struct TenFootProbe: UIViewRepresentable {
     let tv: TenFoot
     final class Probe: UIView {
         weak var tv: TenFoot?
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
+        override func didMoveToWindow() { super.didMoveToWindow(); update() }
+        override func layoutSubviews() { super.layoutSubviews(); update() }
+        private func update() {
             guard let w = window else { return }
             let now = w.windowScene?.session.role == .windowExternalDisplayNonInteractive
+            let u = now ? TenFootStage.scale(w.bounds.size) : 1
+            if let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController {
+                let sharp = (w.windowScene?.screen.scale ?? 1) * u
+                if now && u > 1.01 {
+                    if vc.traitOverrides.displayScale != sharp { vc.traitOverrides.displayScale = sharp }
+                } else if vc.traitOverrides.contains(UITraitDisplayScale.self) {
+                    vc.traitOverrides.remove(UITraitDisplayScale.self)
+                }
+            }
             let t = tv
             DispatchQueue.main.async { if let t, t.on != now { t.on = now } }
         }
@@ -59,10 +71,11 @@ private struct TenFootProbe: UIViewRepresentable {
 // can be 1920, 2560 or 3840 points across, where sizes in points came out a fraction of the screen
 private struct TenFootStage: ViewModifier {
     let on: Bool
+    static func scale(_ size: CGSize) -> CGFloat { max(0.5, min(size.width / 1920, size.height / 1080)) }
     func body(content: Content) -> some View {
         // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
         GeometryReader { g in
-            let u = on ? max(0.5, min(g.size.width / 1920, g.size.height / 1080)) : 1
+            let u = on ? TenFootStage.scale(g.size) : 1
             content.frame(width: g.size.width / u, height: g.size.height / u)
                 .scaleEffect(u, anchor: .topLeading)
                 .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
