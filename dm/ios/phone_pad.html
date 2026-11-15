@@ -37,7 +37,12 @@
   #top { position:fixed; left:50%; top:max(6px, env(safe-area-inset-top)); transform:translateX(-50%); display:flex; align-items:center; gap:6px; z-index:5;
          background:var(--glass); -webkit-backdrop-filter:blur(20px) saturate(1.4); backdrop-filter:blur(20px) saturate(1.4); box-shadow:inset 0 0 0 1px var(--line);
          padding:5px; border-radius:16px; }
-  #status { display:flex; align-items:center; gap:8px; padding:0 8px; color:var(--dim); font-size:12px; font-weight:500; white-space:nowrap; }
+  #status { display:flex; align-items:center; gap:8px; padding:0 6px; }
+  /* The link as a dot, not words: green connected, amber breathing slowly while it (re)connects, red when the players are full. A fixed size, so the bar never jumps */
+  #conn { width:8px; height:8px; border-radius:50%; background:#ff9f0a; flex:none; transition:background-color .3s; animation:breathe 2.4s ease-in-out infinite; }
+  #conn.ok { background:#30d158; animation:none; }
+  #conn.full { background:#ff453a; animation:none; }
+  @keyframes breathe { 50% { opacity:.35; } }
   .tb { background:rgba(255,255,255,.1); color:var(--fg); border:0; border-radius:11px; padding:7px 11px; font:inherit; font-size:13px; font-weight:600; transition:transform .1s, opacity .1s; }
   .tb:active { transform:scale(.94); opacity:.8; }
   .tb.on { background:var(--btn-on); }
@@ -147,6 +152,7 @@
     p.textContent = n ? 'P' + n : '--'; p.classList.toggle('none', !n);
     if (n) document.documentElement.style.setProperty('--pc', colors[(n - 1) % 8]);
   }
+  function conn(k) { const c = $('#conn'); if (c.className === k) return; c.className = k; c.title = k === 'ok' ? T.connected : k === 'full' ? T.full : T.lost; }
   const state = { buttons: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
   let ws = null, seq = 0, dirty = true, lastSent = 0, backoff = 500, join = false, retry = 0, replaced = false;
 
@@ -168,16 +174,16 @@
     const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
-    $('#conn').textContent = T.connecting;
+    conn('wait');
     ws.onopen = () => { backoff = 500; hello(); };
     ws.onmessage = ev => {
       if (typeof ev.data !== 'string') return;
       const m = JSON.parse(ev.data);
       if (m.t === 'assign') {
-        replaced = false; document.body.classList.remove('kicked'); showPlayer(m.player); $('#conn').textContent = T.connected; dirty = true;
+        replaced = false; document.body.classList.remove('kicked'); showPlayer(m.player); conn('ok'); dirty = true;
         faceLayout(m.layout === 'xbox');
       }
-      else if (m.t === 'full') { showPlayer(0); $('#conn').textContent = T.full; }
+      else if (m.t === 'full') { showPlayer(0); conn('full'); toast(T.full); }
       else if (m.t === 'kicked') { showPlayer(0); $('#kickmsg').textContent = T.kicked; $('#rejoin').textContent = T.rejoin; document.body.classList.add('kicked'); release(); }
       else if (m.t === 'replaced') {
         replaced = true; showPlayer(0); $('#kickmsg').textContent = T.replaced; $('#rejoin').textContent = T.useHere; document.body.classList.add('kicked'); release();
@@ -189,7 +195,7 @@
     };
     ws.onclose = () => {
       if (replaced) return;
-      $('#conn').textContent = T.lost;
+      conn('wait');
       retry = setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 4000);
     };
