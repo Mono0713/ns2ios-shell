@@ -281,11 +281,16 @@ int shell_game_unchoose(void) {
 - (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
 @end
 
+// Change games left its flag: this process was started right after (ReopenIntent.swift answers a Shortcuts automation with it, so the automation needs no
+// access to the app's files, which iOS asks about again and again)
+static int g_relaunch;
+int shell_relaunch_requested(void) { return g_relaunch; }
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         boot_log();
         { NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];   // the Home menu's Change games flag (front_ios.m): this launch is the relaunch it asked for
-          if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) fprintf(stderr, "boot: relaunched after Change games\n"); }
+          if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) { g_relaunch = 1; fprintf(stderr, "boot: relaunched after Change games\n"); } }
         g_game_root = NSBundle.mainBundle.resourcePath;
         NSArray<NSString *> *ids = shell_game_ids();
         setenv("DM_SHELL_GAMES", @(ids.count).stringValue.UTF8String, 1);   // the launcher offers to change games when there is more than one
