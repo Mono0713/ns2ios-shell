@@ -38,30 +38,25 @@ enum DS {
 // view is in, not by a TV being plugged in: with the picture output set to the iPad the same screens stay at the iPad's sizes
 final class TenFoot: ObservableObject {
     @Published fileprivate(set) var on = false
+    @Published fileprivate(set) var screenScale: CGFloat = 1
 }
-// Reads the role of the scene the view's window belongs to; the picker moving between the iPad and the TV (the same controller, presented again) moves it too.
-// On the TV it also raises the screen's controller's display scale by the canvas's scale-up (TenFootStage), so SwiftUI draws the text and the images at the
-// size they end up on the TV instead of at 1920 x 1080 stretched (which was soft on a 1440p or 4K TV)
+// Reads the role of the scene the view's window belongs to, and its screen's scale; the picker moving between the iPad and the TV (the same controller,
+// presented again) moves it too. Only reads: changing the controller's traits from here (an earlier try at sharper text) closed the app at launch
 private struct TenFootProbe: UIViewRepresentable {
     let tv: TenFoot
     final class Probe: UIView {
         weak var tv: TenFoot?
-        override func didMoveToWindow() { super.didMoveToWindow(); update() }
-        override func layoutSubviews() { super.layoutSubviews(); update() }
-        private func update() {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
             guard let w = window else { return }
             let now = w.windowScene?.session.role == .windowExternalDisplayNonInteractive
-            let u = now ? TenFootStage.scale(w.bounds.size) : 1
-            if let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController {
-                let sharp = (w.windowScene?.screen.scale ?? 1) * u
-                if now && u > 1.01 {
-                    if vc.traitOverrides.displayScale != sharp { vc.traitOverrides.displayScale = sharp }
-                } else if vc.traitOverrides.contains(UITraitDisplayScale.self) {
-                    vc.traitOverrides.remove(UITraitDisplayScale.self)
-                }
-            }
+            let scale = w.windowScene?.screen.scale ?? 1
             let t = tv
-            DispatchQueue.main.async { if let t, t.on != now { t.on = now } }
+            DispatchQueue.main.async {
+                guard let t else { return }
+                if t.screenScale != scale { t.screenScale = scale }
+                if t.on != now { t.on = now }
+            }
         }
     }
     func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tv = tv; return v }
@@ -71,12 +66,15 @@ private struct TenFootProbe: UIViewRepresentable {
 // can be 1920, 2560 or 3840 points across, where sizes in points came out a fraction of the screen
 private struct TenFootStage: ViewModifier {
     let on: Bool
+    var screenScale: CGFloat = 1
     static func scale(_ size: CGSize) -> CGFloat { max(0.5, min(size.width / 1920, size.height / 1080)) }
     func body(content: Content) -> some View {
         // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
         GeometryReader { g in
             let u = on ? TenFootStage.scale(g.size) : 1
             content.frame(width: g.size.width / u, height: g.size.height / u)
+                // drawn at the size it ends up on the TV, not at the canvas's size stretched (soft on a 1440p or 4K TV); the iPad keeps its own
+                .transformEnvironment(\.displayScale) { if on && u > 1.01 { $0 = screenScale * u } }
                 .scaleEffect(u, anchor: .topLeading)
                 .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
         }
@@ -85,7 +83,7 @@ private struct TenFootStage: ViewModifier {
 }
 extension View {
     // The probe and, on the TV, the canvas: the outermost modifiers of the picker's and the launcher's screens
-    func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on)).background(TenFootProbe(tv: tv)) }
+    func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on, screenScale: tv.screenScale)).background(TenFootProbe(tv: tv)) }
 }
 private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
