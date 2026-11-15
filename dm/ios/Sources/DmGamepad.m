@@ -603,7 +603,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
             CGPoint c = [self clickCenter:b]; setPath(_key[b], circlePath(c, [self clickR:b])); placeLabel(_label[b], c, 13 * u * gs);
         } else {
             CGRect rc = [self pillRect:b];
-            setPath(_key[b], CGPathCreateWithRoundedRect(rc, rc.size.height * 0.34, rc.size.height * 0.34, NULL));   // a rounded rectangle, not a capsule (docs/DESIGN.zh-TW.md) placeLabel(_label[b], CGPointMake(CGRectGetMidX(rc), CGRectGetMidY(rc)), 18 * u * gs);
+            setPath(_key[b], CGPathCreateWithRoundedRect(rc, rc.size.height * 0.34, rc.size.height * 0.34, NULL)); placeLabel(_label[b], CGPointMake(CGRectGetMidX(rc), CGRectGetMidY(rc)), 18 * u * gs);   // a rounded rectangle, not a capsule (docs/DESIGN.zh-TW.md)
         }
     }
     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
