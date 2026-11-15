@@ -741,7 +741,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 -                        Image(uiImage: icon).resizable().frame(width: 96, height: 96)
 -                            .clipShape(RoundedRectangle(cornerRadius: 22))
 +                        let side: CGFloat = tv.on ? 180 : 128
-+                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: side, height: side)
++                        Image(uiImage: tv.on ? tvIcon(icon, key: "launcher") : icon).resizable().interpolation(.high).frame(width: side, height: side)
 +                            .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
 +                            .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
 +                            .shadow(color: .black.opacity(0.5), radius: 18, y: 10)

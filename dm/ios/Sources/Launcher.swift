@@ -739,7 +739,7 @@ private struct LauncherView: View {
                     Spacer(minLength: 0)
                     if let icon = appIcon() {
                         let side: CGFloat = tv.on ? 180 : 128
-                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: side, height: side)
+                        Image(uiImage: tv.on ? tvIcon(icon, key: "launcher") : icon).resizable().interpolation(.high).frame(width: side, height: side)
                             .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
                             .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.5), radius: 18, y: 10)

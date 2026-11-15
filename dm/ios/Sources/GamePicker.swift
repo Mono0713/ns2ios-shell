@@ -10,6 +10,7 @@
 import SwiftUI
 import UIKit
 import Network
+import CoreImage.CIFilterBuiltins
 
 @_silgen_name("shell_game_choose") private func shellGameChoose(_ gid: UnsafePointer<CChar>)
 
@@ -40,22 +41,32 @@ final class TenFoot: ObservableObject {
     @Published fileprivate(set) var on = false
     @Published fileprivate(set) var screenScale: CGFloat = 1
 }
-// Reads the role of the scene the view's window belongs to, and its screen's scale; the picker moving between the iPad and the TV (the same controller,
-// presented again) moves it too. Only reads: changing the controller's traits from here (an earlier try at sharper text) closed the app at launch
+// Reads the role of the scene the view's window belongs to and its screen's scale; the picker moving between the iPad and the TV (the same controller,
+// presented again) moves it too. On the TV it then raises the hosting controller's display scale by the canvas's scale-up (TenFootStage), so its layers
+// (text, the list's cells, images) are drawn at the size they end up on the TV, not at 1920 x 1080 stretched. The traits are only written, a turn later:
+// reading traitOverrides.displayScale while it is not set asserts, which closed art45 at launch
 private struct TenFootProbe: UIViewRepresentable {
     let tv: TenFoot
     final class Probe: UIView {
         weak var tv: TenFoot?
+        private var applied: CGFloat = 0   // the display scale this probe set (0: none)
         override func didMoveToWindow() {
             super.didMoveToWindow()
             guard let w = window else { return }
             let now = w.windowScene?.session.role == .windowExternalDisplayNonInteractive
             let scale = w.windowScene?.screen.scale ?? 1
+            let u = now ? TenFootStage.scale(w.bounds.size) : 1
             let t = tv
-            DispatchQueue.main.async {
-                guard let t else { return }
-                if t.screenScale != scale { t.screenScale = scale }
-                if t.on != now { t.on = now }
+            DispatchQueue.main.async { [weak self] in
+                if let t {
+                    if t.screenScale != scale { t.screenScale = scale }
+                    if t.on != now { t.on = now }
+                }
+                guard let self, let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
+                let sharp = now && u > 1.01 ? scale * u : 0
+                if sharp == self.applied { return }
+                if sharp > 0 { vc.traitOverrides.displayScale = sharp } else { vc.traitOverrides.remove(UITraitDisplayScale.self) }
+                self.applied = sharp
             }
         }
     }
@@ -268,14 +279,30 @@ private struct StatusBar: View {
     }
 }
 
+// A game's icon is the package's 256 x 256 JPEG; on a TV a tile is 700 to 1000 pixels across. Enlarged once with Lanczos (sharper edges than the GPU's
+// linear filter), up to 1024 pixels, and kept
+private let sharpIcons = NSCache<NSString, UIImage>()
+func tvIcon(_ img: UIImage, key: String? = nil) -> UIImage {   // key: for an icon read from its file again on every redraw (the launcher's)
+    let k = (key ?? "\(ObjectIdentifier(img).hashValue)") as NSString
+    if let done = sharpIcons.object(forKey: k) { return done }
+    let px = max(img.size.width * img.scale, img.size.height * img.scale)
+    guard px > 0, px < 1000, let src = CIImage(image: img) else { return img }
+    let f = CIFilter.lanczosScaleTransform(); f.inputImage = src; f.scale = Float(1024 / px); f.aspectRatio = 1
+    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent.integral) else { return img }
+    let big = UIImage(cgImage: cg, scale: img.scale * 1024 / px, orientation: img.imageOrientation)
+    sharpIcons.setObject(big, forKey: k)
+    return big
+}
+
 private struct GameTile: View {
     let game: PickerGame
     let focused: Bool
     let side: CGFloat
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
         ZStack {
             if let icon = game.icon {
-                Image(uiImage: icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
+                Image(uiImage: tenFoot ? tvIcon(icon, key: game.id) : icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
             } else {
                 LinearGradient(colors: [Color(white: 0.29), Color(white: 0.11)], startPoint: .top, endPoint: .bottom)
                 Text(game.name).font(.title3.weight(.bold)).foregroundStyle(.white).multilineTextAlignment(.center).padding(12)
