@@ -6,6 +6,7 @@
 // its page asks to join again or the app restarts.
 // One port serves the page (GET /, phone_pad_page.h, generated from phone_pad.html) and the controller stream (GET /ws, WebSocket). Protocol, all from the phone:
 //   text   {"t":"layout","xbox":0|1}  -> the phone's own layout switch, answered with an assign in that layout
+//   text   {"t":"home"}  -> the page's Home button: the app's menu over the game (shell_slot_home), as a controller's Home button
 //   text   {"t":"hello","v":1,"id":"<device id>","name":"<label>"[,"join":1]}  -> answered {"t":"assign","player":<1..8>,"layout":"switch"|"xbox"}, {"t":"full"} or {"t":"kicked"}
 //          (join: the player asked to come back after the launcher removed the phone); assign comes again whenever the launcher moves the phone to another player or changes its button layout
 //   binary 8 bytes: 0x01, sequence (u8, wraps), buttons (u16 LE, NpadButton bits as dm_input.h), lx, ly, rx, ry (i8 each, -127..127, y up)
@@ -155,6 +156,7 @@ static void on_hello(client *c, const char *json) {
 // The page's own layout switch: the same as the launcher's (shell_players.m keeps it for this phone); the assign that follows redraws the page
 static void on_text(client *c, const char *json) {
     char t[16] = ""; json_str(json, "t", t, sizeof t);
+    if (!strcmp(t, "home")) { int p = c->player < 0 ? -1 : shell_slot_of(c); if (p >= 0) { LOG("phone pads: '%s' (player %d) pressed Home", c->name, p + 1); shell_slot_home(p); } return; }
     if (strcmp(t, "layout")) { on_hello(c, json); return; }
     int p = c->player < 0 ? -1 : shell_slot_of(c); if (p < 0) return;
     int xbox = strstr(json, "\"xbox\":1") != NULL;

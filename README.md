@@ -80,6 +80,23 @@ on the phone.
 - `--clean <game folder>` clears out what an earlier run left
 - a cartridge dump (`.xci`) gets a `<file>.xci.tid` next to it on the first pack, so the next one does not unpack it again
 
+## Playing: the Home menu, a TV, changing games
+
+- **Home menu.** Press Home on a controller (the Xbox button, or − and + together), the ⌂ on a phone's page, or the ⌂ / Menu
+  button on the iPad. The game pauses. Only player 1 can open and use it; the menu's *Players* page makes someone else player 1,
+  and *Add players* shows the phones' QR code.
+- **On a TV** (USB-C to HDMI), the game fills the TV once it starts, and the iPad shows the QR code and the players. The menu's
+  *Picture output* and *Sound output* move either one back to the iPad (pick the iPad's speaker when the screen has none; the
+  first time, iOS asks for the microphone, which is only how it lets sound play from the speaker while HDMI is connected).
+- **Changing games** ends the app: one process can load only one game, and iOS lets no app reopen itself. SwitchPad has a
+  Shortcuts action, **SwitchPad 要重開嗎？** ("Should SwitchPad reopen?"), which is true right after *Change games* closed it,
+  so an automation can bring the app straight back to the game picker without touching its files:
+  1. Shortcuts → Automation → New → **App** → SwitchPad → **Is Closed** → **Run Immediately**.
+  2. Action **SwitchPad 要重開嗎？**
+  3. **If** its result **is true** → **Open App** SwitchPad.
+
+  Without it, tap the SwitchPad icon after the app closes. *Close the game* leaves no file, so the app stays closed.
+
 ## Requirements
 
 On the **packing machine**:

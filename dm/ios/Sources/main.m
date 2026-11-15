@@ -218,7 +218,7 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 #ifdef DM_SHELL
     // Shaders can be in the package as source when the computer that packed it had no Apple shader compiler: compile them all once
     // here, with a progress page, then start the host. Returns 0 when there is nothing to do (no source shaders, or done last time).
-    front_ios_loading_text(@"正在檢查著色器…", @"Checking shaders…");
+    front_ios_loading_text(@"遊戲載入中…", @"Loading…");
     dm_shader_prep_start(^{ boot_start(); }); return;
 #endif
     boot_start();
@@ -255,6 +255,12 @@ int shell_game_unchoose(void) {
 @end
 @implementation App
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
+    // A TV on the USB-C / HDMI adapter: its own scene (front_ios.m DmTvSceneDelegate), which shows the game's picture at the TV's shape and resolution once the game starts
+    if ([s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive]) {
+        UISceneConfiguration *c = [[UISceneConfiguration alloc] initWithName:@"TV" sessionRole:s.role];
+        c.delegateClass = NSClassFromString(@"DmTvSceneDelegate");
+        return c;
+    }
     return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
 }
 @end
@@ -275,9 +281,16 @@ int shell_game_unchoose(void) {
 - (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
 @end
 
+// Change games left its flag: this process was started right after (ReopenIntent.swift answers a Shortcuts automation with it, so the automation needs no
+// access to the app's files, which iOS asks about again and again)
+static int g_relaunch;
+int shell_relaunch_requested(void) { return g_relaunch; }
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         boot_log();
+        { NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];   // the Home menu's Change games flag (front_ios.m): this launch is the relaunch it asked for
+          if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) { g_relaunch = 1; fprintf(stderr, "boot: relaunched after Change games\n"); } }
         g_game_root = NSBundle.mainBundle.resourcePath;
         NSArray<NSString *> *ids = shell_game_ids();
         setenv("DM_SHELL_GAMES", @(ids.count).stringValue.UTF8String, 1);   // the launcher offers to change games when there is more than one

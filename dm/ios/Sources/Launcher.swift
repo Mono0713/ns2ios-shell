@@ -61,10 +61,10 @@ private let zhText: [String: String] = [
     "Game memory pool": "遊戲記憶體", "Game default": "遊戲預設", "Auto": "自動",
     "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "僅在畫面或聲音異常時調整；設定錯誤可能導致遊戲無法啟動。",
     // the launcher's own
-    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "由 env 檔設定", "Memory available": "可用記憶體",
+    "Play": "開始遊戲", "Version": "版本", "Set by an env file": "已固定", "Memory available": "可用記憶體",
     "Reset to tested defaults": "還原為建議設定", "Brings back all settings this game was tested with.": "將所有設定恢復為這款遊戲測試時使用的值。",
     "Open game folder": "打開遊戲資料夾", "Game list": "遊戲清單",
-    "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔、env.txt 與 log.txt 都在這裡（「檔案」App）。",
+    "The app closes; tap its icon again to choose another game.": "App 會關閉，再點一次圖示就能選其他遊戲。", "Saves, env.txt and log.txt are here (Files app).": "存檔都在這裡（「檔案」App）。",
     "Motion controls": "體感操作（陀螺儀）",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "以觸控遊玩時，轉動 iPad 即為 1P 的體感；DualSense、DualShock 4、Switch Pro 手把使用各自的陀螺儀。",
@@ -100,7 +100,7 @@ private let enText: [String: String] = [
     "Game memory pool": "Game memory",
     "Change it only if the picture or sound is missing; a wrong size can stop a game from starting.": "Only change this if graphics or sound are missing. A wrong value can keep the game from starting.",
     "Memory available": "Available memory", "Reset to tested defaults": "Restore recommended settings", "Brings back all settings this game was tested with.": "Returns every setting to the values this game was tested with.",
-    "Saves, env.txt and log.txt are here (Files app).": "Saves, env.txt and log.txt are kept here (Files app).",
+    "Saves, env.txt and log.txt are here (Files app).": "Your saves are here (Files app).",
     "Motion controls": "Motion controls (gyro)",
     "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.":
         "When playing by touch, tilting the iPad drives Player 1's motion. DualSense, DualShock 4 and Switch Pro controllers use their own gyroscope.",

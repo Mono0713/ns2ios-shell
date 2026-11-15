@@ -35,3 +35,6 @@ void shell_slots_on_change(void (*hook)(void));   // called after every take, fr
 // (dm_input.h units, y up) after dm_pad_set_player, on its own thread
 void shell_slot_input(int p, uint64_t buttons, int32_t lx, int32_t ly);
 void shell_slots_on_input(void (*hook)(int p, uint64_t buttons, int32_t lx, int32_t ly));
+// A holder's Home button (a controller's Home / Xbox button, a phone page's Home): the app's menu over the game (shell_players.m). On the holder's thread
+void shell_slot_home(int p);
+void shell_slots_on_home(void (*hook)(int p));
