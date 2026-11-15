@@ -6,10 +6,13 @@
 // its page asks to join again or the app restarts.
 // One port serves the page (GET /, phone_pad_page.h, generated from phone_pad.html) and the controller stream (GET /ws, WebSocket). Protocol, all from the phone:
 //   text   {"t":"layout","xbox":0|1}  -> the phone's own layout switch, answered with an assign in that layout
+//   text   {"t":"home"}  -> the page's Home button: the app's menu over the game (shell_slot_home), as a controller's Home button
 //   text   {"t":"hello","v":1,"id":"<device id>","name":"<label>"[,"join":1]}  -> answered {"t":"assign","player":<1..8>,"layout":"switch"|"xbox"}, {"t":"full"} or {"t":"kicked"}
 //          (join: the player asked to come back after the launcher removed the phone); assign comes again whenever the launcher moves the phone to another player or changes its button layout
 //   binary 8 bytes: 0x01, sequence (u8, wraps), buttons (u16 LE, NpadButton bits as dm_input.h), lx, ly, rx, ry (i8 each, -127..127, y up)
 // The phone sends on every change and at least every 100 ms; a phone silent for a second has everything released. One thread, poll(), plain BSD sockets.
+// Connections that hold no player cannot pile up and lock phones out: a request that does not arrive within REQ_NS, or a WebSocket silent for GONE_NS, is closed, and when every
+// connection is taken a new one closes the oldest connection without a player (a browser's spare preconnect, the page of a phone that walked away while 'full' or removed).
 // The service is announced over Bonjour as _nxpad._tcp: besides letting tools find it, that is what makes iOS ask for local network access (NSLocalNetworkUsageDescription).
 // DM_PHONE_PADS=0 turns it off; DM_PHONE_PADS_PORT picks another port (8080 by default).
 #include <errno.h>
@@ -37,16 +40,20 @@
 #include "shell_slots.h"
 #ifdef __APPLE__
 #include <dns_sd.h>
+#include <pthread/qos.h>
 #endif
 
 enum { MAX_CLIENTS = 24, IN_CAP = 4096 };
 #define SILENT_NS 1000000000ull   // quiet this long: nothing held down
 #define GONE_NS 15000000000ull    // quiet this long: the page is gone (a tab left in the background keeps its socket open), its player is freed
+#define ALIVE_NS 300000000ull    // heard within this: the page is in front (it sends at least every 100 ms while it is)
+#define REQ_NS 10000000000ull     // a connection that has not sent its request (or switched to WebSocket) this long after it opened is closed
 typedef struct {
     int fd, ws, player;          // ws: the connection has switched to WebSocket; player: slot index, -1 before the hello
     uint32_t ip;                 // the phone's address (network order): one phone, one player
     size_t n; uint8_t in[IN_CAP];
     int last_seq; uint64_t last_ns; int released;
+    uint64_t open_ns, seen_ns;   // when the connection opened, when anything last arrived on it
     char name[64], id[64];       // id: the phone's own (its page's localStorage), the slot table's name for it
     _Atomic int moved, kicked, relayout, identify;   // set by the launcher (shell_slots.h handlers, main thread), handled on the server thread
 } client;
@@ -118,6 +125,11 @@ static void drop(client *c) {
     memset(c, 0, sizeof *c); c->fd = -1; c->player = -1;
 }
 // The value of "key":"..." in a small JSON object (the hello); enough for this protocol, which never escapes quotes in these fields
+static void replace(client *old, const char *name) {
+    LOG("phone pads: '%s' joined again from the same phone: the old page's player %d goes", name, shell_slot_of(old) + 1);
+    ws_text(old->fd, "{\"t\":\"replaced\"}");
+    drop(old);
+}
 static int json_str(const char *j, const char *key, char *out, size_t cap) {
     char pat[32]; snprintf(pat, sizeof pat, "\"%s\"", key);
     const char *p = strstr(j, pat); if (!p) return 0;
@@ -136,15 +148,15 @@ static void on_hello(client *c, const char *json) {
     json_str(json, "name", name, sizeof name);
     if (banned(id, strstr(json, "\"join\"") != NULL)) { ws_text(c->fd, "{\"t\":\"kicked\"}"); return; }
     if (c->player >= 0) { release(c); shell_slot_free(c); c->player = -1; }
-    // The same phone still connected on an older socket (a page that reloaded before the old connection timed out): close that one, so this one takes its player
-    for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) drop(&g_cl[i]);
-    // The same phone from another page with its own storage, so another id (Safari and the Home Screen copy, or a second browser): that is still one phone, the old page goes.
-    // Not for loopback, which is the server test's several phones on one machine
+    // The same phone still connected on an older socket (a page that reloaded before the old connection timed out, a second tab): that one is told it was replaced, so it
+    // stops reconnecting (phone_pad.html) instead of taking the player back and the two pages trading it forever, and closed, so this one takes its player
+    for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) replace(&g_cl[i], name);
+    // The same address from another page with its own storage, so another id (Safari and the Home Screen copy, or a second browser): the old page goes if it has gone quiet,
+    // as a page that is no longer in front does at once. One that is still sending is another phone behind the same address (a range extender or guest network that
+    // translates addresses): it keeps its player. Not for loopback, which is the server test's several phones on one machine
     if (c->ip && c->ip != htonl(INADDR_LOOPBACK))
-        for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && g_cl[i].ip == c->ip) {
-            LOG("phone pads: '%s' joined again from the same phone: the old page's player %d goes", name, shell_slot_of(&g_cl[i]) + 1);
-            drop(&g_cl[i]);
-        }
+        for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && g_cl[i].fd >= 0 && g_cl[i].player >= 0 && g_cl[i].ip == c->ip && now_ns() - g_cl[i].seen_ns > ALIVE_NS)
+            replace(&g_cl[i], name);
     int p = shell_slot_take(c, id, SHELL_SLOT_PHONE, name);   // a phone that held a player before has its id on that slot and gets it back while it is free
     snprintf(c->name, sizeof c->name, "%s", name); snprintf(c->id, sizeof c->id, "%s", id);
     if (p < 0) { ws_text(c->fd, "{\"t\":\"full\"}"); LOG("phone pads: '%s' connected: all %d players are taken, not used", name, DM_PLAYERS); return; }
@@ -155,6 +167,7 @@ static void on_hello(client *c, const char *json) {
 // The page's own layout switch: the same as the launcher's (shell_players.m keeps it for this phone); the assign that follows redraws the page
 static void on_text(client *c, const char *json) {
     char t[16] = ""; json_str(json, "t", t, sizeof t);
+    if (!strcmp(t, "home")) { int p = c->player < 0 ? -1 : shell_slot_of(c); if (p >= 0) { LOG("phone pads: '%s' (player %d) pressed Home", c->name, p + 1); shell_slot_home(p); } return; }
     if (strcmp(t, "layout")) { on_hello(c, json); return; }
     int p = c->player < 0 ? -1 : shell_slot_of(c); if (p < 0) return;
     int xbox = strstr(json, "\"xbox\":1") != NULL;
@@ -247,7 +260,7 @@ static int on_readable(client *c) {   // 0: close the connection
     if (c->n >= IN_CAP) return 0;
     ssize_t r = recv(c->fd, c->in + c->n, IN_CAP - 1 - c->n, 0);
     if (r <= 0) return r < 0 && (errno == EAGAIN || errno == EINTR);
-    c->n += (size_t)r;
+    c->n += (size_t)r; c->seen_ns = now_ns();
     if (c->ws) return ws_frames(c);
     c->in[c->n] = 0;
     if (!strstr((char *)c->in, "\r\n\r\n")) return c->n < IN_CAP - 1;
@@ -256,6 +269,9 @@ static int on_readable(client *c) {   // 0: close the connection
 
 static void *serve(void *arg) {
     int ls = (int)(intptr_t)arg;
+#ifdef __APPLE__
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   // input: not queued behind the game's busy threads when every core is taken
+#endif
     for (int i = 0; i < MAX_CLIENTS; i++) { g_cl[i].fd = -1; g_cl[i].player = -1; }
     for (;;) {
         struct pollfd pf[MAX_CLIENTS + 1]; int map[MAX_CLIENTS + 1], n = 0;
@@ -269,13 +285,19 @@ static void *serve(void *arg) {
                 struct sockaddr_in from = {0}; socklen_t fl = sizeof from;
                 int fd = accept(ls, (struct sockaddr *)&from, &fl); if (fd < 0) continue;
                 int slot = -1; for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd < 0) { slot = i; break; }
-                if (slot < 0) { close(fd); continue; }
+                if (slot < 0) {   // all taken: the oldest connection without a player goes (never a phone that is playing)
+                    for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].player < 0 && (slot < 0 || g_cl[i].seen_ns < g_cl[slot].seen_ns)) slot = i;
+                    if (slot < 0) { close(fd); continue; }
+                    LOG("phone pads: all %d connections taken: closed an idle one (%s) for a new one", MAX_CLIENTS, g_cl[slot].ws ? g_cl[slot].name[0] ? g_cl[slot].name : "no hello" : "no request");
+                    drop(&g_cl[slot]);
+                }
 #ifdef SO_NOSIGPIPE
                 int one = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
                 fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
                 memset(&g_cl[slot], 0, sizeof g_cl[slot]); g_cl[slot].fd = fd; g_cl[slot].player = -1;
                 g_cl[slot].ip = from.sin_family == AF_INET ? from.sin_addr.s_addr : 0;
+                g_cl[slot].open_ns = g_cl[slot].seen_ns = now_ns();
                 continue;
             }
             if (!on_readable(&g_cl[map[k]])) drop(&g_cl[map[k]]);
@@ -287,6 +309,8 @@ static void *serve(void *arg) {
             LOG("phone pads: '%s' silent for %llu s: its page is gone", g_cl[i].name, GONE_NS / 1000000000ull);
             drop(&g_cl[i]);   // the phone gets the player back if it comes back while it is free (its id stays on the slot)
         }
+        for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0 && g_cl[i].player < 0 && (g_cl[i].ws ? t - g_cl[i].seen_ns > GONE_NS : t - g_cl[i].open_ns > REQ_NS))
+            drop(&g_cl[i]);   // no player: a request that never came, or a 'full' / removed page that went silent
     }
 }
 

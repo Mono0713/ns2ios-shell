@@ -10,6 +10,8 @@
 //   DMLauncherInput (posted here, main thread)   while the launcher is shown, each player's controller or phone: userInfo p (player from 1), key: a | b | plus | up |
 //                                               down | left | right (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can
 //                                               repeat them). Player 1 drives the whole screen, the others only their own row
+//   DMHomePressed (posted here, main thread)    a player pressed Home: a controller's Home (Xbox) button, − and + together, or a phone page's Home button
+//                                               (shell_slot_home): userInfo p (player from 1). front_ios.m opens or closes its menu over the game
 //   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
 //                                               about 7 times a second per player: its row lights up
 // Button layout, per player and kept in NSUserDefaults for the device (its name: a controller's model, a phone's id), which it gets as it connects: Xbox (A, B, X, Y
@@ -49,8 +51,15 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 static atomic_int g_launcher;
 static _Atomic uint64_t g_last_nav[DM_PLAYERS];   // each player's buttons, the left stick folded into the D-pad
 static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
+static void home_press(int p) {   // any thread
+    NSDictionary *u = @{@"p": @(p + 1)};
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:u]; });
+}
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
+    // − and + pressed together: Home, for a controller with no Home button the app gets (and a phone, besides its page's own button)
+    const uint64_t pm = 1ull << B_PLUS | 1ull << B_MINUS;
+    if ((buttons & pm) == pm && (atomic_load(&g_last_nav[p]) & pm) != pm) { LOG("player %d pressed - and + together: Home", p + 1); home_press(p); }
     if (atomic_load(&g_launcher) && (buttons || abs(lx) > t || abs(ly) > t)) {   // any player's input lights its row, so each one sees which player it is
         uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         if (now - atomic_load(&g_last_active[p]) > 150000000) {
@@ -121,7 +130,7 @@ static void motion_off(GCController *c) {
 }
 
 static void stop_using(GCController *c, int p) {   // c no longer feeds player p (disconnected or removed)
-    c.extendedGamepad.valueChangedHandler = nil;
+    c.extendedGamepad.valueChangedHandler = nil; c.extendedGamepad.buttonHome.pressedChangedHandler = nil;
     motion_off(c);
     dm_haptics_apple_controller(p, nil);
     shell_slot_free((__bridge const void *)c);
@@ -143,6 +152,16 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         [g_pads addObject:c];
         shell_slot_set_layout(p, wanted_layout(SHELL_SLOT_CONTROLLER, name, name));
         c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g.controller); };
+        GCControllerButtonInput *home = c.extendedGamepad.buttonHome;   // the Xbox button, PlayStation's PS, the Pro Controller's Home: the app's menu, not the system's
+        if (home) {
+            home.preferredSystemGestureState = GCSystemGestureStateDisabled;
+            __weak GCController *wc = c;
+            home.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL pressed) {
+                (void)b; (void)v; GCController *cc = wc; if (!pressed || !cc) return;
+                int hp = shell_slot_of((__bridge const void *)cc); if (hp < 0) return;
+                LOG("controller '%s' (player %d) pressed Home", cc.vendorName.UTF8String ?: "?", hp + 1); home_press(hp);
+            };
+        }
         motion_on(c);
         LOG("controller '%s' connected: player %d", name, p + 1);
         read_pad(c);
@@ -265,6 +284,7 @@ void shell_players_start(void) {   // main.m, on the main thread, once
     shell_slots_identify_handler(SHELL_SLOT_CONTROLLER, on_identify);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);
+    shell_slots_on_home(home_press);
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     for (NSNotificationName n in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
         [nc addObserverForName:n object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
@@ -278,4 +298,5 @@ int shell_players_external(void) {   // controllers and phones playing now (main
     int n = 0; for (int p = 0; p < DM_PLAYERS; p++) n += info[p].kind != SHELL_SLOT_NONE;
     return n;
 }
+uint64_t shell_players_held(void) { uint64_t m = 0; for (int p = 0; p < DM_PLAYERS; p++) m |= atomic_load(&g_last_nav[p]); return m; }   // any player's buttons still down (the left stick as the D-pad)
 void shell_players_release(void) { for (GCController *c in g_pads) { int p = shell_slot_of((__bridge const void *)c); if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0); } }   // on resign active

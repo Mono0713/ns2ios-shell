@@ -12,11 +12,12 @@
 //   Touches no control takes (in 3D, those outside the right third) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
 //   The virtual gamepad (layout button included) hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included); each is a player of its own and has its own button layout (shell_players.m).
 //   Shaking the phone shakes the controller (DM_BTN_SHAKE: its six-axis sensor, hle_hid.c), whichever controls are in use; see "Shaking the phone" below.
-//   Tap layout, out of the way: the layout and QR buttons fade out a few seconds after they were last used; a tap outside the 16:9 picture (the black bars) or a swipe down
+//   Home: a round ⌂ key below the layout button is player 1's Home (the in-game menu, front_ios.m), as a controller's Home or a phone page's ⌂.
+//   Tap layout, out of the way: the layout and Home buttons fade out a few seconds after they were last used; a tap outside the 16:9 picture (the black bars) or a swipe down
 //     from the top edge brings them back for a while. Touches outside the picture never reach the game in this layout (they would land on its edge anyway).
 //   Editing the controls (2D / 3D): holding the layout button opens an editor over the game. Each group (left stick, diamond, D-pad, ZL+L, ZR+R, − / +, L3, R3) is dragged to
 //     move it and pinched to resize it; a group can be hidden; the left stick is fixed (as above) or floating (it centres where a finger lands in the left half of the screen
-//     and is dragged along past its radius); an extra opacity multiplies the launcher's. Kept per layout in NSUserDefaults (DmPadCustom.<layout>, shared by every game of
+//     and is dragged along past its radius); A B X Y in Switch or Xbox places; a size for every control and an extra opacity multiply the launcher's. Kept per layout in NSUserDefaults (DmPadCustom.<layout>, shared by every game of
 //     a package so a library plays the same everywhere), offsets in u so they follow the launcher's size.
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
@@ -156,7 +157,9 @@ static BOOL shell_zh_hant(void) { NSString *l = NSLocale.preferredLanguages.firs
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
     CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
     CAShapeLayer *_swap; CATextLayer *_swapLabel; BOOL _swapHeld;
-    CAShapeLayer *_qr; CATextLayer *_qrLabel; UIView *_qrOverlay;   // the phone gamepads' QR code button (below the layout button) and the card it opens
+    CAShapeLayer *_home; CATextLayer *_homeLabel; BOOL _homeHeld;   // the Home button (below the layout button): player 1's Home, the in-game menu (front_ios.m)
+    BOOL _xbox;                                    // A B X Y in Xbox places (A bottom, B right, X left, Y top), as a phone page can; each key still sends its own letter
+    float _scaleAll;                               // the editor's size for every control, times the launcher's
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
@@ -166,7 +169,7 @@ static BOOL shell_zh_hant(void) { NSString *l = NSLocale.preferredLanguages.firs
     BOOL _external;                                // a physical controller or a phone plays: the controls show only for a while after a tap
     NSTimer *_peekTimer;
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
-    // Tap layout: the layout / QR buttons fade out
+    // Tap layout: the layout / Home buttons fade out
     BOOL _chromeHidden; NSTimer *_chromeTimer;
     UITouch *_edgeTouch; CGPoint _edgeStart;       // a touch that began at the top edge: pulled down, it shows the buttons
     // the editor and what it edits
@@ -174,7 +177,7 @@ static BOOL shell_zh_hant(void) { NSString *l = NSLocale.preferredLanguages.firs
     BOOL _floatStick; CGPoint _lCentre;            // floating left stick, and its centre while held
     float _alpha;                                  // the editor's opacity, times the launcher's
     BOOL _editing; int _sel;
-    UIView *_editPanel; NSLayoutConstraint *_panelX, *_panelY; UILabel *_selName; UISlider *_sizeSlider, *_alphaSlider; UISwitch *_hideSwitch; UISegmentedControl *_stickSeg;
+    UIView *_editPanel; NSLayoutConstraint *_panelX, *_panelY; UILabel *_selName; UISlider *_sizeSlider, *_alphaSlider, *_scaleSlider; UISwitch *_hideSwitch; UISegmentedControl *_stickSeg, *_faceSeg;
     CAShapeLayer *_selRing;
     NSMapTable<UITouch *, NSNumber *> *_editGroup; NSMapTable<UITouch *, NSValue *> *_editPrev;
     NSTimer *_swapTimer;                           // holding the layout button opens the editor
@@ -219,12 +222,14 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
             if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
         }
         _swap = shape(_controls); _swapLabel = label(_swap, @"");
-        _qr = shape(_controls); _qrLabel = label(_qr, @"QR");
+        _home = shape(_controls); _homeLabel = label(_home, @"⌂");
         _selRing = [CAShapeLayer layer]; _selRing.fillColor = nil; _selRing.strokeColor = [UIColor colorWithRed:0.35 green:0.75 blue:1 alpha:0.9].CGColor;
         _selRing.lineWidth = 2; _selRing.lineDashPattern = @[@6, @4]; _selRing.hidden = YES; [_controls addSublayer:_selRing];
         _editGroup = [NSMapTable strongToStrongObjectsMapTable]; _editPrev = [NSMapTable strongToStrongObjectsMapTable]; _sel = -1;
         NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
         _floatStick = [ud integerForKey:@"DmPadStickMode"] == 1;
+        _xbox = [ud boolForKey:@"DmPadXbox"];
+        _scaleAll = [ud objectForKey:@"DmPadScale"] ? fminf(1.4f, fmaxf(0.7f, [ud floatForKey:@"DmPadScale"])) : 1;
         _alpha = [ud objectForKey:@"DmPadAlpha"] ? fminf(1, fmaxf(0.1f, [ud floatForKey:@"DmPadAlpha"])) : 1;
         _controls.opacity = g_touch_opacity * _alpha;
         // First-launch layout from the game profile (DM_PAD_LAYOUT, atoi; the profile writes simple / full / touch and the packer turns it
@@ -285,16 +290,17 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
     for (int g = 0; g < G_N; g++) [a addObject:@[@(_adj[g].dx), @(_adj[g].dy), @(_adj[g].s), @(_adj[g].hide)]];
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
     [ud setObject:a forKey:self.adjKey]; [ud setInteger:_floatStick ? 1 : 0 forKey:@"DmPadStickMode"]; [ud setFloat:_alpha forKey:@"DmPadAlpha"];
-    LOG("front end: touch controls edited (%s, left stick %s, opacity x%.2f)", _full ? "3D" : "2D", _floatStick ? "floating" : "fixed", _alpha);
+    [ud setBool:_xbox forKey:@"DmPadXbox"]; [ud setFloat:_scaleAll forKey:@"DmPadScale"];
+    LOG("front end: touch controls edited (%s, left stick %s, %s buttons, size x%.2f, opacity x%.2f)", _full ? "3D" : "2D", _floatStick ? "floating" : "fixed", _xbox ? "Xbox" : "Switch", _scaleAll, _alpha);
 }
 
-// ---- Tap layout: the layout / QR buttons step out of the way ----
+// ---- Tap layout: the layout / Home buttons step out of the way ----
 - (void)showChrome:(BOOL)on {
     if (on) { [_chromeTimer invalidate]; _chromeTimer = nil; }
     if (on == !_chromeHidden) return;
     _chromeHidden = !on;
     [CATransaction begin]; [CATransaction setAnimationDuration:on ? 0.15 : 0.5];
-    _swap.opacity = _qr.opacity = on ? 1 : 0;
+    _swap.opacity = _home.opacity = on ? 1 : 0;
     [CATransaction commit];
 }
 - (void)peekChrome {   // show the buttons, then fade them K_CHROME_SECONDS later (or once the layout button is let go)
@@ -304,7 +310,7 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
 }
 - (void)chromeEnd {
     _chromeTimer = nil;
-    if (!_tap || _editing || _qrOverlay) return;
+    if (!_tap || _editing) return;
     for (UITouch *t in _owner) if (([_owner objectForKey:t].unsignedLongLongValue & 0xff) == C_SWAP) { [self peekChrome]; return; }   // still held
     [self showChrome:NO];
 }
@@ -325,8 +331,8 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
     NSString *key = _tap ? @"DmPadHintTap" : @"DmPadHintEdit";
     if (_editing || _padOff || [ud boolForKey:key]) return;
     [ud setBool:YES forKey:key];
-    NSString *s = _tap ? (zh ? @"上方按鈕幾秒後會自動隱藏，點一下畫面外的黑邊或從頂端往下滑可叫出" : @"The buttons at the top hide after a few seconds: tap the black bars or swipe down from the top edge to bring them back")
-                       : (zh ? @"長按上方的「2D / 3D」按鈕，可調整虛擬搖桿的位置、大小與模式" : @"Hold the 2D / 3D button at the top to move, resize or change the touch controls");
+    NSString *s = _tap ? (zh ? @"點黑邊叫出上方按鈕" : @"Tap the black bars for the buttons")
+                       : (zh ? @"長按「2D / 3D」調整虛擬搖桿" : @"Hold 2D / 3D to edit the touch controls");
     __weak DmGamepad *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [weakSelf toast:s]; });
 }
@@ -334,7 +340,7 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
 // ---- Layout (points; computed inside the safe area) ----
 - (CGRect)safe { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
 - (CGRect)corner { UIEdgeInsets i = self.safeAreaInsets; i.left *= K_CORNER_IN; i.right *= K_CORNER_IN; return UIEdgeInsetsInsetRect(self.bounds, i); }   // the rectangle the bottom-corner controls use
-- (CGFloat)u { return MIN(self.bounds.size.height / 430.0, 1.3) * g_touch_scale; }   // 1 = 430 points tall (iPhone Pro Max landscape)
+- (CGFloat)u { return MIN(self.bounds.size.height / 430.0, 1.3) * g_touch_scale * (_scaleAll > 0 ? _scaleAll : 1); }   // 1 = 430 points tall (iPhone Pro Max landscape)
 static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
 // Each group's place is its default place, moved by its offset; its members spread from the group's anchor by its scale (shell_adjust below)
 - (CGPoint)off:(int)g { CGFloat u = self.u; return CGPointMake(_adj[g].dx * u, _adj[g].dy * u); }
@@ -345,6 +351,7 @@ static CGPoint spread(CGPoint anchor, CGPoint p, CGFloat s, CGPoint off) { retur
 - (CGFloat)faceGap { return K_FACE_GAP * self.u * _adj[G_FACE].s; }
 - (CGFloat)faceR { return K_FACE_R * self.u * _adj[G_FACE].s; }
 - (CGPoint)facePos:(int)b { CGPoint c = self.faceCenter; CGFloat g = self.faceGap;
+    if (_xbox) switch (b) { case B_A: return CGPointMake(c.x, c.y + g); case B_B: return CGPointMake(c.x + g, c.y); case B_X: return CGPointMake(c.x - g, c.y); default: return CGPointMake(c.x, c.y - g); }
     switch (b) { case B_A: return CGPointMake(c.x + g, c.y); case B_B: return CGPointMake(c.x, c.y + g); case B_X: return CGPointMake(c.x, c.y - g); default: return CGPointMake(c.x - g, c.y); } }
 - (CGPoint)stickHome { CGRect s = self.corner; return addp(side(s, 0, K_STICK_X * self.u, CGRectGetMaxY(s) - K_PAD_Y * self.u), [self off:G_STICK]); }   // the left stick's ring centre at rest
 - (CGPoint)stickCentre:(int)i { return i ? _rCentre : (_floatStick && _stick[0]) ? _lCentre : self.stickHome; }
@@ -398,8 +405,16 @@ static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
     return -1;
 }
 - (BOOL)inSwap:(CGPoint)p { return !_chromeHidden && dist(p, self.swapCenter) <= K_SWAP_R * self.u * 1.6; }
-- (CGPoint)qrCenter { CGPoint c = self.swapCenter; return CGPointMake(c.x, c.y + 2.6 * K_SWAP_R * self.u); }
-- (BOOL)inQR:(CGPoint)p { return !_qr.hidden && !_chromeHidden && dist(p, self.qrCenter) <= K_SWAP_R * self.u * 1.6; }
+- (CGPoint)homeCenter { CGPoint c = self.swapCenter; return CGPointMake(c.x, c.y + 2.6 * K_SWAP_R * self.u); }
+- (BOOL)inHome:(CGPoint)p { return !_chromeHidden && !_editing && dist(p, self.homeCenter) <= K_SWAP_R * self.u * 1.6; }
+- (void)homeTapped {   // Home as player 1 pressed it (front_ios.m opens or closes the menu); the key lights up for a moment
+    [_touchFeedback impactOccurred]; [_touchFeedback prepare];
+    _homeHeld = YES; [self refresh];
+    __weak DmGamepad *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ DmGamepad *v = weakSelf; if (v) { v->_homeHeld = NO; [v refresh]; } });
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @1}];
+    if (_tap) [self peekChrome];
+}
 - (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count)
     uint64_t m = 0; CGFloat r = self.faceR * 1.25;
     for (int b = B_A; b <= B_Y; b++) if (dist(p, [self facePos:b]) <= r) m |= 1ull << b;
@@ -484,7 +499,7 @@ static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
         CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
         if ([self inSwap:p]) { [_owner setObject:@(C_SWAP) forKey:t]; [self swapHoldStart]; continue; }
-        if ([self inQR:p]) { [self showQR]; continue; }
+        if ([self inHome:p]) { [self homeTapped]; continue; }
         if (_tap) {
             if (!CGRectContainsPoint(self.picture, p)) { if (_chromeHidden) [self peekChrome]; else [self showChrome:NO]; continue; }   // the black bars: show / hide the buttons
             if (_chromeHidden && p.y - CGRectGetMinY(self.bounds) <= K_EDGE) { _edgeTouch = t; _edgeStart = p; }   // may become a swipe down from the top edge
@@ -588,14 +603,13 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
             CGPoint c = [self clickCenter:b]; setPath(_key[b], circlePath(c, [self clickR:b])); placeLabel(_label[b], c, 13 * u * gs);
         } else {
             CGRect rc = [self pillRect:b];
-            setPath(_key[b], CGPathCreateWithRoundedRect(rc, rc.size.height / 2, rc.size.height / 2, NULL)); placeLabel(_label[b], CGPointMake(CGRectGetMidX(rc), CGRectGetMidY(rc)), 18 * u * gs);
+            setPath(_key[b], CGPathCreateWithRoundedRect(rc, rc.size.height * 0.34, rc.size.height * 0.34, NULL)); placeLabel(_label[b], CGPointMake(CGRectGetMidX(rc), CGRectGetMidY(rc)), 18 * u * gs);   // a rounded rectangle, not a capsule (docs/DESIGN.zh-TW.md)
         }
     }
     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
     for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u * _adj[G_DPAD].s, K_ARM_IN * u * _adj[G_DPAD].s, arms[i].angle, 6 * u));
     CGPoint sc = self.swapCenter; setPath(_swap, circlePath(sc, K_SWAP_R * u)); placeLabel(_swapLabel, sc, 12 * u);
-    _qr.hidden = _qrLabel.hidden = !getenv("DM_PHONE_PADS_LIVE");   // only while the phone server runs
-    CGPoint qc = self.qrCenter; setPath(_qr, circlePath(qc, K_SWAP_R * u)); placeLabel(_qrLabel, qc, 10 * u);
+    CGPoint hc = self.homeCenter; setPath(_home, circlePath(hc, K_SWAP_R * u)); placeLabel(_homeLabel, hc, 15 * u);
     CGFloat R = [self stickR:0]; _ring.bounds = CGRectMake(0, 0, 2 * R, 2 * R); setPath(_ring, circlePath(CGPointMake(R, R), R));   // placed by refresh (a floating stick moves)
     CGFloat k = K_KNOB_R * u * _adj[G_STICK].s; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
     setPath(_knob, circlePath(CGPointMake(k, k), k));
@@ -613,6 +627,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     for (int b = 0; b < B_N; b++) { BOOL on = (all >> b) & 1;
         _key[b].fillColor = (on ? k_on : k_idle).CGColor; _label[b].foregroundColor = (on ? k_textOn : k_text).CGColor; }
     _swap.fillColor = (_swapHeld ? k_on : k_idle).CGColor; _swapLabel.foregroundColor = (_swapHeld ? k_textOn : k_text).CGColor;
+    _home.fillColor = (_homeHeld ? k_on : k_idle).CGColor; _homeLabel.foregroundColor = (_homeHeld ? k_textOn : k_text).CGColor;
     CGPoint h = [self stickCentre:0], o = [self knobOffset:0];
     _ring.position = h;
     _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
@@ -644,7 +659,9 @@ static NSString *groupName(int g, BOOL zh) {
     if (!_editing) return;
     _editing = NO; _sel = -1;
     [_editGroup removeAllObjects]; [_editPrev removeAllObjects];
-    [_editPanel removeFromSuperview]; _editPanel = nil; _panelX = _panelY = nil;
+    UIView *p = _editPanel; _editPanel = nil; _panelX = _panelY = nil;
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ p.alpha = 0; p.transform = CGAffineTransformMakeScale(0.94, 0.94); }
+                     completion:^(BOOL f) { (void)f; [p removeFromSuperview]; }];
     [self saveAdj]; [self applyLayout]; [self setNeedsLayout];
 }
 - (int)groupAt:(CGPoint)p {
@@ -690,39 +707,67 @@ static NSString *groupName(int g, BOOL zh) {
 - (void)editEnded:(NSSet<UITouch *> *)ts {
     for (UITouch *t in ts) { [_editGroup removeObjectForKey:t]; [_editPrev removeObjectForKey:t]; }
 }
+// The app's card look (the Home menu's, front_ios.m): frosted glass, a hairline edge, a soft shadow; it springs in from a little smaller
+static UIView *glassCard(void) {
+    UIView *p = [UIView new];
+    p.layer.cornerRadius = 24; p.layer.cornerCurve = kCACornerCurveContinuous;
+    p.layer.shadowColor = UIColor.blackColor.CGColor; p.layer.shadowOpacity = 0.4; p.layer.shadowRadius = 24; p.layer.shadowOffset = CGSizeMake(0, 10);
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    g.translatesAutoresizingMaskIntoConstraints = NO; g.layer.cornerRadius = 24; g.layer.cornerCurve = kCACornerCurveContinuous; g.clipsToBounds = YES;
+    g.layer.borderWidth = 1; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    g.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.5];
+    [p addSubview:g];
+    [NSLayoutConstraint activateConstraints:@[[g.topAnchor constraintEqualToAnchor:p.topAnchor], [g.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
+        [g.leadingAnchor constraintEqualToAnchor:p.leadingAnchor], [g.trailingAnchor constraintEqualToAnchor:p.trailingAnchor]]];
+    return p;
+}
+static void springIn(UIView *v) {
+    v.alpha = 0; v.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ v.alpha = 1; v.transform = CGAffineTransformIdentity; } completion:nil];
+}
 static UIStackView *row(NSArray<UIView *> *v) { UIStackView *s = [[UIStackView alloc] initWithArrangedSubviews:v]; s.axis = UILayoutConstraintAxisHorizontal; s.spacing = 10; s.alignment = UIStackViewAlignmentCenter; return s; }
 static UILabel *text(NSString *s, CGFloat size, CGFloat alpha) { UILabel *l = [UILabel new]; l.text = s; l.font = [UIFont systemFontOfSize:size weight:UIFontWeightMedium]; l.textColor = [UIColor colorWithWhite:1 alpha:alpha]; l.numberOfLines = 0; return l; }
 static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:s forState:UIControlStateNormal];
     b.titleLabel.font = [UIFont systemFontOfSize:16 weight:main ? UIFontWeightBold : UIFontWeightMedium];
-    [b setTitleColor:main ? UIColor.blackColor : UIColor.whiteColor forState:UIControlStateNormal];
-    b.backgroundColor = main ? [UIColor colorWithRed:0.35 green:0.75 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.15];
-    b.layer.cornerRadius = 10; [b.heightAnchor constraintEqualToConstant:38].active = YES;
+    [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    b.backgroundColor = main ? [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1] : [UIColor colorWithWhite:1 alpha:0.12];
+    b.layer.cornerRadius = 14; b.layer.cornerCurve = kCACornerCurveContinuous; [b.heightAnchor constraintEqualToConstant:44].active = YES;
     [b addTarget:target action:action forControlEvents:UIControlEventTouchUpInside]; return b;
+}
+static UISegmentedControl *segments(NSArray<NSString *> *items, NSInteger sel, id target, SEL action) {   // two choices, the chosen one in the accent colour
+    UISegmentedControl *c = [[UISegmentedControl alloc] initWithItems:items];
+    c.selectedSegmentTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1];
+    [c setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]} forState:UIControlStateSelected];
+    [c setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.75]} forState:UIControlStateNormal];
+    c.selectedSegmentIndex = sel; [c addTarget:target action:action forControlEvents:UIControlEventValueChanged]; return c;
 }
 - (void)buildPanel {   // a card in the middle of the screen (where the controls are not); it can be dragged away
     BOOL zh = shell_zh_hant();
-    UIView *p = [UIView new]; p.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92]; p.layer.cornerRadius = 18;
-    UILabel *title = text(zh ? @"調整虛擬搖桿" : @"Edit touch controls", 18, 1); title.font = [UIFont boldSystemFontOfSize:18];
-    UILabel *hint = text(zh ? @"拖曳按鍵移動，雙指捏合縮放；這張卡也能拖開" : @"Drag a group to move it, pinch to resize; this card can be dragged too", 13, 0.6);
-    _stickSeg = [[UISegmentedControl alloc] initWithItems:zh ? @[@"固定搖桿", @"浮動搖桿"] : @[@"Fixed stick", @"Floating stick"]];
-    _stickSeg.selectedSegmentIndex = _floatStick ? 1 : 0; [_stickSeg addTarget:self action:@selector(stickModeChanged) forControlEvents:UIControlEventValueChanged];
-    UILabel *stickNote = text(zh ? @"浮動：左半邊畫面哪裡按下，搖桿就從哪裡開始" : @"Floating: the stick starts wherever a finger lands in the left half", 12, 0.5);
-    _alphaSlider = [UISlider new]; _alphaSlider.minimumValue = 0.1; _alphaSlider.maximumValue = 1; _alphaSlider.value = _alpha;
+    UIView *p = glassCard();
+    UILabel *title = text(zh ? @"調整虛擬搖桿" : @"Edit touch controls", 20, 1); title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+    UILabel *hint = text(zh ? @"拖曳移動，雙指縮放" : @"Drag to move, pinch to resize", 13, 0.6);
+    _stickSeg = segments(zh ? @[@"固定搖桿", @"浮動搖桿"] : @[@"Fixed stick", @"Floating stick"], _floatStick ? 1 : 0, self, @selector(stickModeChanged));
+    _faceSeg = segments(zh ? @[@"Switch 配置", @"Xbox 配置"] : @[@"Switch layout", @"Xbox layout"], _xbox ? 1 : 0, self, @selector(faceChanged));
+    _scaleSlider = [UISlider new]; _scaleSlider.minimumTrackTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; _scaleSlider.minimumValue = 0.7; _scaleSlider.maximumValue = 1.4; _scaleSlider.value = _scaleAll;
+    [_scaleSlider addTarget:self action:@selector(scaleAllChanged) forControlEvents:UIControlEventValueChanged];
+    _alphaSlider = [UISlider new]; _alphaSlider.minimumTrackTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; _alphaSlider.minimumValue = 0.1; _alphaSlider.maximumValue = 1; _alphaSlider.value = _alpha;
     [_alphaSlider addTarget:self action:@selector(alphaChanged) forControlEvents:UIControlEventValueChanged];
     _selName = text(@"", 15, 0.9); _selName.font = [UIFont boldSystemFontOfSize:15];
-    _sizeSlider = [UISlider new]; _sizeSlider.minimumValue = K_SCALE_MIN; _sizeSlider.maximumValue = K_SCALE_MAX;
+    _sizeSlider = [UISlider new]; _sizeSlider.minimumTrackTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; _sizeSlider.minimumValue = K_SCALE_MIN; _sizeSlider.maximumValue = K_SCALE_MAX;
     [_sizeSlider addTarget:self action:@selector(sizeChanged) forControlEvents:UIControlEventValueChanged];
-    _hideSwitch = [UISwitch new]; [_hideSwitch addTarget:self action:@selector(hideChanged) forControlEvents:UIControlEventValueChanged];
-    UILabel *alphaL = text(zh ? @"透明度" : @"Opacity", 14, 0.8), *sizeL = text(zh ? @"大小" : @"Size", 14, 0.8), *hideL = text(zh ? @"隱藏" : @"Hide", 14, 0.8);
-    for (UILabel *l in @[alphaL, sizeL]) [l.widthAnchor constraintEqualToConstant:52].active = YES;
+    _hideSwitch = [UISwitch new]; _hideSwitch.onTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; [_hideSwitch addTarget:self action:@selector(hideChanged) forControlEvents:UIControlEventValueChanged];
+    UILabel *alphaL = text(zh ? @"透明度" : @"Opacity", 14, 0.8), *allL = text(zh ? @"整體大小" : @"All sizes", 14, 0.8), *sizeL = text(zh ? @"大小" : @"Size", 14, 0.8), *hideL = text(zh ? @"隱藏" : @"Hide", 14, 0.8);
+    for (UILabel *l in @[alphaL, allL, sizeL]) [l.widthAnchor constraintEqualToConstant:64].active = YES;
     UIStackView *buttons = row(@[button(zh ? @"重設這個版面" : @"Reset layout", NO, self, @selector(resetAdj)), button(zh ? @"完成" : @"Done", YES, self, @selector(exitEdit))]);
     buttons.distribution = UIStackViewDistributionFillEqually; buttons.alignment = UIStackViewAlignmentFill;
-    UIStackView *st = [[UIStackView alloc] initWithArrangedSubviews:@[title, hint, _stickSeg, stickNote, row(@[alphaL, _alphaSlider]), _selName, row(@[sizeL, _sizeSlider, hideL, _hideSwitch]), buttons]];
+    // whole pad first (stick mode, button layout, size, opacity), then the selected group (its size, hidden), then reset and done
+    UIStackView *st = [[UIStackView alloc] initWithArrangedSubviews:@[title, hint, _stickSeg, _faceSeg, row(@[allL, _scaleSlider]), row(@[alphaL, _alphaSlider]), _selName, row(@[sizeL, _sizeSlider, hideL, _hideSwitch]), buttons]];
     st.axis = UILayoutConstraintAxisVertical; st.spacing = 10; st.alignment = UIStackViewAlignmentFill; st.translatesAutoresizingMaskIntoConstraints = NO;
-    [st setCustomSpacing:4 afterView:title]; [st setCustomSpacing:4 afterView:_stickSeg]; [st setCustomSpacing:16 afterView:stickNote];
+    [st setCustomSpacing:4 afterView:title]; [st setCustomSpacing:14 afterView:hint]; [st setCustomSpacing:16 afterView:_alphaSlider.superview];
     [p addSubview:st];
-    const CGFloat W = MIN(340, self.bounds.size.width - 32), pad = 18;
+    const CGFloat W = MIN(360, self.bounds.size.width - 32), pad = 22;
     [NSLayoutConstraint activateConstraints:@[[st.topAnchor constraintEqualToAnchor:p.topAnchor constant:pad], [st.leadingAnchor constraintEqualToAnchor:p.leadingAnchor constant:pad],
         [st.trailingAnchor constraintEqualToAnchor:p.trailingAnchor constant:-pad], [st.bottomAnchor constraintEqualToAnchor:p.bottomAnchor constant:-pad]]];
     // Auto Layout sizes the card from its contents when it is laid out (a height measured beforehand came out short and cut the buttons off); dragging moves its centre
@@ -732,6 +777,7 @@ static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     _panelX = [p.centerXAnchor constraintEqualToAnchor:self.centerXAnchor]; _panelY = [p.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
     [NSLayoutConstraint activateConstraints:@[[p.widthAnchor constraintEqualToConstant:W], _panelX, _panelY]];
     [self updatePanel];
+    springIn(p);
 }
 - (void)dragPanel:(UIPanGestureRecognizer *)g {
     CGPoint d = [g translationInView:self]; _panelX.constant += d.x; _panelY.constant += d.y;
@@ -748,50 +794,15 @@ static UIButton *button(NSString *s, BOOL main, id target, SEL action) {
     if (_sel >= 0) { _sizeSlider.value = _adj[_sel].s; _hideSwitch.on = _adj[_sel].hide; }
 }
 - (void)stickModeChanged { _floatStick = _stickSeg.selectedSegmentIndex == 1; [self saveAdj]; }
+- (void)faceChanged { _xbox = _faceSeg.selectedSegmentIndex == 1; [self saveAdj]; [self setNeedsLayout]; }
+- (void)scaleAllChanged { _scaleAll = _scaleSlider.value; [self setNeedsLayout]; }
 - (void)alphaChanged { _alpha = _alphaSlider.value; [CATransaction begin]; [CATransaction setDisableActions:YES]; _controls.opacity = g_touch_opacity * _alpha; [CATransaction commit]; }
 - (void)sizeChanged { if (_sel < 0) return; _adj[_sel].s = _sizeSlider.value; [self setNeedsLayout]; }
 - (void)hideChanged { if (_sel < 0) return; _adj[_sel].hide = _hideSwitch.on; [self applyLayout]; }
-- (void)resetAdj { for (int g = 0; g < G_N; g++) _adj[g] = (pad_adj){0, 0, 1, NO}; [self applyLayout]; [self updatePanel]; [self setNeedsLayout]; }
+- (void)resetAdj { for (int g = 0; g < G_N; g++) _adj[g] = (pad_adj){0, 0, 1, NO}; _scaleAll = 1; _scaleSlider.value = 1; [self applyLayout]; [self updatePanel]; [self setNeedsLayout]; }
 
-// ---- The launcher's touch-control style and the phone QR code card ----
+// ---- The launcher's touch-control style ----
 - (void)applyStyle { if (!_padOff) _controls.opacity = g_touch_opacity * _alpha; [self setNeedsLayout]; }
-int phone_pads_url(char *out, size_t cap);
-- (void)showQR {   // a card over the game with the phone gamepads' QR code and address; a tap anywhere closes it
-    if (_qrOverlay) return;
-    char url[96]; if (!phone_pads_url(url, sizeof url)) return;
-    NSString *u = [NSString stringWithUTF8String:url];
-    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[u dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
-    CIImage *ci = f.outputImage; CGImageRef cg = ci ? [[CIContext context] createCGImage:ci fromRect:ci.extent] : NULL;
-    if (!cg) return;
-    BOOL zh = shell_zh_hant();
-    UIView *o = [[UIView alloc] initWithFrame:self.bounds]; o.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    o.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
-    UIView *card = [UIView new]; card.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.96]; card.layer.cornerRadius = 20; card.translatesAutoresizingMaskIntoConstraints = NO;
-    UIImageView *img = [[UIImageView alloc] initWithImage:[UIImage imageWithCGImage:cg]]; CGImageRelease(cg);
-    img.layer.magnificationFilter = kCAFilterNearest; img.backgroundColor = UIColor.whiteColor; img.contentMode = UIViewContentModeScaleAspectFit; img.translatesAutoresizingMaskIntoConstraints = NO;
-    img.layer.cornerRadius = 8; img.layer.borderColor = UIColor.whiteColor.CGColor; img.layer.borderWidth = 8; img.clipsToBounds = YES;
-    UILabel *title = [UILabel new]; title.text = zh ? @"用手機掃描加入遊戲" : @"Scan with a phone to join"; title.font = [UIFont boldSystemFontOfSize:20]; title.textColor = UIColor.whiteColor;
-    UILabel *addr = [UILabel new]; addr.text = u; addr.font = [UIFont monospacedSystemFontOfSize:16 weight:UIFontWeightRegular]; addr.textColor = [UIColor colorWithWhite:1 alpha:0.85];
-    UILabel *hint = [UILabel new]; hint.text = zh ? @"點一下任意處關閉" : @"Tap anywhere to close"; hint.font = [UIFont systemFontOfSize:13]; hint.textColor = [UIColor colorWithWhite:1 alpha:0.55];
-    UIStackView *st = [[UIStackView alloc] initWithArrangedSubviews:@[title, img, addr, hint]]; st.axis = UILayoutConstraintAxisVertical; st.alignment = UIStackViewAlignmentCenter; st.spacing = 12;
-    st.translatesAutoresizingMaskIntoConstraints = NO;
-    [card addSubview:st]; [o addSubview:card];
-    CGFloat side = MIN(220, self.bounds.size.height * 0.45);
-    [NSLayoutConstraint activateConstraints:@[
-        [img.widthAnchor constraintEqualToConstant:side], [img.heightAnchor constraintEqualToConstant:side],
-        [st.topAnchor constraintEqualToAnchor:card.topAnchor constant:20], [st.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
-        [st.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:28], [st.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-28],
-        [card.centerXAnchor constraintEqualToAnchor:o.centerXAnchor], [card.centerYAnchor constraintEqualToAnchor:o.centerYAnchor]]];
-    [o addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideQR)]];
-    o.alpha = 0; [self addSubview:o]; _qrOverlay = o;
-    [UIView animateWithDuration:0.2 animations:^{ o.alpha = 1; }];
-    LOG("front end: phone QR code shown (%s)", url);
-}
-- (void)hideQR {
-    UIView *o = _qrOverlay; _qrOverlay = nil;
-    [UIView animateWithDuration:0.2 animations:^{ o.alpha = 0; } completion:^(BOOL done) { (void)done; [o removeFromSuperview]; }];
-}
-
 // ---- Physical controllers and phones ----
 // Each controller is a player of its own, from app launch: shell_players.m reads them and takes their players from the shared slot table (shell_slots.h), as phone_pads.c
 // does for the phones. Here they only hide the touch gamepad while one plays: a tap on the screen shows it again for PEEK_SECONDS after the last touch (the iPad may

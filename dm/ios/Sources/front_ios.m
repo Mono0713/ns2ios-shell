@@ -1,8 +1,13 @@
 // iOS front end (the iOS implementation of front.h): a centered 16:9 Metal view (black bars on both sides) + a full-screen virtual gamepad layer (DmGamepad.m, controls drawn over the picture).
+// A TV on the iPad's USB-C / HDMI adapter (an external display scene, DmTvSceneDelegate) takes the game's picture once the game starts: the picture fills the TV's own
+// screen and its resolution instead of the mirrored iPad screen (whose 4:3 shape left bars all round), and the touch controls stay on the iPad. A Home button (a
+// controller's, − and + together, a phone page's, the iPad's Menu button while the picture is on the TV) opens the menu over the paused game: continue, or close the
+// game to choose another (one process runs one game: the host maps the game's program at fixed addresses for good, and iOS lets no app start itself again).
 // The host runs on the big-stack thread started by main.m; front_run runs the guest directly on the calling thread.
 #import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
+#import <CoreImage/CoreImage.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
 #include <os/proc.h>
@@ -10,6 +15,8 @@
 #include "hle.h"
 #include "dm.h"
 #include "haptics_apple.h"
+#include "dm_input.h"
+#include "shell_slots.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
@@ -23,9 +30,46 @@ void dm_show_picker(void *view_controller, void (*done)(void));   // GamePicker.
 int shell_game_unchoose(void);   // main.m: forget the chosen game before it loads (0 once it has started loading)
 
 static CAMetalLayer *g_layer;
+static UIWindow *g_tv;            // the TV's window while one is connected (nil otherwise); it shows the game once the game view exists
+static UIWindowScene *g_tv_scene; // the TV's scene: the window is made only when the game starts, so the picker and the launcher stay mirrored on the TV until then
+// Picture: TV / iPad, the Home menu's choice while a TV is connected (kept for the device): the iPad keeps the game, and the TV window steps aside (hidden)
+static BOOL video_pref_ipad(void) { return [NSUserDefaults.standardUserDefaults boolForKey:@"DMVideoOnIPad"]; }
+static BOOL tv_on(void) { return g_tv && !g_tv.hidden; }   // the game's picture is on the TV now
+static BOOL zh_ui(void) {         // Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
+    NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
+    return [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
+}
+// How much bigger the views over the picture are drawn on a screen larger than an iPad's: a TV's window is often 1920 or 3840 points across at
+// scale 1, where a card sized for the iPad came out a fraction of the picture
+static CGFloat ui_scale(UIView *root) {
+    CGSize b = root.bounds.size; if (b.width <= 0 || b.height <= 0) return 1;
+    return MAX(1.0, MIN(b.width / 1194.0, b.height / 834.0));
+}
+static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare step's progress and the Home menu: over the picture, wherever it is
+static UIView *overlay_root(void);
+static void home_menu_toggle(void);
+static void home_menu_relayout(void);
+static int g_menu_page;   // 0 main, 1 players / who is 1P, 2 join (QR)
+static int g_menu_anim;   // how the next drawn card comes in: 0 at once, 1 opening, 2 next page, 3 page back
+static void menu_page(int page, int sel);
+static UIImage *phones_qr(NSString **url_out);
+static NSArray<NSString *> *audio_row(void);
+static NSArray<NSString *> *video_row(void);
+static void home_menu_watch(void);
+static UIView *tv_panel(CGRect frame);
+void front_ios_audio_session(void);
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
 static UILabel *front_ios_fps_label(void);
+static NSString *game_name(void);
+
+// A view that lays itself out with a block (the TV panel's cards follow the iPad's size and orientation)
+@interface DmLayoutView : UIView
+@property (nonatomic, copy) void (^layout)(UIView *v);
+@end
+@implementation DmLayoutView
+- (void)layoutSubviews { [super layoutSubviews]; if (self.layout) self.layout(self); }
+@end
 
 @interface DmGameView : UIView
 @end
@@ -43,17 +87,27 @@ static UILabel *front_ios_fps_label(void);
 - (void)layoutSubviews {
     [super layoutSubviews];
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
+    // The screen the view is on: the iPad's at its native scale; a TV's capped at 1920 pixels across (the game draws at 720p or 1080p, and a 4K drawable would only
+    // cost the upscale four times the pixels)
+    UIScreen *scr = self.window.windowScene.screen ?: UIScreen.mainScreen;
+    CGFloat sc = scr.nativeScale > 0 ? scr.nativeScale : 1;
+    if (self.window && self.window == g_tv && self.bounds.size.width > 0) sc = MIN(sc, MAX(1.0, 1920.0 / self.bounds.size.width));
+    if (l.contentsScale != sc) l.contentsScale = sc;
     l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
 }
 @end
 
 @interface DmRootVC : UIViewController
+@property (nonatomic, strong) UIView *stage;   // the game view and the frame-rate counter: in this view, or in the TV's window while a TV is connected
+@property (nonatomic, strong) UIView *tvNote;  // what the iPad shows while the picture is on the TV
+@property (nonatomic, strong) UIButton *menuButton;   // the iPad's way to the menu while the picture is on the TV (touch only, no controller needed)
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
 - (void)afterPick;
+- (void)placeStage;
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
@@ -82,17 +136,20 @@ void front_ios_back_to_picker(void) {
 - (void)startGame {
     if (self.game) return;
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
+    self.stage = [[UIView alloc] initWithFrame:self.view.bounds]; self.stage.backgroundColor = UIColor.blackColor;
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
-    [self.view addSubview:self.game];
+    [self.stage addSubview:self.game]; [self.view addSubview:self.stage];
     g_layer = (CAMetalLayer *)self.game.layer;
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     dm_haptics_apple_init();
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
-    self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
-    if (self.fps) [self.view addSubview:self.fps];
-    loading_show(self.view);   // under the shader-preparation screen, which front_progress adds on top when it runs
+    self.fps = front_ios_fps_label();   // on the picture: the pad hides while a controller is connected
+    if (self.fps) [self.stage addSubview:self.fps];
+    [self placeStage];   // on the TV when one is connected
+    home_menu_watch();
+    loading_show(overlay_root());   // under the shader-preparation screen, which front_progress adds on top when it runs
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     run_watch_start();
@@ -100,13 +157,213 @@ void front_ios_back_to_picker(void) {
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    CGRect b = self.view.bounds; if (!self.game) return;
-    CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
+    [self layoutStage];
+    if (self.menuButton) { UIEdgeInsets in = self.view.safeAreaInsets; self.menuButton.frame = tv_on() ? CGRectMake(MAX(32, in.left), MAX(32, in.top) + 8, 104, 44) : CGRectMake(floor(self.view.bounds.size.width / 2) - 22, self.view.bounds.size.height - MAX(12, in.bottom) - 44, 44, 44); }   // handheld: bottom centre, the one place the touch controls leave free (ZL sits in the top corners, − / + and the layout button at the top centre)
+}
+- (void)layoutStage {
+    if (!self.game || !self.stage.superview) return;
+    self.stage.frame = self.stage.superview.bounds;
+    CGRect b = self.stage.bounds; CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen (the iPad's, or the TV's, which is 16:9 itself)
+    if (w <= 0 || h <= 0) return;
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
     if (self.fps) {   // the game picture's top-left corner, inside the picture, so it reads as part of the game view rather than floating in the black bar
         CGRect g = self.game.frame; self.fps.frame = CGRectMake(CGRectGetMinX(g) + 8, CGRectGetMinY(g) + 8, 60, 20);
     }
+}
+// The game's picture on the TV while one is connected (its window made now), else on the iPad under the touch controls. The Metal layer itself moves with its view,
+// so the graphics backend keeps presenting to the same layer (front_metal_layer); its drawable follows the new size and scale (DmGameView layoutSubviews)
+- (void)placeStage {
+    if (!self.stage) return;
+    if (g_tv_scene && !g_tv && !video_pref_ipad()) {
+        g_tv = [[UIWindow alloc] initWithWindowScene:g_tv_scene];
+        UIViewController *vc = [UIViewController new]; vc.view.backgroundColor = UIColor.blackColor;
+        g_tv.rootViewController = vc; g_tv.hidden = NO;
+        CGSize sz = g_tv_scene.screen.bounds.size;
+        LOG("front end: the game's picture goes to the TV (%.0fx%.0f points, scale %.1f)", sz.width, sz.height, g_tv_scene.screen.nativeScale);
+    }
+    if (g_tv) g_tv.hidden = video_pref_ipad();
+    UIView *dest = tv_on() ? g_tv.rootViewController.view : self.view;
+    if (self.stage.superview != dest) {
+        [self.stage removeFromSuperview];
+        if (dest == self.view) [self.view insertSubview:self.stage atIndex:0]; else [dest addSubview:self.stage];
+        [self layoutStage]; [self.game setNeedsLayout];
+        for (UIView *v in @[g_loading ?: NSNull.null, g_prog ?: NSNull.null, g_menu ?: NSNull.null])   // what covers the picture goes with it
+            if ([v isKindOfClass:UIView.class]) { [v removeFromSuperview]; v.frame = overlay_root().bounds; [overlay_root() addSubview:v]; }
+    }
+    BOOL tv = tv_on(), z = zh_ui();
+    if (tv && !self.tvNote) { self.tvNote = tv_panel(self.view.bounds); [self.view insertSubview:self.tvNote atIndex:0]; }
+    if (!self.menuButton) {   // the menu by touch: "Menu" beside the TV panel, a small translucent ⌂ at the bottom centre over the game in handheld play
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+        b.tintColor = UIColor.whiteColor; b.layer.cornerCurve = kCACornerCurveContinuous;
+        [b addTarget:self action:@selector(menuTapped) forControlEvents:UIControlEventTouchUpInside];
+        self.menuButton = b; [self.view addSubview:b];   // above the pad
+    }
+    [self.menuButton setTitle:tv ? (z ? @" 選單" : @" Menu") : @"⌂" forState:UIControlStateNormal];
+    [self.menuButton setImage:tv ? [UIImage systemImageNamed:@"line.3.horizontal" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]] : nil forState:UIControlStateNormal];
+    self.menuButton.titleLabel.font = [UIFont systemFontOfSize:tv ? 16 : 20 weight:UIFontWeightSemibold];
+    self.menuButton.backgroundColor = [UIColor colorWithWhite:tv ? 1 : 0 alpha:tv ? 0.14 : 0.35];
+    self.menuButton.layer.cornerRadius = tv ? 14 : 12; self.menuButton.alpha = tv ? 1 : 0.6;
+    self.tvNote.hidden = !tv;
+    self.menuButton.hidden = !tv;   // handheld: the touch controls' own ⌂ key (DmGamepad.m) opens the menu, so no loose button over the game
+    [self.view bringSubviewToFront:self.menuButton];
+    [self.view setNeedsLayout];
+    front_ios_audio_session();   // the TV came or went: the sound follows the choice for TV play (audio_on_ipad)
+}
+- (void)menuTapped { home_menu_toggle(); }
+// What the iPad shows while the picture is on the TV: the phones' QR code (friends scan it from the sofa) and who is playing, kept current;
+// the touch controls stay over it while no controller is connected
+static UIColor *player_color(int p) {   // each player's own colour (1-based), the same on every screen of the panel
+    static const uint32_t c[8] = {0x0A84FF, 0xFF453A, 0x30D158, 0xFFD60A, 0xBF5AF2, 0xFF9F0A, 0x40C8E0, 0xFF375F};
+    uint32_t x = c[(p - 1) & 7]; return [UIColor colorWithRed:(x >> 16) / 255.0 green:((x >> 8) & 255) / 255.0 blue:(x & 255) / 255.0 alpha:1];
+}
+static UIView *glass_card(void) {   // a frosted rounded card with a hairline edge
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    g.layer.cornerRadius = 28; g.layer.cornerCurve = kCACornerCurveContinuous; g.clipsToBounds = YES;
+    g.layer.borderWidth = 1; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.1].CGColor;
+    g.contentView.backgroundColor = [UIColor colorWithWhite:1 alpha:0.04];
+    return g;
+}
+static UILabel *panel_label(CGFloat size, UIFontWeight w, CGFloat white) {
+    UILabel *l = [UILabel new]; l.font = [UIFont systemFontOfSize:size weight:w]; l.textColor = [UIColor colorWithWhite:white alpha:1]; return l;
+}
+// What the iPad shows while the picture is on the TV, like a console's second screen: the game and that it plays on the TV, a card to join with a phone
+// (the QR code), the eight player places with who holds each, the time and the battery. Landscape puts the two cards side by side, portrait stacks them
+static UIView *tv_panel(CGRect frame) {
+    BOOL z = zh_ui();
+    DmLayoutView *v = [[DmLayoutView alloc] initWithFrame:frame]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    v.backgroundColor = [UIColor colorWithRed:0.02 green:0.025 blue:0.04 alpha:1]; v.clipsToBounds = YES;
+    // the backdrop: two soft glows drifting slowly
+    CAGradientLayer *g1 = [CAGradientLayer layer], *g2 = [CAGradientLayer layer];
+    g1.type = kCAGradientLayerRadial; g1.colors = @[(id)[UIColor colorWithRed:0.2 green:0.4 blue:1 alpha:0.35].CGColor, (id)UIColor.clearColor.CGColor];
+    g2.type = kCAGradientLayerRadial; g2.colors = @[(id)[UIColor colorWithRed:0.6 green:0.25 blue:0.9 alpha:0.25].CGColor, (id)UIColor.clearColor.CGColor];
+    for (CAGradientLayer *g in @[g1, g2]) { g.startPoint = CGPointMake(0.5, 0.5); g.endPoint = CGPointMake(1, 1); [v.layer addSublayer:g]; }
+    // the header: the game's name and a live tag
+    UILabel *title = panel_label(34, UIFontWeightBold, 1); title.text = game_name(); title.adjustsFontSizeToFitWidth = YES; title.minimumScaleFactor = 0.6;
+    UIView *live = [UIView new]; live.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1]; live.layer.cornerRadius = 10; live.layer.cornerCurve = kCACornerCurveContinuous;
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(12, 9, 8, 8)]; dot.backgroundColor = [UIColor colorWithRed:0.19 green:0.82 blue:0.35 alpha:1]; dot.layer.cornerRadius = 4;
+    CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"opacity"]; pulse.fromValue = @1; pulse.toValue = @0.25; pulse.duration = 1.1; pulse.autoreverses = YES; pulse.repeatCount = HUGE_VALF;
+    [dot.layer addAnimation:pulse forKey:@"pulse"];
+    UILabel *lt = panel_label(13, UIFontWeightSemibold, 0.9); lt.text = z ? @"正在電視上播放" : @"Playing on the TV"; [lt sizeToFit]; lt.frame = CGRectMake(28, 0, lt.bounds.size.width, 26);
+    live.frame = CGRectMake(0, 0, 28 + lt.bounds.size.width + 12, 26); [live addSubview:dot]; [live addSubview:lt];
+    [v addSubview:title]; [v addSubview:live];
+    // the join card: the phones' QR code (phone_pads.c) on white
+    UIView *join = glass_card(); [v addSubview:join];
+    UILabel *jt = panel_label(20, UIFontWeightBold, 1); jt.text = z ? @"用手機加入" : @"Join with a phone";
+    UILabel *js = panel_label(14, UIFontWeightRegular, 0.65); js.text = z ? @"相機掃描，不用裝 App" : @"Scan with the camera, no app needed";
+    UIView *qr = [UIView new]; qr.backgroundColor = UIColor.whiteColor; qr.layer.cornerRadius = 20; qr.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageView *qi = [UIImageView new]; qi.layer.magnificationFilter = kCAFilterNearest; qi.contentMode = UIViewContentModeScaleAspectFit; [qr addSubview:qi];
+    UILabel *ju = [UILabel new]; ju.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular]; ju.textColor = [UIColor colorWithWhite:0.55 alpha:1]; ju.textAlignment = NSTextAlignmentCenter;
+    ju.adjustsFontSizeToFitWidth = YES;
+    NSString *url = nil; qi.image = phones_qr(&url);
+    ju.text = url ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off");
+    for (UIView *x in @[jt, js, qr, ju]) [((UIVisualEffectView *)join).contentView addSubview:x];
+    // the players card: eight places in two columns
+    UIView *pc = glass_card(); [v addSubview:pc];
+    UILabel *pt = panel_label(20, UIFontWeightBold, 1); pt.text = z ? @"玩家" : @"Players";
+    UILabel *pn = panel_label(14, UIFontWeightSemibold, 0.6); pn.textAlignment = NSTextAlignmentRight;
+    UIView *grid = [UIView new];
+    for (UIView *x in @[pt, pn, grid]) [((UIVisualEffectView *)pc).contentView addSubview:x];
+    // the footer: Home is the menu, the time and the battery
+    UIView *key = [UIView new]; key.layer.cornerRadius = 8; key.layer.cornerCurve = kCACornerCurveContinuous; key.layer.borderWidth = 1; key.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
+    UIImageView *ki = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"house.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]]];
+    ki.tintColor = [UIColor colorWithWhite:1 alpha:0.85]; ki.contentMode = UIViewContentModeCenter; [key addSubview:ki];
+    UILabel *kl = panel_label(14, UIFontWeightMedium, 0.6); kl.text = z ? @"選單" : @"Menu";
+    UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:0.85 alpha:1]; clock.textAlignment = NSTextAlignmentRight;
+    UIImageView *bat = [UIImageView new]; bat.contentMode = UIViewContentModeScaleAspectFit; bat.tintColor = [UIColor colorWithWhite:0.85 alpha:1];
+    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium]; batl.textColor = [UIColor colorWithWhite:0.6 alpha:1];
+    for (UIView *x in @[key, kl, clock, bat, batl]) [v addSubview:x];
+    UIDevice.currentDevice.batteryMonitoringEnabled = YES;
+    __weak UILabel *wc = clock, *wbl = batl; __weak UIImageView *wb = bat;
+    void (^tick)(void) = ^{
+        NSDateFormatter *df = [NSDateFormatter new]; df.dateFormat = @"HH:mm"; wc.text = [df stringFromDate:NSDate.date];
+        float lv = UIDevice.currentDevice.batteryLevel; UIDeviceBatteryState st = UIDevice.currentDevice.batteryState;
+        BOOL plug = st == UIDeviceBatteryStateCharging || st == UIDeviceBatteryStateFull;
+        NSString *sym = plug ? @"battery.100.bolt" : lv > 0.8 ? @"battery.100" : lv > 0.55 ? @"battery.75" : lv > 0.3 ? @"battery.50" : lv > 0.12 ? @"battery.25" : @"battery.0";
+        wb.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightRegular]];
+        wb.tintColor = !plug && lv >= 0 && lv <= 0.12 ? [UIColor colorWithRed:1 green:0.27 blue:0.23 alpha:1] : [UIColor colorWithWhite:0.85 alpha:1];
+        wbl.text = lv < 0 ? @"" : [NSString stringWithFormat:@"%d%%", (int)lroundf(lv * 100)];
+    };
+    tick();
+    [NSTimer scheduledTimerWithTimeInterval:15 repeats:YES block:^(NSTimer *t) { if (!wc) { [t invalidate]; return; } tick(); }];
+    // the player places: filled from shell_players.m's list ([player, kind, label, name, xbox]); a newly taken place pops in
+    __weak UIView *wg = grid; __weak UILabel *wpn = pn;
+    __block NSArray *last = @[]; NSMutableSet *held = [NSMutableSet set];
+    void (^fill)(NSArray *) = ^(NSArray *players) {
+        UIView *gr = wg; if (!gr) return; last = players ?: @[];
+        NSMutableDictionary *by = [NSMutableDictionary dictionary];
+        for (NSArray *r in last) if ([r isKindOfClass:NSArray.class] && r.count >= 3) by[@([r[0] intValue])] = r;
+        wpn.text = [NSString stringWithFormat:@"%lu / 8", (unsigned long)by.count];
+        for (UIView *x in gr.subviews) [x removeFromSuperview];
+        CGFloat W = gr.bounds.size.width, H = gr.bounds.size.height, gap = 10, cw = (W - gap) / 2, ch = MIN(64, (H - 3 * gap) / 4);
+        for (int p = 1; p <= 8; p++) {
+            NSArray *r = by[@(p)]; int col = (p - 1) / 4, rowi = (p - 1) % 4;
+            UIView *t = [[UIView alloc] initWithFrame:CGRectMake(col * (cw + gap), rowi * (ch + gap), cw, ch)];
+            t.layer.cornerRadius = 16; t.layer.cornerCurve = kCACornerCurveContinuous;
+            t.backgroundColor = [UIColor colorWithWhite:1 alpha:r ? 0.09 : 0.03];
+            if (!r) { t.layer.borderWidth = 1; t.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.06].CGColor; }
+            UILabel *b = [[UILabel alloc] initWithFrame:CGRectMake(10, (ch - 30) / 2, 40, 30)];
+            b.text = [NSString stringWithFormat:@"%dP", p]; b.textAlignment = NSTextAlignmentCenter; b.font = [UIFont systemFontOfSize:14 weight:UIFontWeightHeavy];
+            b.layer.cornerRadius = 9; b.layer.cornerCurve = kCACornerCurveContinuous; b.layer.masksToBounds = YES;
+            b.backgroundColor = r ? player_color(p) : [UIColor colorWithWhite:1 alpha:0.06]; b.textColor = r ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
+            [t addSubview:b];
+            if (r) {
+                BOOL phone = [r[1] intValue] == 2;
+                UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:phone ? @"iphone" : @"gamecontroller.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]]];
+                ic.tintColor = [UIColor colorWithWhite:1 alpha:0.7]; ic.contentMode = UIViewContentModeCenter; ic.frame = CGRectMake(58, 0, 22, ch); [t addSubview:ic];
+                UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(86, p == 1 ? ch / 2 - 18 : 0, cw - 96, p == 1 ? 20 : ch)];
+                nm.text = [r[2] description]; nm.textColor = UIColor.whiteColor; nm.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; [t addSubview:nm];
+                if (p == 1) {   // player 1 runs the menu
+                    UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(86, ch / 2 + 2, cw - 96, 16)];
+                    m.text = z ? @"操作選單" : @"Runs the menu"; m.textColor = [UIColor colorWithWhite:1 alpha:0.5]; m.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium]; [t addSubview:m];
+                }
+                if (![held containsObject:@(p)]) {   // just joined
+                    t.alpha = 0; t.transform = CGAffineTransformMakeScale(0.85, 0.85);
+                    [UIView animateWithDuration:0.5 delay:0.04 * rowi usingSpringWithDamping:0.7 initialSpringVelocity:0.4 options:0 animations:^{ t.alpha = 1; t.transform = CGAffineTransformIdentity; } completion:nil];
+                }
+            } else {
+                UILabel *e = [[UILabel alloc] initWithFrame:CGRectMake(58, 0, cw - 68, ch)];
+                e.text = z ? @"空位" : @"Open"; e.textColor = [UIColor colorWithWhite:1 alpha:0.25]; e.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; [t addSubview:e];
+            }
+            [gr addSubview:t];
+        }
+        [held removeAllObjects]; [held addObjectsFromArray:by.allKeys];
+    };
+    v.layout = ^(UIView *me) {
+        CGSize S = me.bounds.size; UIEdgeInsets in = me.safeAreaInsets;
+        CGFloat m = 32, L = MAX(m, in.left), R = S.width - MAX(m, in.right), T = MAX(m, in.top) + 8, B = S.height - MAX(24, in.bottom);
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        g1.frame = CGRectMake(-S.width * 0.3, -S.height * 0.4, S.width * 1.1, S.width * 1.1);
+        g2.frame = CGRectMake(S.width * 0.4, S.height * 0.3, S.width * 0.9, S.width * 0.9);
+        [CATransaction commit];
+        title.frame = CGRectMake(L + 124, T, R - L - 124 - 8, 40);   // the Menu button sits at the top left (placeStage)
+        CGRect lf = live.frame; lf.origin = CGPointMake(L + 124, T + 46); live.frame = lf;
+        CGFloat top = T + 96, foot = B - 28, ch = foot - 20 - top;
+        BOOL wide = S.width > S.height;
+        CGRect jf, pf;
+        if (wide) { CGFloat jw = MIN(380, (R - L) * 0.38); jf = CGRectMake(L, top, jw, ch); pf = CGRectMake(L + jw + 20, top, R - L - jw - 20, ch); }
+        else { CGFloat jh = MIN(420, ch * 0.5); jf = CGRectMake(L, top, R - L, jh); pf = CGRectMake(L, top + jh + 20, R - L, ch - jh - 20); }
+        join.frame = jf; pc.frame = pf;
+        CGFloat jw = jf.size.width, qs = MIN(MIN(jw - 64, jf.size.height - 150), 280);
+        jt.frame = CGRectMake(24, 22, jw - 48, 26); js.frame = CGRectMake(24, 50, jw - 48, 20);
+        qr.frame = CGRectMake((jw - qs) / 2, 86, qs, qs); qi.frame = CGRectInset(qr.bounds, 16, 16);
+        ju.frame = CGRectMake(20, 86 + qs + 12, jw - 40, 18);
+        pt.frame = CGRectMake(24, 22, 200, 26); pn.frame = CGRectMake(pf.size.width - 124, 24, 100, 22);
+        CGRect gf = CGRectMake(20, 64, pf.size.width - 40, pf.size.height - 84);
+        if (!CGRectEqualToRect(grid.frame, gf)) { grid.frame = gf; [held addObjectsFromArray:@[@1, @2, @3, @4, @5, @6, @7, @8]]; fill(last); }   // a new size: drawn again with no pop
+        key.frame = CGRectMake(L, foot - 2, 30, 30); ki.frame = key.bounds;
+        kl.frame = CGRectMake(L + 40, foot, 120, 26);
+        batl.frame = CGRectMake(R - 44, foot, 44, 26); bat.frame = CGRectMake(R - 44 - 34, foot, 30, 26);
+        clock.frame = CGRectMake(R - 44 - 34 - 90, foot, 80, 26);
+    };
+    CABasicAnimation *drift = [CABasicAnimation animationWithKeyPath:@"transform.translation"];
+    drift.fromValue = [NSValue valueWithCGSize:CGSizeZero]; drift.toValue = [NSValue valueWithCGSize:CGSizeMake(60, 40)];
+    drift.duration = 9; drift.autoreverses = YES; drift.repeatCount = HUGE_VALF; drift.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [g1 addAnimation:drift forKey:@"drift"];
+    CABasicAnimation *drift2 = [drift copy]; drift2.toValue = [NSValue valueWithCGSize:CGSizeMake(-50, -30)]; drift2.duration = 11; [g2 addAnimation:drift2 forKey:@"drift"];
+    [NSNotificationCenter.defaultCenter addObserverForName:@"DMPlayersChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { fill(n.userInfo[@"players"]); }];
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"refresh"}];   // the list now
+    return v;
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
@@ -176,7 +433,6 @@ static UILabel *front_ios_fps_label(void) {
 
 // Loading screen from Play to the game's first frame (front.h front_first_frame): a spinner and a line over the black game view, which otherwise looked like a hang
 // for the seconds the game takes to boot. Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
-static UIView *g_loading;
 static void loading_show(UIView *root) {
     if (g_loading || !root) return;
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
@@ -191,6 +447,11 @@ static void loading_show(UIView *root) {
     l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     l.textAlignment = NSTextAlignmentCenter; l.textColor = [UIColor colorWithWhite:0.72 alpha:1]; l.font = [UIFont systemFontOfSize:15];
     l.text = zh ? @"遊戲載入中…" : @"Loading the game…"; l.tag = 1;
+    CGFloat k = ui_scale(root);   // bigger on a TV
+    if (k > 1) {
+        spin.transform = CGAffineTransformMakeScale(k, k); l.font = [UIFont systemFontOfSize:15 * k];
+        l.frame = CGRectMake(0, CGRectGetMidY(root.bounds) + 24 * k, root.bounds.size.width, 24 * k);
+    }
     [g_loading addSubview:spin]; [g_loading addSubview:l]; [root addSubview:g_loading];
 }
 // The loading screen's line for the current step (main.m: checking shaders, starting the game). Main thread
@@ -225,14 +486,14 @@ void front_first_frame(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; LOG("front end: first frame, loading screen hidden"); });
 }
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
-static UIView *g_prog; static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
+static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
 void front_progress(const char *title, long done, long total) {
     if (!g_layer) return;
     NSString *tt = title ? @(title) : nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!tt) { [g_prog removeFromSuperview]; g_prog = nil; return; }
         if (!g_prog) {
-            UIView *root = g_root.view; if (!root) return;
+            UIView *root = overlay_root(); if (!root) return;
             g_prog = [[UIView alloc] initWithFrame:root.bounds]; g_prog.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             g_prog.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.94];
             UIView *box = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - 320) / 2), floor((root.bounds.size.height - 96) / 2), 320, 96)];
@@ -243,6 +504,7 @@ void front_progress(const char *title, long done, long total) {
             g_prog_count = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, 320, 22)]; g_prog_count.textAlignment = NSTextAlignmentCenter;
             g_prog_count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; g_prog_count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
             [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
+            CGFloat k = ui_scale(root); if (k > 1) box.transform = CGAffineTransformMakeScale(k, k);   // bigger on a TV
             [root addSubview:g_prog];
         }
         g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
@@ -300,13 +562,21 @@ void front_save_failed(int err) {
 // so every callback came up 1.3 ms short and was zero-filled, about 47 gaps per second (crackling; reproducible on the Mac by forcing 1024-frame callbacks: 1999 underruns in 2000 callbacks). Ask for 5 ms and the system picks the nearest it supports;
 // the category stays the default SoloAmbient (silent switch and interrupting other apps' audio behave as before). Set once at boot and again on return to the foreground (the system may reset it after an interruption)
 static int g_session_off;   // the last activation failed (another app or a call still held the session): tried again when the app becomes active
+// Sound on the iPad while the picture is on the TV (the Home menu's Sound row, kept for the device): for a screen with no speakers. iOS sends the sound to the
+// HDMI output with the picture; only the play-and-record category can override that to the built-in speaker (overrideOutputAudioPort), and iOS asks once for
+// the microphone with it (NSMicrophoneUsageDescription): nothing is recorded, and a refusal changes nothing for the sound
+static BOOL audio_on_ipad(void) { return g_tv_scene && [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]; }
 void front_ios_audio_session(void) {
     AVAudioSession *s = AVAudioSession.sharedInstance; NSError *e = nil;
-    if (![s setCategory:AVAudioSessionCategorySoloAmbient error:&e]) LOG("[RED] audio session category could not be set: %s", e.localizedDescription.UTF8String);
+    BOOL ipad = audio_on_ipad();
+    if (ipad ? ![s setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker error:&e]
+             : ![s setCategory:AVAudioSessionCategorySoloAmbient error:&e]) LOG("[RED] audio session category could not be set: %s", e.localizedDescription.UTF8String);
     [s setPreferredSampleRate:48000 error:nil];
     if (![s setPreferredIOBufferDuration:0.005 error:&e]) LOG("[RED] audio session I/O buffer duration could not be set: %s", e.localizedDescription.UTF8String);
     g_session_off = ![s setActive:YES error:&e];
     if (g_session_off) LOG("[RED] audio session activation failed: %s", e.localizedDescription.UTF8String);
+    if (ipad && ![s overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:&e]) LOG("[RED] audio session: the iPad's speaker could not be chosen: %s", e.localizedDescription.UTF8String);
+    if (g_tv_scene) LOG("audio session: sound on the %s while a TV is connected", ipad ? "iPad's speaker" : "TV");
     LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for 5 ms)", s.sampleRate, s.IOBufferDuration * 1000);
 }
 
@@ -339,11 +609,359 @@ void front_ios_focus_event(int ev) {
     switch (ev) {
         case 0: dm_gamepad_reset(); dm_focus_set(2); break;
         case 1: dm_run_mark('g'); UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); break;
-        case 2: dm_run_mark('b'); dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); front_ios_audio_session(); g_audio_bg = 0; front_ios_audio_apply(); dm_focus_set(2); break;
+        case 2: dm_run_mark('b'); dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); front_ios_audio_session(); g_audio_bg = 0; front_ios_audio_apply(); dm_focus_set(2); { void front_ios_menu_repause(void); front_ios_menu_repause(); } break;
         case 3:   // Becoming active again also ends an interruption whose "ended" never came (not every one sends it), and retries a session that would not activate on the way back
             UIApplication.sharedApplication.idleTimerDisabled = YES;
             if (g_audio_intr) { LOG("audio session: active again with no interruption-ended notice; resuming"); g_audio_intr = 0; g_session_off = 1; }
             if (g_session_off) front_ios_audio_session();
-            front_ios_audio_apply(); dm_focus_set(1); break;
+            front_ios_audio_apply(); { int front_ios_menu_open(void); if (!front_ios_menu_open()) dm_focus_set(1); } break;
     }
+}
+
+// ---- The TV (an external display scene) ----
+// Where the views that cover the picture go: the TV's window while it shows the game, else the iPad's root view (over the touch controls)
+static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.view : g_root.view; }
+@interface DmTvSceneDelegate : UIResponder <UIWindowSceneDelegate>
+@end
+@implementation DmTvSceneDelegate
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)o {
+    (void)session; (void)o;
+    if (![scene isKindOfClass:UIWindowScene.class]) return;
+    g_tv_scene = (UIWindowScene *)scene;
+    // Edge to edge: the default (scale) shrinks the picture inside the TV's frame for TVs that crop their edges, which left a black border on the ones that do not
+    g_tv_scene.screen.overscanCompensation = UIScreenOverscanCompensationNone;
+    CGSize sz = g_tv_scene.screen.bounds.size;
+    LOG("front end: TV connected (%.0fx%.0f points, scale %.1f)%s", sz.width, sz.height, g_tv_scene.screen.nativeScale, g_root.game ? "" : "; mirrored until the game starts");
+    [g_root placeStage];   // only once the game view exists: the picker and the launcher stay mirrored until then
+    home_menu_relayout();  // a menu already up gets its TV card and its iPad copy
+}
+- (void)sceneDidDisconnect:(UIScene *)scene {
+    if (scene != g_tv_scene) return;
+    LOG("front end: TV disconnected; the picture is back on the iPad");
+    g_tv.hidden = YES; g_tv_scene = nil;
+    UIWindow *w = g_tv; g_tv = nil;
+    [g_root placeStage];
+    (void)w;   // kept until the stage has left it
+    home_menu_relayout();
+}
+@end
+
+// ---- The Home menu: over the paused game, moved by any player's controller or phone (DMLauncherInput) and by touch ----
+// Paused as on the Switch's HOME menu: out of focus, its sound off, its clock frozen and the next submit held (the same steps as going to the background, which
+// front_ios_focus_event takes; coming back from the background applies the pause again while the menu is up). The steps run on a queue of their own: the
+// graphics suspend waits for the GPU work in flight
+static int g_menu_sel, g_menu_closing;
+static NSArray<NSArray<NSString *> *> *g_menu_rows;   // [title, detail, action]
+static dispatch_queue_t g_pause_q;
+static int g_paused;
+static void game_pause(int on) {
+    if (!g_pause_q) g_pause_q = dispatch_queue_create("dm.home-menu.pause", DISPATCH_QUEUE_SERIAL);
+    dispatch_async(g_pause_q, ^{
+        if (on == g_paused) return;
+        g_paused = on;
+        if (on) { dm_focus_set(2); dm_audio_suspend(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); LOG("front end: game paused for the Home menu"); }
+        else { dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); dm_audio_suspend(0); dm_focus_set(1); LOG("front end: game resumed from the Home menu"); }
+    });
+}
+static NSString *game_name(void) {
+    const char *r = getenv("DM_SHELL_GAME_ROOT");
+    NSData *d = r ? [NSData dataWithContentsOfFile:[@(r) stringByAppendingPathComponent:@"game.json"]] : nil;
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    NSString *n = [j isKindOfClass:NSDictionary.class] ? j[@"name"] : nil;
+    return [n isKindOfClass:NSString.class] && n.length ? n : ([NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"SwitchPad");
+}
+static NSMutableArray<UIView *> *g_menu_cards;   // the card on the TV and the iPad's copy (touch), or only the iPad's
+static UIView *g_menu_ipad;   // the iPad's copy of the menu while g_menu is on the TV
+static unsigned g_menu_gen;   // each opening: a close's late resume does not undo a menu opened again
+// The selection is a pill that slides to the chosen row (a spring), under the rows' text; the chosen row's icon tile lights up
+static void home_menu_draw(void) {
+    for (UIView *card in g_menu_cards) {
+        UIView *pill = [card viewWithTag:50]; if (!pill) continue;
+        for (UIView *row in card.subviews) if (row.tag >= 100) {
+            BOOL on = row.tag - 100 == g_menu_sel;
+            UIView *tile = [row viewWithTag:60];
+            tile.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.1];
+            ((UIImageView *)[tile viewWithTag:61]).tintColor = on ? [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1] : UIColor.whiteColor;
+            ((UILabel *)[row viewWithTag:62]).textColor = on ? [UIColor colorWithWhite:1 alpha:0.85] : [UIColor colorWithWhite:1 alpha:0.5];
+            if (!on) continue;
+            if (pill.alpha == 0) { pill.frame = row.frame; pill.alpha = 1; continue; }   // first placement: no slide
+            [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                             animations:^{ pill.frame = row.frame; } completion:nil];
+            [UIView animateWithDuration:0.08 animations:^{ tile.transform = CGAffineTransformMakeScale(1.12, 1.12); }
+                             completion:^(BOOL f) { (void)f; [UIView animateWithDuration:0.18 animations:^{ tile.transform = CGAffineTransformIdentity; }]; }];
+        }
+    }
+}
+// The game comes back once every button is up: the A that chose Continue would otherwise reach the game as a press (at most a second's wait)
+uint64_t shell_players_held(void);
+static void resume_when_released(unsigned gen, int tries) {
+    if (gen != g_menu_gen) return;   // opened again meanwhile: it stays paused
+    if (shell_players_held() && tries < 20) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ resume_when_released(gen, tries + 1); }); return; }
+    game_pause(0);
+}
+static void home_menu_close(void) {
+    if (!g_menu || g_menu_closing) return;
+    g_menu_closing = 1;
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @0}];
+    UIView *m = g_menu, *mi = g_menu_ipad;
+    NSArray<UIView *> *cards = [g_menu_cards copy];
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        m.alpha = 0; mi.alpha = 0;
+        for (UIView *c in cards) c.transform = CGAffineTransformScale(c.transform, 0.94, 0.94);
+    } completion:^(BOOL f) {
+        (void)f; [m removeFromSuperview]; [mi removeFromSuperview];
+        if (g_menu == m) { g_menu = nil; g_menu_ipad = nil; g_menu_cards = nil; g_menu_closing = 0; }
+    }];
+    resume_when_released(g_menu_gen, 0);
+}
+// Change games leaves Documents/relaunch.txt behind; the next launch takes it (main.m) and the Shortcuts action "SwitchPad 要重開嗎？" (ReopenIntent.swift) answers yes, so an automation on "SwitchPad is closed"
+// brings the app straight back to the picker with nobody touching the iPad; Close the game leaves none, and the next launch removes it (main.m)
+static void home_menu_quit(int relaunch) {
+    if (relaunch) {
+        NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+        [@"change games\n" writeToFile:[doc stringByAppendingPathComponent:@"relaunch.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    BOOL z = zh_ui();
+    for (UIView *card in g_menu_cards) {
+        UIView *keep = [card viewWithTag:1];
+        [UIView transitionWithView:card duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+            for (UIView *v in card.subviews) if (v != keep) [v removeFromSuperview];
+            UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+            spin.color = UIColor.whiteColor; spin.center = CGPointMake(card.bounds.size.width / 2, card.bounds.size.height / 2 - 22); [spin startAnimating]; [card addSubview:spin];
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(24, card.bounds.size.height / 2 + 12, card.bounds.size.width - 48, 30)];
+            l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
+            l.text = relaunch ? (z ? @"正在回到選擇遊戲…" : @"Back to the games…") : (z ? @"正在關閉…" : @"Closing…");   // how a relaunch happens (a Shortcuts automation) is in the README, not on screen
+            [card addSubview:l];
+        } completion:nil];
+    }
+    LOG("front end: Home menu: closing the app to change games");
+    fflush(stderr);
+    // iOS lets no app open itself again, and a process cannot load a second game (its program sits at fixed addresses), so the app ends here and the next
+    // launch shows the picker; 2 s for the line above
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ fflush(stderr); exit(0); });
+}
+static void home_menu_activate(int i) {
+    if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
+    NSString *act = g_menu_rows[i][2];
+    if ([act isEqualToString:@"continue"]) home_menu_close();
+    else if ([act isEqualToString:@"players"]) menu_page(1, 0);
+    else if ([act isEqualToString:@"join"]) menu_page(2, 0);
+    else if ([act isEqualToString:@"back"]) menu_page(0, g_menu_page == 1 ? 1 : 2);
+    else if ([act hasPrefix:@"p1:"]) {   // this player becomes player 1 (the launcher's swap): from now on it runs the menu
+        int p = [[act substringFromIndex:3] intValue];
+        if (p > 1) { LOG("front end: Home menu: player %d becomes player 1", p); [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"swap", @"a": @1, @"b": @(p)}]; }
+        menu_page(1, 0);
+    }
+    else if ([act isEqualToString:@"audio"]) {   // switches at once (the game is paused, its sound resumes on the new output) and stays the choice
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults; [d setBool:![d boolForKey:@"DMAudioOnIPad"] forKey:@"DMAudioOnIPad"];
+        front_ios_audio_session();
+        NSMutableArray *rows = [g_menu_rows mutableCopy]; rows[i] = audio_row(); g_menu_rows = rows;
+        int sel = g_menu_sel; home_menu_relayout(); g_menu_sel = sel; home_menu_draw();
+    } else if ([act isEqualToString:@"video"]) {   // the picture moves at once, the menu with it, and the choice stays
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults; [d setBool:!video_pref_ipad() forKey:@"DMVideoOnIPad"];
+        LOG("front end: picture output -> %s", video_pref_ipad() ? "iPad" : "TV");
+        NSMutableArray *rows = [g_menu_rows mutableCopy]; rows[i] = video_row(); g_menu_rows = rows;
+        [g_root placeStage];
+        int sel = g_menu_sel; home_menu_relayout(); g_menu_sel = sel; home_menu_draw();
+    }
+    else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
+}
+@interface DmMenuTap : NSObject
+@end
+@implementation DmMenuTap
++ (void)tap:(UIButton *)b { g_menu_sel = (int)b.tag - 100; home_menu_draw(); home_menu_activate(g_menu_sel); }
+@end
+static NSString *menu_symbol(NSString *act) {   // each row's SF Symbol
+    NSDictionary *m = @{@"continue": @"play.fill", @"players": @"person.2.fill", @"join": @"qrcode", @"video": @"tv", @"audio": @"speaker.wave.2.fill",
+                        @"change": @"square.grid.2x2.fill", @"quit": @"power", @"back": @"chevron.left"};
+    return m[act] ?: ([act hasPrefix:@"p1:"] ? @"gamecontroller.fill" : @"circle.fill");
+}
+static UIView *home_menu_make(UIView *root) {
+    BOOL z = zh_ui();
+    UIView *menu = [[UIView alloc] initWithFrame:root.bounds];
+    menu.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    CGFloat W = 440, rowH = g_menu_page == 1 ? 52 : 60, gap = g_menu_page == 1 ? 6 : 8, pad = 16, top = 84;
+    NSString *qrURL = nil; UIImage *qr = g_menu_page == 2 ? phones_qr(&qrURL) : nil;
+    if (g_menu_page == 2) top += 250;   // the QR code and its address above the rows
+    CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + 34;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - W) / 2), floor((root.bounds.size.height - H) / 2), W, H)];
+    card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    card.layer.cornerRadius = 26; card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.45; card.layer.shadowRadius = 30; card.layer.shadowOffset = CGSizeMake(0, 14);
+    // the backdrop: frosted glass over the paused game, a hairline edge
+    UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    glass.frame = card.bounds; glass.tag = 1; glass.layer.cornerRadius = 26; glass.layer.cornerCurve = kCACornerCurveContinuous; glass.clipsToBounds = YES;
+    glass.layer.borderWidth = 1; glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    glass.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.55];
+    [card addSubview:glass];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(pad + 4, 20, W - 2 * pad - 8, 28)];
+    t.text = game_name(); t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    // a small tag box: what is going on (a pause glyph and a word)
+    UIView *tag = [[UIView alloc] initWithFrame:CGRectMake(pad + 4, 52, 10, 22)];
+    tag.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; tag.layer.cornerRadius = 7; tag.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageView *pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:9 weight:UIImageSymbolWeightBold]]];
+    pi.tintColor = [UIColor colorWithWhite:0.85 alpha:1]; pi.center = CGPointMake(14, 11); [tag addSubview:pi];
+    UILabel *tl = [[UILabel alloc] init]; tl.text = g_menu_page == 1 ? (z ? @"玩家" : @"Players") : g_menu_page == 2 ? (z ? @"加入玩家" : @"Add players") : (z ? @"已暫停" : @"Paused");
+    tl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; tl.textColor = [UIColor colorWithWhite:0.85 alpha:1]; [tl sizeToFit];
+    tl.frame = CGRectMake(24, 0, tl.bounds.size.width, 22); [tag addSubview:tl];
+    CGRect tf = tag.frame; tf.size.width = 24 + tl.bounds.size.width + 9; tag.frame = tf;
+    [card addSubview:t]; [card addSubview:tag];
+    if (g_menu_page == 2) {   // joining: the QR code on white, and the address
+        UIView *qc = [[UIView alloc] initWithFrame:CGRectMake((W - 200) / 2, 88, 200, 200)];
+        qc.backgroundColor = UIColor.whiteColor; qc.layer.cornerRadius = 18; qc.layer.cornerCurve = kCACornerCurveContinuous;
+        if (qr) { UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectInset(qc.bounds, 14, 14)]; iv.image = qr; iv.layer.magnificationFilter = kCAFilterNearest; iv.contentMode = UIViewContentModeScaleAspectFit; [qc addSubview:iv]; }
+        UILabel *u = [[UILabel alloc] initWithFrame:CGRectMake(pad, 296, W - 2 * pad, 22)]; u.textAlignment = NSTextAlignmentCenter;
+        u.text = qrURL ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off"); u.textColor = [UIColor colorWithWhite:0.8 alpha:1];
+        u.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+        [card addSubview:qc]; [card addSubview:u];
+    }
+    for (NSUInteger i = 0; i < g_menu_rows.count; i++) {   // each row's own faint plate, under the sliding pill
+        UIView *plate = [[UIView alloc] initWithFrame:CGRectMake(pad, top + i * (rowH + gap), W - 2 * pad, rowH)];
+        plate.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05]; plate.layer.cornerRadius = 16; plate.layer.cornerCurve = kCACornerCurveContinuous; plate.userInteractionEnabled = NO;
+        [card addSubview:plate];
+    }
+    UIView *pill = [[UIView alloc] initWithFrame:CGRectZero]; pill.tag = 50; pill.alpha = 0; pill.userInteractionEnabled = NO;
+    pill.backgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; pill.layer.cornerRadius = 16; pill.layer.cornerCurve = kCACornerCurveContinuous;
+    pill.layer.shadowColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12; pill.layer.shadowOffset = CGSizeZero;
+    [card addSubview:pill];
+    CGFloat tileS = rowH == 60 ? 36 : 32;
+    for (NSUInteger i = 0; i < g_menu_rows.count; i++) {
+        UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+        row.frame = CGRectMake(pad, top + i * (rowH + gap), W - 2 * pad, rowH); row.tag = 100 + (NSInteger)i;
+        [row addTarget:DmMenuTap.class action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+        UIView *tile = [[UIView alloc] initWithFrame:CGRectMake(12, (rowH - tileS) / 2, tileS, tileS)]; tile.tag = 60; tile.userInteractionEnabled = NO;
+        tile.layer.cornerRadius = 10; tile.layer.cornerCurve = kCACornerCurveContinuous;
+        UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:menu_symbol(g_menu_rows[i][2]) withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]]];
+        ic.tag = 61; ic.contentMode = UIViewContentModeCenter; ic.frame = tile.bounds; [tile addSubview:ic];
+        CGFloat x = 12 + tileS + 12, tw = W - 2 * pad - x - 12;
+        BOOL two = [g_menu_rows[i][1] length] > 0;
+        UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
+        a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+        UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
+        d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13];
+        [row addSubview:tile]; [row addSubview:a]; [row addSubview:d]; [card addSubview:row];
+    }
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(pad, H - 34, W - 2 * pad, 22)];
+    hint.text = g_menu_page ? (z ? @"A 確定 · B 返回" : @"A select · B back") : (z ? @"A 確定 · B 或 Home 繼續遊戲" : @"A select · B or Home to play");
+    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.4]; hint.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    [card addSubview:hint];
+    CGFloat k = ui_scale(root);
+    CGAffineTransform base = CGAffineTransformMakeScale(k, k);
+    card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
+    [menu addSubview:card]; [root addSubview:menu];
+    [g_menu_cards addObject:card];
+    // coming in: opening pops up from a little smaller and lower (a spring) as the dim fades in; a page slides in from the side it goes to
+    if (g_menu_anim == 1) {
+        menu.backgroundColor = UIColor.clearColor; card.alpha = 0;
+        card.transform = CGAffineTransformTranslate(CGAffineTransformScale(base, 0.9, 0.9), 0, 24);
+        UIColor *dim = [UIColor colorWithWhite:0 alpha:0.55];
+        [UIView animateWithDuration:0.22 animations:^{ menu.backgroundColor = dim; }];
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ card.alpha = 1; card.transform = base; } completion:nil];
+    } else if (g_menu_anim == 2 || g_menu_anim == 3) {
+        card.alpha = 0; card.transform = CGAffineTransformTranslate(base, g_menu_anim == 2 ? 36 : -36, 0);
+        [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.2 options:UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ card.alpha = 1; card.transform = base; } completion:nil];
+    }
+    return menu;
+}
+static void home_menu_build(void) {
+    UIView *root = overlay_root(); if (!root) return;
+    g_menu_cards = [NSMutableArray array];
+    g_menu = home_menu_make(root);
+    if (tv_on() && g_root.view) { g_menu_ipad = home_menu_make(g_root.view); g_menu_ipad.backgroundColor = UIColor.blackColor; }   // the iPad's copy, for touch
+    g_menu_anim = 0;
+    home_menu_draw();
+}
+static void home_menu_relayout(void) {   // the TV came or went while the menu is up: draw it again where the picture is now
+    if (!g_menu || g_menu_closing) return;
+    [g_menu removeFromSuperview]; [g_menu_ipad removeFromSuperview]; g_menu = nil; g_menu_ipad = nil;
+    home_menu_build();
+}
+static NSArray<NSString *> *audio_row(void) {
+    BOOL z = zh_ui(), ipad = [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"];
+    return @[ipad ? (z ? @"聲音輸出：iPad 喇叭" : @"Sound output: iPad speaker") : (z ? @"聲音輸出：電視" : @"Sound output: TV"),
+             z ? @"按 A 切換電視／iPad 喇叭" : @"A switches TV / iPad speaker", @"audio"];
+}
+static NSArray<NSString *> *video_row(void) {
+    BOOL z = zh_ui(), ipad = video_pref_ipad();
+    return @[ipad ? (z ? @"畫面輸出：iPad" : @"Picture output: iPad") : (z ? @"畫面輸出：電視" : @"Picture output: TV"),
+             z ? @"按 A 切換電視／iPad" : @"A switches TV / iPad", @"video"];
+}
+// The menu's pages: 0 the main list, 1 the players (A on one makes it player 1), 2 joining (the phones' QR code)
+static NSArray *menu_rows(int page) {
+    BOOL z = zh_ui();
+    NSMutableArray *rows = [NSMutableArray array];
+    if (page == 1) {
+        shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
+        for (int p = 0; p < DM_PLAYERS; p++) if (info[p].kind != SHELL_SLOT_NONE) {
+            NSString *kind = info[p].kind == SHELL_SLOT_PHONE ? (z ? @"手機" : @"Phone") : (z ? @"手把" : @"Controller");
+            NSString *label = [NSString stringWithUTF8String:info[p].label] ?: @"?";
+            [rows addObject:@[[NSString stringWithFormat:@"P%d  %@ · %@", p + 1, kind, label],
+                              p == 0 ? (z ? @"目前的 1P：操作選單的人" : @"Player 1 now: runs the menu") : (z ? @"按 A 設為 1P（和目前的 1P 對調）" : @"A makes this player 1 (swaps with player 1)"),
+                              [NSString stringWithFormat:@"p1:%d", p + 1]]];
+        }
+        if (!rows.count) [rows addObject:@[z ? @"還沒有手把或手機" : @"No controllers or phones yet", z ? @"iPad 的觸控按鍵是 1P" : @"The iPad's touch controls are player 1", @"back"]];
+        [rows addObject:@[z ? @"返回" : @"Back", @"", @"back"]];
+        return rows;
+    }
+    if (page == 2) { [rows addObject:@[z ? @"返回" : @"Back", z ? @"手機掃描上面的 QR code 就會加入成下一位玩家" : @"A phone that scans the QR code above joins as the next player", @"back"]]; return rows; }
+    const char *ng = getenv("DM_SHELL_GAMES"); BOOL several = ng && atoi(ng) > 1;
+    [rows addObject:@[z ? @"繼續遊戲" : @"Continue", z ? @"回到遊戲" : @"Back to the game", @"continue"]];
+    [rows addObject:@[z ? @"玩家與 1P" : @"Players and player 1", z ? @"看誰是幾號玩家，換人當 1P" : @"Who is which player; choose player 1", @"players"]];
+    [rows addObject:@[z ? @"加入玩家" : @"Add players", z ? @"顯示手機手把的 QR code" : @"Shows the phone controllers' QR code", @"join"]];
+    if (g_tv_scene) { [rows addObject:video_row()]; [rows addObject:audio_row()]; }   // a TV is connected: where the picture and the sound go
+    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"回到選擇遊戲（未存檔進度會遺失）" : @"Back to the game picker (unsaved progress is lost)", @"change"]];
+    [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"結束 SwitchPad（未存檔進度會遺失）" : @"Quits SwitchPad (unsaved progress is lost)", @"quit"]];
+    return rows;
+}
+// g_menu_page declared near the top
+static void menu_page(int page, int sel) {
+    g_menu_anim = page > g_menu_page ? 2 : 3;   // deeper slides in from the right, back from the left
+    g_menu_page = page; g_menu_rows = menu_rows(page); g_menu_sel = MAX(0, MIN(sel, (int)g_menu_rows.count - 1));
+    home_menu_relayout(); home_menu_draw();
+}
+static UIImage *phones_qr(NSString **url_out) {   // the phone controllers' address as a QR code (phone_pads.c); nil while the server is off
+    int phone_pads_url(char *out, size_t cap);
+    char url[96] = ""; if (!phone_pads_url(url, sizeof url)) return nil;
+    if (url_out) *url_out = @(url);
+    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[@(url) dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
+    CIImage *ci = f.outputImage; CGImageRef cg = ci ? [[CIContext context] createCGImage:ci fromRect:ci.extent] : NULL;
+    if (!cg) return nil;
+    UIImage *img = [UIImage imageWithCGImage:cg]; CGImageRelease(cg); return img;
+}
+static void home_menu_open(void) {
+    if (g_menu || !g_root.game) return;   // only once the game was started (the picker and the launcher have their own screens)
+    g_menu_page = 0; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++; g_menu_anim = 1;
+    game_pause(1);
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput
+    home_menu_build();
+    LOG("front end: Home menu opened%s", tv_on() ? " (on the TV)" : "");
+}
+static void home_menu_toggle(void) { if (g_menu) home_menu_close(); else home_menu_open(); }
+static void home_menu_input(NSDictionary *u) {
+    if (!g_menu || g_menu_closing || ![u[@"on"] boolValue]) return;
+    if ([u[@"p"] intValue] != 1) return;   // only player 1 runs the menu (who that is: the menu's Players page)
+    NSString *k = u[@"key"];
+    if ([k isEqualToString:@"up"]) g_menu_sel = MAX(0, g_menu_sel - 1);
+    else if ([k isEqualToString:@"down"]) g_menu_sel = MIN((int)g_menu_rows.count - 1, g_menu_sel + 1);
+    else if ([k isEqualToString:@"a"]) { home_menu_activate(g_menu_sel); return; }
+    else if ([k isEqualToString:@"b"]) { if (g_menu_page) menu_page(0, g_menu_page == 1 ? 1 : 2); else home_menu_close(); return; }
+    home_menu_draw();
+}
+static void home_menu_watch(void) {   // once the game starts (startGame)
+    static int once; if (once++) return;
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+    [nc addObserverForName:@"DMHomePressed" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {   // only player 1's Home (the iPad's own button counts as player 1 too)
+        int p = [n.userInfo[@"p"] intValue];
+        if (p != 1) { LOG("front end: Home from player %d ignored: only player 1 opens the menu", p); return; }
+        home_menu_toggle();
+    }];
+    [nc addObserverForName:@"DMLauncherInput" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { home_menu_input(n.userInfo); }];
+}
+int front_ios_menu_open(void) { return g_menu != nil; }
+void front_ios_menu_repause(void) {   // the return from the background undid the pause: apply it again while the menu is up
+    if (!g_menu || g_menu_closing || !g_pause_q) return;
+    dispatch_async(g_pause_q, ^{ g_paused = 0; }); game_pause(1);
 }
