@@ -496,7 +496,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,68 +501,471 @@
+@@ -64,68 +501,474 @@
      }
  }
  
@@ -771,6 +771,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 24)
                  .frame(width: geometry.size.width / 3, height: geometry.size.height)
 +                .overlay(alignment: .topLeading) {
++                    HStack(spacing: 0) {
 +                    if let back {
 +                        Button(action: back) {
 +                            Label(tr("Game list"), systemImage: "chevron.left").font(.headline).foregroundStyle(.white)
@@ -779,6 +780,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                        }
 +                        .buttonStyle(.plain).padding(16)
 +                        .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white, lineWidth: 3).padding(12) } }
++                    }
++                    BackToTVButton().padding(.vertical, 16).padding(.leading, back == nil ? 16 : 0)   // GamePicker.swift: when the picture was moved to the iPad
 +                    }
 +                }
 +                ScrollViewReader { proxy in
@@ -1000,7 +1003,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +977,30 @@
+@@ -137,21 +980,30 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }

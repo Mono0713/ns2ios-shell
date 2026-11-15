@@ -8,6 +8,7 @@
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
 // Game list button comes back here until the game starts (one process runs one game, main.m).
 import SwiftUI
+import Combine
 import UIKit
 import Network
 import CoreImage.CIFilterBuiltins
@@ -96,6 +97,32 @@ extension View {
     // The probe and, on the TV, the canvas: the outermost modifiers of the picker's and the launcher's screens
     func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on, screenScale: tv.screenScale)).background(TenFootProbe(tv: tv)) }
 }
+// Back to the TV: shown while a TV is connected but the picture was switched to the iPad and the game has not started (front_ios.m answers, again on
+// each DMShellChanged); the picture goes back to the TV. In the picker's title bar and next to the launcher's Game list
+@_silgen_name("front_ios_tv_waiting") private func frontIosTvWaiting() -> Int32
+@_silgen_name("front_ios_back_to_tv") private func frontIosBackToTv()
+struct BackToTVButton: View {
+    @State private var waiting = frontIosTvWaiting() != 0
+    var body: some View {
+        Group {
+            if waiting {
+                Button { frontIosBackToTv() } label: {
+                    Label(tr("回到電視", "Back to the TV"), systemImage: "tv").font(.headline).foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.accent))
+                }
+                .buttonStyle(.plain)
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .animation(DS.pop, value: waiting)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMShellChanged")).receive(on: DispatchQueue.main)) { _ in
+            waiting = frontIosTvWaiting() != 0
+        }
+        .onAppear { waiting = frontIosTvWaiting() != 0 }
+    }
+}
+
 private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
 
@@ -567,6 +594,7 @@ private struct PickerView: View {
                 Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
             }
             Spacer()
+            BackToTVButton()
             StatusBar()
         }
         .foregroundStyle(.white)

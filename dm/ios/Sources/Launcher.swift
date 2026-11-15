@@ -762,6 +762,7 @@ private struct LauncherView: View {
                 .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 24)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
                 .overlay(alignment: .topLeading) {
+                    HStack(spacing: 0) {
                     if let back {
                         Button(action: back) {
                             Label(tr("Game list"), systemImage: "chevron.left").font(.headline).foregroundStyle(.white)
@@ -770,6 +771,8 @@ private struct LauncherView: View {
                         }
                         .buttonStyle(.plain).padding(16)
                         .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white, lineWidth: 3).padding(12) } }
+                    }
+                    BackToTVButton().padding(.vertical, 16).padding(.leading, back == nil ? 16 : 0)   // GamePicker.swift: when the picture was moved to the iPad
                     }
                 }
                 ScrollViewReader { proxy in
