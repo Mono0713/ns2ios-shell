@@ -9,6 +9,7 @@
 #import <Metal/Metal.h>
 #import <CoreImage/CoreImage.h>
 #import <AVFAudio/AVFAudio.h>
+#import <objc/runtime.h>
 #include <errno.h>
 #include <os/proc.h>
 #include "front.h"
@@ -99,6 +100,17 @@ static NSString *game_name(void);
 @implementation DmTvRootVC
 - (void)viewDidLoad { [super viewDidLoad]; self.view.backgroundColor = UIColor.blackColor; }
 @end
+// A gesture's handler as a block (kept alive by the gesture)
+@interface DmBlockTarget : NSObject
+@property (nonatomic, copy) void (^fire)(id sender);
+@end
+@implementation DmBlockTarget
+- (void)go:(id)sender { if (self.fire) self.fire(sender); }
+@end
+static void gesture_block(UIGestureRecognizer *g, void (^fire)(id)) {
+    DmBlockTarget *t = [DmBlockTarget new]; t.fire = fire; [g addTarget:t action:@selector(go:)];
+    objc_setAssociatedObject(g, &gesture_block, t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 static void tv_window_ensure(void) {
     if (!g_tv_scene || g_tv) return;
     g_tv = [[UIWindow alloc] initWithWindowScene:g_tv_scene];
@@ -154,6 +166,16 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
 - (void)placeStage;
 @end
 static DmRootVC *g_root;
+// Handheld <-> console: the iPad and the TV fade from what they showed to what they show now, instead of jumping
+static void mode_transition(void (^change)(void)) {
+    change();
+    for (UIView *v in @[g_root.view ?: NSNull.null, g_tv.rootViewController.view ?: NSNull.null]) {
+        if (![v isKindOfClass:UIView.class]) continue;
+        CATransition *t = [CATransition animation]; t.type = kCATransitionFade; t.duration = 0.4;
+        t.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [v.layer addAnimation:t forKey:@"dm.mode"];
+    }
+}
 static void launcher_done(void) { [g_root startGame]; }
 static void picker_done(void) { [g_root afterPick]; }
 static UIViewController *pregame_host(void) {   // where the picker and the launcher are presented: the TV's window while the picture goes there
@@ -459,7 +481,39 @@ static UIView *tv_panel(CGRect frame) {
                 UILabel *e = [[UILabel alloc] initWithFrame:CGRectMake(nx, 0, cw - nx - 10, ch)]; e.userInteractionEnabled = NO;
                 e.text = z ? @"空位" : @"Open"; e.textColor = [UIColor colorWithWhite:1 alpha:0.25]; e.font = [UIFont systemFontOfSize:20 weight:UIFontWeightMedium]; [t addSubview:e];
             }
-            [gr addSubview:t];
+            t.tag = p; [gr addSubview:t];
+            if (r) {   // drag a player onto another number (taken or open) to swap: the tile lifts, follows the finger, the place under it lights up
+                UIPanGestureRecognizer *pan = [UIPanGestureRecognizer new];
+                __block UIView *over = nil; __block CGPoint home; __block CGFloat ow = 0; __block UIColor *oc = nil;
+                gesture_block(pan, ^(UIPanGestureRecognizer *g) {
+                    UIView *me = g.view, *grid = me.superview; if (!grid) return;
+                    if (g.state == UIGestureRecognizerStateBegan) {
+                        home = me.center; [grid bringSubviewToFront:me];
+                        me.layer.shadowColor = UIColor.blackColor.CGColor; me.layer.shadowOpacity = 0.5; me.layer.shadowRadius = 18; me.layer.shadowOffset = CGSizeMake(0, 10);
+                        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.3 options:0 animations:^{ me.transform = CGAffineTransformMakeScale(1.06, 1.06); me.alpha = 0.95; } completion:nil];
+                        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+                    } else if (g.state == UIGestureRecognizerStateChanged) {
+                        CGPoint d = [g translationInView:grid]; me.center = CGPointMake(home.x + d.x, home.y + d.y);
+                        UIView *hit = nil;
+                        for (UIView *o in grid.subviews) if (o != me && o.tag >= 1 && o.tag <= 8 && CGRectContainsPoint(o.frame, me.center)) hit = o;
+                        if (hit != over) {
+                            over.layer.borderWidth = ow; over.layer.borderColor = oc.CGColor;   // as it was (an open place has a faint edge)
+                            over = hit; ow = hit.layer.borderWidth; oc = hit.layer.borderColor ? [UIColor colorWithCGColor:hit.layer.borderColor] : nil; over.layer.borderWidth = 2; over.layer.borderColor = player_color((int)me.tag).CGColor;
+                            if (hit) [[UISelectionFeedbackGenerator new] selectionChanged];
+                        }
+                    } else if (g.state >= UIGestureRecognizerStateEnded) {
+                        UIView *to = g.state == UIGestureRecognizerStateEnded ? over : nil; over.layer.borderWidth = ow; over.layer.borderColor = oc.CGColor; over = nil;
+                        if (to) {   // the list comes back from shell_players.m (DMPlayersChanged) and is drawn again with the new numbers
+                            CGPoint c = to.center;
+                            [UIView animateWithDuration:0.2 animations:^{ me.center = c; to.center = home; me.transform = CGAffineTransformIdentity; }];
+                            slot_swap((int)me.tag - 1, (int)to.tag - 1);
+                        } else {
+                            [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0.2 options:0 animations:^{ me.center = home; me.transform = CGAffineTransformIdentity; me.alpha = 1; } completion:^(BOOL f) { (void)f; me.layer.shadowOpacity = 0; }];
+                        }
+                    }
+                });
+                [t addGestureRecognizer:pan];
+            }
         }
         [held removeAllObjects]; [held addObjectsFromArray:by.allKeys];
     };
@@ -778,7 +832,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     g_tv_scene.screen.overscanCompensation = UIScreenOverscanCompensationNone;
     CGSize sz = g_tv_scene.screen.bounds.size;
     LOG("front end: TV connected (%.0fx%.0f points, scale %.1f)", sz.width, sz.height, g_tv_scene.screen.nativeScale);
-    [g_root placeStage];   // the TV's window now: the picker, the launcher or the game's picture moves there
+    mode_transition(^{ [g_root placeStage]; });   // the TV's window now: the picker, the launcher or the game's picture moves there
     home_menu_relayout();  // a menu already up moves to the TV
 }
 - (void)sceneDidDisconnect:(UIScene *)scene {
@@ -788,7 +842,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     UIWindow *w = g_tv;
     if (g_root.launched && !g_root.game) pregame_move(w.rootViewController, g_root);   // the picker or the launcher comes back to the iPad
     g_tv = nil;
-    [g_root placeStage];
+    mode_transition(^{ [g_root placeStage]; });
     (void)w;   // kept until the stage has left it
     home_menu_relayout();
 }
@@ -933,7 +987,7 @@ static void output_video_set(BOOL ipad) {   // the picture moves at once, the me
     if (ipad == video_pref_ipad()) return;
     g_video_ipad = ipad;
     LOG("front end: picture output -> %s", ipad ? "iPad" : "TV");
-    [g_root placeStage]; home_menu_relayout(); home_menu_draw();
+    mode_transition(^{ [g_root placeStage]; home_menu_relayout(); home_menu_draw(); });
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
 }
 static void output_audio_set(BOOL ipad) {   // switches at once (a paused game's sound resumes on the new output) and stays the choice
@@ -982,7 +1036,7 @@ static UIView *home_menu_make(UIView *root) {
     BOOL pl = g_menu_page == 1;   // the Players page: the phones' QR code on the left, the eight numbers on the right
     CGFloat W = pl ? 720 : 440, rowH = pl ? 46 : 60, gap = pl ? 6 : 8, pad = 16, top = 84, x0 = pl ? pad + 236 : pad, rw = W - x0 - pad;
     NSString *qrURL = nil; UIImage *qr = pl ? phones_qr(&qrURL) : nil;
-    CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + 34;
+    CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + (pl ? 34 : 4);   // key hints only on the Players page
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - W) / 2), floor((root.bounds.size.height - H) / 2), W, H)];
     card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     card.layer.cornerRadius = 26; card.layer.cornerCurve = kCACornerCurveContinuous;
@@ -1054,7 +1108,7 @@ static UIView *home_menu_make(UIView *root) {
         CGFloat x = 12 + tileS + 12, tw = rw - x - 12 - tools * 40;
         BOOL two = [g_menu_rows[i][1] length] > 0;
         UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
-        a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:(onTV ? 19 : 17) weight:UIFontWeightSemibold];
+        a.tag = 64; a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:(onTV ? 19 : 17) weight:UIFontWeightSemibold];
         UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
         d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13];
         if (slot >= 0 && !held) a.textColor = [UIColor colorWithWhite:1 alpha:0.35];
@@ -1071,10 +1125,10 @@ static UIView *home_menu_make(UIView *root) {
         }
         [card addSubview:row];
     }
-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(pad, H - 34, W - 2 * pad, 22)];
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(pad, H - 34, W - 2 * pad, 22)]; hint.hidden = !pl;
     hint.text = pl ? (g_menu_move >= 0 ? (z ? @"↑↓ 選號碼   A 放下   B 取消" : @"↑↓ number   A put down   B cancel")
                                       : (z ? @"A 換號碼   Y 按鍵配置   X 移除" : @"A number   Y layout   X remove"))
-                   : (z ? @"←→ 音量" : @"←→ volume");
+                   : @"";
     hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.5]; hint.font = [UIFont systemFontOfSize:(onTV ? 15 : 13) weight:UIFontWeightSemibold];
     [card addSubview:hint];
     CGFloat k = onTV ? MIN(root.bounds.size.width * 0.84 / W, root.bounds.size.height * 0.86 / H) : ui_scale(root);
@@ -1215,6 +1269,16 @@ static void home_menu_watch(void) {   // once the game starts (startGame)
         int p = [n.userInfo[@"p"] intValue];
         if (p != 1) { LOG("front end: Home from player %d ignored: only player 1 opens the menu", p); return; }
         home_menu_toggle();
+    }];
+    [nc addObserverForName:@"DMShellChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {   // the volume or an output changed on the iPad's panel: the rows' words follow
+        (void)n; if (!g_menu || g_menu_closing) return;
+        NSArray *rows = menu_rows(g_menu_page); if (rows.count != g_menu_rows.count) { menu_refresh(g_menu_sel); return; }
+        g_menu_rows = rows;
+        for (UIView *card in g_menu_cards) for (NSUInteger i = 0; i < rows.count; i++) {
+            UIView *row = [card viewWithTag:100 + (NSInteger)i];
+            ((UILabel *)[row viewWithTag:64]).text = rows[i][0];
+            ((UILabel *)[row viewWithTag:62]).text = rows[i][1];
+        }
     }];
     [nc addObserverForName:@"DMLauncherInput" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { home_menu_input(n.userInfo); }];
     [nc addObserverForName:@"DMPlayersChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {   // a phone joined or left while the Players page is up
