@@ -10183,6 +10183,29 @@ static void present_gpu_note(double s, int fx) {
     n[fx] = 0;
 }
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
+// The same picture on a second screen (the iOS front end's handheld play with a TV connected: the TV shows what the iPad shows). Drawn after this frame's present
+// has finished on the GPU (its feedback), so the game's rendering into the window texture is complete, on the classic queue on a queue of its own: taking the
+// TV's drawable may wait for the TV's refresh, and a frame the TV is not ready for is skipped there instead of holding up the game's present
+__attribute__((weak)) void *front_metal_mirror_layer(void) { return NULL; }
+typedef struct { int v[4]; } mirror_crop;
+static void present_mirror(id<MTLTexture> src, const int crop[4]) {
+    static dispatch_queue_t q; static _Atomic int busy; static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("dm.present.mirror", DISPATCH_QUEUE_SERIAL); });
+    if (!front_metal_mirror_layer() || busy) return;
+    busy = 1;
+    mirror_crop c = {{crop ? crop[0] : 0, crop ? crop[1] : 0, crop ? crop[2] : 0, crop ? crop[3] : 0}}; int has = crop != NULL;   // blocks cannot capture arrays
+    dispatch_async(q, ^{ @autoreleasepool {
+        CAMetalLayer *ml = (__bridge CAMetalLayer *)front_metal_mirror_layer();
+        id<CAMetalDrawable> d = ml ? [ml nextDrawable] : nil;
+        if (d) {
+            id<MTLCommandBuffer> cb = [g_q commandBuffer];
+            mirror_crop cc = c;
+            if (present_encode(cb, src, d.texture, has ? cc.v : NULL)) [cb presentDrawable:d];
+            [cb commit];
+        }
+        busy = 0;
+    } });
+}
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     if (zf_waiting(tex_mtl(t))) {   // nothing has drawn into it and it is not filled yet: undefined content (magenta on Apple GPUs). Not presented; the previous picture stays
@@ -10265,8 +10288,10 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     int fx_kind = kind == PRESENT_METALFX;
     [cb endCommandBuffer];
     MTL4CommitOptions *o = [MTL4CommitOptions new];
+    mirror_crop mc = {{crop ? crop[0] : 0, crop ? crop[1] : 0, crop ? crop[2] : 0, crop ? crop[3] : 0}}; int mhas = crop != NULL;
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         if (f.error) MLOG("[RED] display command buffer error: %s", f.error.description.UTF8String);
+        else if (front_metal_mirror_layer()) { mirror_crop m = mc; present_mirror(src, mhas ? m.v : NULL); }   // the TV's copy in handheld play
         pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; if (ticket > g_present_alloc_done[alloc_i]) g_present_alloc_done[alloc_i] = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv);
         present_gpu_note(f.GPUEndTime - f.GPUStartTime, fx_kind); pthread_mutex_unlock(&g_pq_mu);
     }];
