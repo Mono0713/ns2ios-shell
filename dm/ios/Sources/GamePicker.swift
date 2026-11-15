@@ -52,7 +52,7 @@ final class TenFoot: ObservableObject {
     deinit { if let token { NotificationCenter.default.removeObserver(token) } }
     private func refresh() {
         let now = onTV || frontIosTvWaiting() != 0
-        if now != on { withAnimation(DS.pop) { on = now } }
+        if now != on { on = now }   // at once: animated, every text and box of the screen moved to its new size on its own when the launcher opened
     }
 }
 // Reads the role of the scene the view's window belongs to and its screen's scale; the picker moving between the iPad and the TV (the same controller,
