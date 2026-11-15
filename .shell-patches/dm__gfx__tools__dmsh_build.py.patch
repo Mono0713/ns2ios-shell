@@ -10,7 +10,24 @@ diff --git a/dm/gfx/tools/dmsh_build.py b/dm/gfx/tools/dmsh_build.py
  
  def source_without_rule_bodies():
      source = open(__file__, 'r').read(); lines = source.splitlines(True); tree = ast.parse(source)
-@@ -482,15 +482,66 @@
+@@ -304,13 +304,14 @@
+ for raw in open(MAP, 'rb'):
+     c = raw.rstrip(b'\n').split(b'\t')
+     if len(c) > 4: MAP_ROWS.setdefault(c[3].decode(), raw)
+-for raw in open(MAP + '.conflicts.tsv', 'rb'):
++CONFLICTS = MAP + '.conflicts.tsv' if os.path.exists(MAP + '.conflicts.tsv') else os.devnull   # a profile may have no rulings (Boomerang Fu): none
++for raw in open(CONFLICTS, 'rb'):
+     c = raw.rstrip(b'\n').split(b'\t')
+     if len(c) > 1 and not raw.startswith((b'#', b'dm_')): MAP_CONFLICT_ROWS.setdefault(c[0].decode(), raw)
+ for ln in open(MAP):
+     c = ln.rstrip('\n').split('\t')
+     if len(c) > 4 and c[0].endswith('.bin'): pc_of.setdefault(c[3], c[4]); loc.setdefault(c[3], (c[0], int(c[1])))
+-for ln in open(MAP + '.conflicts.tsv'):
++for ln in open(CONFLICTS):
+     c = ln.rstrip('\n').split('\t')
+     if len(c) > 1 and not ln.startswith('#') and not ln.startswith('dm_') and c[0] in pc_of: pc_of[c[0]] = c[1]
+ 
+@@ -482,15 +483,66 @@
      h = int(m.group(1), 16)
      return (h & 0x3fff) * 4 if h >> 28 == 0 else None
  
@@ -78,7 +95,7 @@ diff --git a/dm/gfx/tools/dmsh_build.py b/dm/gfx/tools/dmsh_build.py
          elif nm == 'support_buffer': e.update(kind='support')
          elif re.fullmatch(r'[a-z]+_c(\d+)', nm):
              n = int(re.fullmatch(r'[a-z]+_c(\d+)', nm).group(1))
-@@ -618,6 +669,21 @@
+@@ -618,6 +670,21 @@
      outs = re.findall(r'\n    float4 (\w+) \[\[user\(locn\d+\)\]\];', src[i:j])
      k += len('main0_out out = {};')
      return src[:k] + ''.join(f'\n    out.{n} = float4(0.0, 0.0, 0.0, 1.0);' for n in outs) + src[k:]
@@ -100,7 +117,7 @@ diff --git a/dm/gfx/tools/dmsh_build.py b/dm/gfx/tools/dmsh_build.py
  
  def vs_layer(src):
      """A vertex shader that writes the layer (render_target_array_index) loses the point size output. The translator writes gl_PointSize = 1.0 in every vertex shader; Metal builds a pipeline
-@@ -792,7 +858,7 @@
+@@ -792,7 +859,7 @@
          dmsh_geometry.flatten_sets(spv)
          r = subprocess.run(['spirv-cross', *XC, spv], capture_output=True, text=True)
          if r.returncode: return 'geometry MSL failed', r.stderr.strip()[:160], None
@@ -109,7 +126,7 @@ diff --git a/dm/gfx/tools/dmsh_build.py b/dm/gfx/tools/dmsh_build.py
          res = json.load(open(os.path.join(w, k + '.res.json')))
          refl = {'key': key + '_bg' + str(t), 'route': 'B', 'chain': CHAIN, 'dm_ctl': key,
                  'source': f'{loc[key][0]}#{loc[key][1]}', 'pc_paired': pc_of[key], 'stage': 'gs',
-@@ -814,7 +880,7 @@
+@@ -814,7 +881,7 @@
              spv = os.path.join(w, k + '.reader.spv'); dmsh_geometry.flatten_sets(spv)
              r = subprocess.run(['spirv-cross', *XC, spv], capture_output=True, text=True)
              if r.returncode: return 'geometry reader failed', r.stderr.strip()[:160], None
@@ -118,7 +135,7 @@ diff --git a/dm/gfx/tools/dmsh_build.py b/dm/gfx/tools/dmsh_build.py
              analysis, full = vs_depth(reader)
              meta = {'key': key + '_bgv', 'route': 'B', 'chain': CHAIN, 'dm_ctl': key,
                      'stage': 'vs', 'entry': 'main0', 'entry_z': 'main0_z', 'msl_entry_kind': 'vertex',
-@@ -852,10 +918,13 @@
+@@ -852,10 +919,13 @@
              src = open(msl).read()
      try: src = dmsh_atomic.lower_msl(src)
      except ValueError as e: return 'image atomic MSL failed', str(e), None
@@ -135,7 +152,7 @@ diff --git a/dm/gfx/tools/dmsh_build.py b/dm/gfx/tools/dmsh_build.py
      if j['stage'] == 'vs' and PAIRS.get(key):   # outputs the pixel shader reads but the vertex shader does not write get (0,0,0,1) (see vs_pad)
          src, pad = vs_pad(key, src)
          if pad: open(msl, 'w').write(src)
-@@ -883,12 +952,14 @@
+@@ -883,12 +953,14 @@
          except subprocess.CalledProcessError as e: return 'iOS metal failed', str(e)[:160], None
      entry = re.search(r'(vertex|fragment|kernel)\s+\S+\s+(\w+)\s*\(', src)
      dr = drv_reads(src)
