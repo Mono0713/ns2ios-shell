@@ -185,6 +185,14 @@
   }
   const name = /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'Browser';
 
+  // A SwitchPad that was suspended and then swiped away never closes its connections: the phone would wait minutes for TCP to give up. The page pings every
+  // second and starts over when the iPad has said nothing for 3.5 s
+  let lastRx = 0;
+  setInterval(() => {
+    if (!ws || ws.readyState !== 1 || document.hidden) return;
+    if (performance.now() - lastRx > 3500) { const old = ws; ws = null; old.onclose = null; try { old.close(); } catch (e) {} conn('wait'); backoff = 500; connect(); return; }
+    try { ws.send('{"t":"ping"}'); } catch (e) {}
+  }, 1000);
   function hello() { put(JSON.stringify(join ? { t: 'hello', v: 1, id, name, join: 1 } : { t: 'hello', v: 1, id, name })); join = false; }
   // The link to the iPad: a WebSocket, or over HTTPS where one cannot open (iPhone Safari refuses WebSockets to a certificate the user trusted by hand), POST requests to
   // /p, one at a time, each carrying what waits (only the newest state and motion) and bringing back the iPad's messages
@@ -242,8 +250,8 @@
     const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => { backoff = 500; opened = true; hello(); };
-    ws.onmessage = ev => { if (typeof ev.data === 'string') message(JSON.parse(ev.data)); };
+    ws.onopen = () => { backoff = 500; opened = true; lastRx = performance.now(); hello(); };
+    ws.onmessage = ev => { lastRx = performance.now(); if (typeof ev.data === 'string') message(JSON.parse(ev.data)); };
     ws.onclose = () => {
       if (!opened && location.protocol === 'https:') { usePost = true; ws = null; connect(); return; }   // never opened over HTTPS: the certificate; POST requests instead
       if (replaced) return;

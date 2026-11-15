@@ -238,6 +238,7 @@ static void on_hello(client *c, const char *json) {
 static void on_text(client *c, const char *json) {
     char t[16] = ""; json_str(json, "t", t, sizeof t);
     if (!strcmp(t, "home")) { int p = c->player < 0 ? -1 : shell_slot_of(c); if (p >= 0) { LOG("phone pads: '%s' (player %d) pressed Home", c->name, p + 1); shell_slot_home(p); } return; }
+    if (!strcmp(t, "ping")) { say(c, "{\"t\":\"pong\"}"); return; }   // the page's check that the iPad is still there (phone_pad.html)
     if (strcmp(t, "layout")) { on_hello(c, json); return; }
     int p = c->player < 0 ? -1 : shell_slot_of(c); if (p < 0) return;
     int xbox = strstr(json, "\"xbox\":1") != NULL;
