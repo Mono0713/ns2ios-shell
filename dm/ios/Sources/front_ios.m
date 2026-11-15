@@ -39,7 +39,7 @@ static UIWindowScene *g_tv_scene; // the TV's scene: its window is made as soon 
 // The picture on the iPad while a TV is connected: for this connection only (plugging a TV in always starts on the TV), so a tap by mistake is never kept
 static BOOL g_video_ipad;
 static BOOL video_pref_ipad(void) { return g_video_ipad; }
-static BOOL tv_on(void) { return g_tv && !g_tv.hidden; }
+static BOOL tv_on(void) { return g_tv && !g_tv.hidden && !video_pref_ipad(); }   // the TV's window stays up in handheld play too (tv_handheld_note), so the TV is never mirrored
 static _Atomic int g_picture_on_tv;   // tv_on() for the present thread (nvn_mtl.m upscales with MetalFX on a TV), set where the picture moves (placeStage)
 int front_picture_on_tv(void) { return g_picture_on_tv; }   // the game's picture is on the TV now
 static BOOL zh_ui(void) {         // Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
@@ -129,9 +129,34 @@ static void gesture_block(UIGestureRecognizer *g, void (^fire)(id)) {
 static void tv_window_ensure(void) {
     if (!g_tv_scene || g_tv) return;
     g_tv = [[UIWindow alloc] initWithWindowScene:g_tv_scene];
-    g_tv.rootViewController = [DmTvRootVC new]; g_tv.hidden = video_pref_ipad();
+    g_tv.rootViewController = [DmTvRootVC new]; g_tv.hidden = NO;
     CGSize sz = g_tv_scene.screen.bounds.size;
-    LOG("front end: TV window made (%.0fx%.0f points, scale %.1f)%s", sz.width, sz.height, g_tv_scene.screen.nativeScale, g_tv.hidden ? "; hidden: the picture output is the iPad" : "");
+    LOG("front end: TV window made (%.0fx%.0f points, scale %.1f)%s", sz.width, sz.height, g_tv_scene.screen.nativeScale, video_pref_ipad() ? "; handheld play: the TV shows the handheld screen" : "");
+}
+// Handheld play with a TV connected: the TV keeps its own window and fills it with a quiet full-screen card (the iPad's 4:3 screen mirrored onto it
+// had black bars), until the mode goes back to console
+static void tv_handheld_note(BOOL on) {
+    UIView *root = g_tv.rootViewController.view; if (!root) return;
+    UIView *n = [root viewWithTag:77];
+    if (on && !n) {
+        BOOL z = zh_ui();
+        n = [[UIView alloc] initWithFrame:root.bounds]; n.tag = 77; n.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        n.backgroundColor = [UIColor colorWithRed:0.02 green:0.025 blue:0.04 alpha:1];
+        CAGradientLayer *g = [CAGradientLayer layer]; g.type = kCAGradientLayerRadial; g.frame = n.bounds;
+        g.colors = @[(id)[UIColor colorWithRed:0.04 green:0.4 blue:1 alpha:0.28].CGColor, (id)UIColor.clearColor.CGColor];
+        g.startPoint = CGPointMake(0.5, 0.45); g.endPoint = CGPointMake(1.1, 1.1); [n.layer addSublayer:g];
+        CGFloat u = MAX(1.0, MIN(root.bounds.size.width / 1920.0, root.bounds.size.height / 1080.0));   // the same 1920 x 1080 canvas as the picker
+        UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"ipad.landscape" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:120 * u weight:UIImageSymbolWeightLight]]];
+        ic.tintColor = [UIColor colorWithWhite:1 alpha:0.9]; [ic sizeToFit];
+        ic.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds) - 50 * u);
+        ic.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+        UILabel *l = [UILabel new]; l.text = z ? @"掌機模式" : @"Handheld mode"; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:48 * u weight:UIFontWeightBold]; [l sizeToFit];
+        l.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMaxY(ic.frame) + 40 * u + l.bounds.size.height / 2);
+        l.autoresizingMask = ic.autoresizingMask;
+        [n addSubview:ic]; [n addSubview:l];
+        [root addSubview:n];
+    } else if (!on && n) [n removeFromSuperview];
+    if (on) [root bringSubviewToFront:n];
 }
 // A screen presented before the game (the picker, the launcher) moves to where the picture now goes: the same controller, so it keeps its state
 static int g_pregame_moving;   // a move under way (the dip through black waits for it: mode_fade)
@@ -305,7 +330,7 @@ int front_ios_tv_waiting(void) { return g_tv_scene && video_pref_ipad() && g_roo
 void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ LOG("front end: Back to the TV tapped"); play_mode_set(NO); }); }
 - (void)placeStage {
     tv_window_ensure();
-    if (g_tv) g_tv.hidden = video_pref_ipad();
+    tv_handheld_note(g_tv && video_pref_ipad());
     g_picture_on_tv = tv_on();
     if (self.stage) {
         UIView *dest = tv_on() ? g_tv.rootViewController.view : self.view;
@@ -388,17 +413,20 @@ static UIView *tv_panel(CGRect frame) {
     CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"opacity"]; pulse.fromValue = @1; pulse.toValue = @0.25; pulse.duration = 1.1; pulse.autoreverses = YES; pulse.repeatCount = HUGE_VALF;
     [dot.layer addAnimation:pulse forKey:@"pulse"];
     UILabel *lt = panel_label(17, UIFontWeightSemibold, 0.9); [live addSubview:dot]; [live addSubview:lt];
-    UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:24 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:0.9 alpha:1]; clock.textAlignment = NSTextAlignmentRight;
+    UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:24 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:1 alpha:0.85]; clock.textAlignment = NSTextAlignmentRight;
     UIImageView *bat = [UIImageView new]; bat.contentMode = UIViewContentModeScaleAspectFit;
-    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:22 weight:UIFontWeightSemibold]; batl.textColor = [UIColor colorWithWhite:0.9 alpha:1];
-    UIImageView *wifi = [UIImageView new]; wifi.contentMode = UIViewContentModeScaleAspectFit; wifi.tintColor = [UIColor colorWithWhite:0.9 alpha:1];
+    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:22 weight:UIFontWeightSemibold]; batl.textColor = [UIColor colorWithWhite:1 alpha:0.85];
+    UIImageView *wifi = [UIImageView new]; wifi.contentMode = UIViewContentModeScaleAspectFit; wifi.tintColor = [UIColor colorWithWhite:1 alpha:0.85];
     wifi.image = [UIImage systemImageNamed:@"wifi" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
     for (UIView *x in @[title, live, clock, bat, batl, wifi]) [v addSubview:x];
-    {   // Wi-Fi shown only while the iPad is on Wi-Fi, as the picker does (GamePicker.swift)
+    {   // Wi-Fi or Wi-Fi slashed, as the picker shows it (GamePicker.swift)
         static nw_path_monitor_t mon; __weak UIImageView *ww = wifi;
         if (mon) nw_path_monitor_cancel(mon);
         mon = nw_path_monitor_create(); nw_path_monitor_set_queue(mon, dispatch_get_main_queue());
-        nw_path_monitor_set_update_handler(mon, ^(nw_path_t path) { ww.hidden = !nw_path_uses_interface_type(path, nw_interface_type_wifi); });
+        nw_path_monitor_set_update_handler(mon, ^(nw_path_t path) {
+            ww.image = [UIImage systemImageNamed:nw_path_uses_interface_type(path, nw_interface_type_wifi) ? @"wifi" : @"wifi.slash"
+                               withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
+        });
         nw_path_monitor_start(mon);
     }
     UIDevice.currentDevice.batteryMonitoringEnabled = YES;
@@ -407,7 +435,8 @@ static UIView *tv_panel(CGRect frame) {
         NSDateFormatter *df = [NSDateFormatter new]; df.dateStyle = NSDateFormatterNoStyle; df.timeStyle = NSDateFormatterShortStyle;   // as the picker's Text(.time) wc.text = [df stringFromDate:NSDate.date];
         float lv = UIDevice.currentDevice.batteryLevel; UIDeviceBatteryState st = UIDevice.currentDevice.batteryState;
         BOOL plug = st == UIDeviceBatteryStateCharging || st == UIDeviceBatteryStateFull;
-        NSString *sym = plug ? @"battery.100.bolt" : lv > 0.8 ? @"battery.100" : lv > 0.55 ? @"battery.75" : lv > 0.3 ? @"battery.50" : lv > 0.12 ? @"battery.25" : @"battery.0";
+        NSString *sym = lv < 0 ? @"battery.100percent" : plug ? @"battery.100percent.bolt" : lv >= 0.88 ? @"battery.100percent" : lv >= 0.63 ? @"battery.75percent"   // the picker's symbols and steps
+                      : lv >= 0.38 ? @"battery.50percent" : lv >= 0.13 ? @"battery.25percent" : @"battery.0percent";
         wb.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular]];
         wb.tintColor = !plug && lv >= 0 && lv <= 0.12 ? [UIColor colorWithRed:1 green:0.27 blue:0.23 alpha:1] : [UIColor colorWithWhite:0.85 alpha:1];
         wbl.text = lv < 0 ? @"" : [NSString stringWithFormat:@"%d%%", (int)lroundf(lv * 100)];
