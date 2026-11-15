@@ -321,6 +321,20 @@ func tvIcon(_ img: UIImage, key: String? = nil) -> UIImage {   // key: for an ic
     return big
 }
 
+// The blurred icon behind the picker and the launcher, blurred once on a small copy and kept: a live 60-point blur of a screen-sized image (two of them
+// while the backdrop cross-fades) was redrawn on every frame of a move, and on a 4K TV that made the moves stutter
+private let blurredIcons = NSCache<NSString, UIImage>()
+func blurredIcon(_ img: UIImage, key: String) -> UIImage? {
+    if let done = blurredIcons.object(forKey: key as NSString) { return done }
+    guard let src = CIImage(image: img), src.extent.width > 0 else { return nil }
+    let small = src.transformed(by: CGAffineTransform(scaleX: 96 / src.extent.width, y: 96 / src.extent.width))
+    let f = CIFilter.gaussianBlur(); f.inputImage = small.clampedToExtent(); f.radius = 5
+    guard let out = f.outputImage?.cropped(to: small.extent), let cg = CIContext().createCGImage(out, from: small.extent) else { return nil }
+    let done = UIImage(cgImage: cg)
+    blurredIcons.setObject(done, forKey: key as NSString)
+    return done
+}
+
 private struct GameTile: View {
     let game: PickerGame
     let focused: Bool
@@ -569,11 +583,11 @@ private struct PickerView: View {
     private func backdrop(_ game: PickerGame?) -> some View {
         ZStack {
             Color.black
-            if let icon = game?.icon {
-                Image(uiImage: icon).resizable().scaledToFill()
+            if let game, let icon = game.icon, let soft = blurredIcon(icon, key: game.id) {
+                Image(uiImage: soft).resizable().interpolation(.medium).scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .blur(radius: 60).scaleEffect(1.4).opacity(0.55)
-                    .id(game?.id).transition(.opacity)
+                    .scaleEffect(1.4).opacity(0.55)
+                    .id(game.id).transition(.opacity)
             }
             LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
         }

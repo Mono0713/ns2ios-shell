@@ -739,7 +739,7 @@ private struct LauncherView: View {
                     Spacer(minLength: 0)
                     if let icon = appIcon() {
                         let side: CGFloat = tv.on ? 180 : 128
-                        Image(uiImage: tv.on ? tvIcon(icon, key: "launcher") : icon).resizable().interpolation(.high).frame(width: side, height: side)
+                        Image(uiImage: tv.on ? tvIcon(icon, key: "launcher:" + (gameRoot?.path ?? "")) : icon).resizable().interpolation(.high).frame(width: side, height: side)
                             .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
                             .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
@@ -832,10 +832,10 @@ private struct LauncherView: View {
     private var backdrop: some View {
         ZStack {
             Color.black
-            if let icon = appIcon() {
-                Image(uiImage: icon).resizable().scaledToFill()
+            if let icon = appIcon(), let soft = blurredIcon(icon, key: "launcher:" + (gameRoot?.path ?? "")) {   // GamePicker.swift: blurred once, not on every frame
+                Image(uiImage: soft).resizable().interpolation(.medium).scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .blur(radius: 60).scaleEffect(1.4).opacity(0.45)
+                    .scaleEffect(1.4).opacity(0.45)
             }
             LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
         }
