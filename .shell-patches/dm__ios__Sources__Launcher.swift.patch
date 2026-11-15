@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,10 +3,337 @@
+@@ -3,10 +3,338 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -172,7 +172,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @EnvironmentObject var activity: ActivityModel
 +    var body: some View {
 +        let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
-+        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85))
++        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85)).minimumScaleFactor(0.5).lineLimit(1)
 +            .frame(width: 44, height: 36).background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(color))
 +            .overlay(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).stroke(Color.white, lineWidth: on ? 3 : 0))
 +            .shadow(color: color, radius: on ? 12 : 0)
@@ -303,20 +303,21 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +}
 +
 +private struct PhonePadsCard: View {   // under Play, in the launcher's left column
++    @Environment(\.tenFoot) private var tenFoot   // on a TV the code is larger: it is scanned from the sofa
 +    @State private var url = phonePadsURL()
 +    @State private var qr: UIImage?   // made once per address, not on every redraw
 +
 +    var body: some View {
 +        HStack(spacing: 14) {
 +            if let url, let qr {
-+                Image(uiImage: qr).interpolation(.none).resizable().frame(width: 96, height: 96)
++                Image(uiImage: qr).interpolation(.none).resizable().frame(width: tenFoot ? 150 : 96, height: tenFoot ? 150 : 96)
 +                    .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 +                    .accessibilityLabel("QR code of \(url)")
 +            }
 +            VStack(alignment: .leading, spacing: 6) {
 +                Label(tr("Add players"), systemImage: "qrcode").font(.headline)
 +                if let url {
-+                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled)
++                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.5)
 +                        .padding(.horizontal, 8).padding(.vertical, 3)
 +                        .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
 +                } else {
@@ -340,7 +341,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  
  private extension LauncherModel {
      func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-@@ -18,17 +345,55 @@
+@@ -18,18 +346,57 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -352,6 +353,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  set: { m.values[s.env] = String(format: "%.2f", $0) })
      }
      private var percentage: String { "\(Int((rangeValue.wrappedValue * 100).rounded())) %" }
+-
 +    // memory (DM_APP_POOL): a slider in GB writing whole MiB as hex bytes; "-" is the package's own value, which the bundle's dm/env.txt put in the environment
 +    private func gb(_ v: String) -> Double? {
 +        let t = v.lowercased(); guard let n = t.hasPrefix("0x") ? UInt64(t.dropFirst(2), radix: 16) : UInt64(t) else { return nil }
@@ -390,15 +392,18 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        if a.confirmed { return (zhHant ? "\(now) 已確認可以正常執行。" : "\(now) is confirmed to work.", false) }
 +        return (zhHant ? "打不開而且是記憶體造成的話，下次會自動換一個大小。" : "If the game fails to start for memory, the next start tries another size.", false)
 +    }
- 
++
++    @Environment(\.tenFoot) private var tenFoot   // on a TV only the names: the notes are too small to read from the sofa
      private var settingLabel: some View {
          VStack(alignment: .leading, spacing: 4) {
 -            Text(s.label)
+-            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
 +            Text(tr(s.label))
-             if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
++            if !note.isEmpty && !tenFoot { Text(note).font(.footnote).foregroundStyle(.secondary) }
          }
      }
-@@ -38,7 +403,7 @@
+ 
+@@ -38,7 +405,7 @@
              switch s.kind {
              case "choice":
                  Picker(selection: m.binding(s)) {
@@ -407,7 +412,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,8 +416,23 @@
+@@ -51,8 +418,23 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -432,7 +437,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,68 +444,441 @@
+@@ -64,68 +446,450 @@
      }
  }
  
@@ -537,10 +542,15 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps) fps, touch controls \(Int(touchOpacity * 100)) % opaque at \(Int(touchScale * 100)) % size\n", stderr)
 +    }
 +}
-+private func noteLabel(_ title: String, _ note: String) -> some View {
-+    VStack(alignment: .leading, spacing: 4) {
-+        Text(tr(title))
-+        Text(tr(note)).font(.footnote).foregroundStyle(.secondary)
++private func noteLabel(_ title: String, _ note: String) -> some View { NoteLabel(title: title, note: note) }
++private struct NoteLabel: View {   // a setting's name and its note (left out on a TV, as SettingRow's)
++    let title: String, note: String
++    @Environment(\.tenFoot) private var tenFoot
++    var body: some View {
++        VStack(alignment: .leading, spacing: 4) {
++            Text(tr(title))
++            if !tenFoot { Text(tr(note)).font(.footnote).foregroundStyle(.secondary) }
++        }
 +    }
 +}
 +// The rows: frame rate in the Game section, the rest in Controls
@@ -648,6 +658,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
 +    @State private var shown = false   // the left column rises in once, as the picker's card does
++    @StateObject private var tv = TenFoot()   // GamePicker.swift: a TV is connected
  
      var body: some View {
          GeometryReader { geometry in
@@ -657,9 +668,10 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                      if let icon = appIcon() {
 -                        Image(uiImage: icon).resizable().frame(width: 96, height: 96)
 -                            .clipShape(RoundedRectangle(cornerRadius: 22))
-+                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: 128, height: 128)
-+                            .clipShape(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
-+                            .overlay(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
++                        let side: CGFloat = tv.on ? 180 : 128
++                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: side, height: side)
++                            .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
++                            .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
 +                            .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
                              .accessibilityHidden(true)
                      }
@@ -740,6 +752,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
              }
          }
 +        .background { backdrop }
++        .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // ten-foot: every text style grows together on a TV
++        .environment(\.tenFoot, tv.on)
 +        .environmentObject(nav)
 +        .environmentObject(activity)
          .preferredColorScheme(.dark)
@@ -782,7 +796,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        let focused = nav.focus == "play"
 +        return Button(action: play) {
 +            Label(tr("Play"), systemImage: "play.fill").font(.title3.weight(.semibold)).foregroundStyle(.white)
-+                .frame(maxWidth: 240).frame(height: 54)
++                .frame(maxWidth: 260).frame(minHeight: 54).padding(.vertical, 2)
 +                .background(RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous).fill(DS.accent))
 +                .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: focused ? 16 : 10)
 +        }
@@ -907,7 +921,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +890,30 @@
+@@ -137,21 +901,30 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
