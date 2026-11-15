@@ -191,19 +191,21 @@ static UIWindow *mode_still(UIWindowScene *scene, UIWindow *from) {
     UIWindow *w = [[UIWindow alloc] initWithWindowScene:scene];
     w.frame = scene.coordinateSpace.bounds; w.windowLevel = UIWindowLevelAlert + 2; w.userInteractionEnabled = NO; w.backgroundColor = UIColor.clearColor;
     UIViewController *vc = [UIViewController new]; w.rootViewController = vc; vc.view.backgroundColor = UIColor.clearColor;
-    if (!still) { still = [[UIView alloc] initWithFrame:w.bounds]; still.backgroundColor = UIColor.blackColor; }
-    still.frame = w.bounds; still.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:still];
+    UIView *black = [[UIView alloc] initWithFrame:w.bounds]; black.backgroundColor = UIColor.blackColor; black.tag = 2;
+    black.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:black];
+    if (still) { still.frame = w.bounds; still.tag = 1; still.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:still]; }
     w.hidden = NO;
     return w;
 }
 static void mode_fade(UIWindow *w) {
     if (!w) return;
     static NSMutableArray *alive; if (!alive) alive = [NSMutableArray array]; [alive addObject:w];
-    UIView *still = w.rootViewController.view.subviews.firstObject;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{   // after pregame_move has presented the screen again
-        [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ still.alpha = 0; still.transform = CGAffineTransformMakeScale(1.04, 1.04); }
-                         completion:^(BOOL f) { (void)f; w.hidden = YES; [alive removeObject:w]; }];
-    });
+    UIView *still = [w.rootViewController.view viewWithTag:1], *black = [w.rootViewController.view viewWithTag:2];
+    // a dip through black, as a console changes screens: the old screen sinks back and fades into black (while pregame_move presents the new one under it,
+    // hidden), then the black lifts off the new screen. No moment shows both screens over each other
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ still.alpha = 0; still.transform = CGAffineTransformMakeScale(0.97, 0.97); } completion:nil];
+    [UIView animateWithDuration:0.32 delay:0.26 options:UIViewAnimationOptionCurveEaseOut animations:^{ black.alpha = 0; }
+                     completion:^(BOOL f) { (void)f; w.hidden = YES; [alive removeObject:w]; }];
 }
 static void mode_transition(void (^change)(void)) {
     UIWindow *ipad = g_root.view.window, *a = mode_still(ipad.windowScene, ipad);
@@ -279,35 +281,12 @@ void front_ios_back_to_picker(void) {
 }
 // The game's picture on the TV while one is connected (its window made now), else on the iPad under the touch controls. The Metal layer itself moves with its view,
 // so the graphics backend keeps presenting to the same layer (front_metal_layer); its drawable follows the new size and scale (DmGameView layoutSubviews)
-// Before the game, with a TV connected and the picture moved to the iPad (the panel's Picture switch): the iPad has no panel then, so a small button over the picker
-// or the launcher takes it back. A window of its own the size of the button, above the presented screens, touches elsewhere go to them
-static UIWindow *g_back_tv;
+// Before the game, with a TV connected and the picture moved to the iPad (the panel's Picture switch): the picker and the launcher show their own Back to the TV
+// button in their layout (GamePicker.swift / Launcher.swift), asking here whether to (front_ios_tv_waiting, again on each DMShellChanged) and calling
+// front_ios_back_to_tv. A floating button of its own covered what was under it (art47)
 static void output_video_set(BOOL ipad);
-static void back_to_tv_sync(UIWindowScene *scene, BOOL show) {
-    if (!show) { g_back_tv.hidden = YES; return; }
-    if (!scene) return;
-    BOOL z = zh_ui();
-    if (!g_back_tv || g_back_tv.windowScene != scene) {
-        UIButtonConfiguration *c = [UIButtonConfiguration filledButtonConfiguration];
-        c.title = z ? @"回到電視" : @"Back to the TV";
-        c.image = [UIImage systemImageNamed:@"tv" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]];
-        c.imagePadding = 8; c.baseBackgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; c.baseForegroundColor = UIColor.whiteColor;
-        c.cornerStyle = UIButtonConfigurationCornerStyleLarge;
-        c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *in) { NSMutableDictionary *o = [in mutableCopy]; o[NSFontAttributeName] = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold]; return o; };
-        UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; LOG("front end: Back to the TV tapped"); output_video_set(NO); }]];
-        // the window gets its size first and the button the root view's bounds after: a button sized before, with flexible margins, shrank with the full-screen
-        // root view down to the window's size and was too small to hit (art43)
-        g_back_tv = [[UIWindow alloc] initWithWindowScene:scene];
-        g_back_tv.frame = CGRectMake(0, 0, 176, 52); g_back_tv.windowLevel = UIWindowLevelAlert + 1; g_back_tv.backgroundColor = UIColor.clearColor;
-        UIViewController *vc = [UIViewController new]; g_back_tv.rootViewController = vc;
-        vc.view.backgroundColor = UIColor.clearColor; vc.view.frame = g_back_tv.bounds;
-        b.frame = vc.view.bounds; b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:b];
-    }
-    CGRect sb = scene.coordinateSpace.bounds; UIEdgeInsets in = scene.windows.firstObject.safeAreaInsets;
-    g_back_tv.frame = CGRectMake(MAX(24, in.left), sb.size.height - MAX(24, in.bottom) - 52, 176, 52);   // bottom left: the picker's key hints are at the bottom right
-    g_back_tv.hidden = NO;
-    LOG("front end: Back to the TV button shown");
-}
+int front_ios_tv_waiting(void) { return g_tv_scene && video_pref_ipad() && g_root && !g_root.game; }
+void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ LOG("front end: Back to the TV tapped"); output_video_set(NO); }); }
 - (void)placeStage {
     tv_window_ensure();
     if (g_tv) g_tv.hidden = video_pref_ipad();
@@ -324,7 +303,6 @@ static void back_to_tv_sync(UIWindowScene *scene, BOOL show) {
     } else if (g_tv && self.launched) {   // before the game: the picker or the launcher follows the picture
         if (tv_on()) pregame_move(self, g_tv.rootViewController); else pregame_move(g_tv.rootViewController, self);
     }
-    back_to_tv_sync(self.view.window.windowScene, g_tv_scene && video_pref_ipad() && !self.game);
     BOOL tv = tv_on();
     if (tv && !self.tvNote) { self.tvNote = tv_panel(self.view.bounds); [self.view insertSubview:self.tvNote atIndex:0]; }
     self.tvNote.hidden = !tv;
@@ -875,6 +853,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     LOG("front end: TV connected (%.0fx%.0f points, scale %.1f)", sz.width, sz.height, g_tv_scene.screen.nativeScale);
     mode_transition(^{ [g_root placeStage]; });   // the TV's window now: the picker, the launcher or the game's picture moves there
     home_menu_relayout();  // a menu already up moves to the TV
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the picker's Back to the TV, the panel
 }
 - (void)sceneDidDisconnect:(UIScene *)scene {
     if (scene != g_tv_scene) return;
@@ -886,6 +865,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     mode_transition(^{ [g_root placeStage]; });
     (void)w;   // kept until the stage has left it
     home_menu_relayout();
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
 }
 @end
 
