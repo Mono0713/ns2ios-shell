@@ -137,13 +137,47 @@ struct BackToTVButton: View {
     }
 }
 
-// Handheld mode with a TV connected: the TV shows the same screen as the iPad, laid out for its own size, following every move (front_ios.m puts
-// dm_pregame_mirror_make's controller in the TV's window). The picker and the launcher set what it shows; the copy there takes no input and posts nothing
+// Handheld mode with a TV connected: the TV shows the same screen as the iPad, laid out for its own size, following every move. front_ios.m names the
+// controller to show it over (front_ios_tv_mirror_host: the TV's root while the picture is on the iPad before the game, else NULL, again on each
+// DMShellChanged); the picker and the launcher set what it shows. The copy there takes no input and posts nothing
+@_silgen_name("front_ios_tv_mirror_host") private func frontIosTvMirrorHost() -> UnsafeMutableRawPointer?
 final class PregameStage: ObservableObject {
     static let shared = PregameStage()
     @Published private(set) var generation = 0
     private(set) var make: (() -> AnyView)?
-    func show(_ make: (() -> AnyView)?) { self.make = make; generation += 1 }
+    private var mirror: UIViewController?   // the copy, presented over the TV's root
+    private var token: NSObjectProtocol?
+    private var retries = 0
+    func show(_ make: (() -> AnyView)?) {
+        self.make = make; generation += 1
+        if token == nil {
+            token = NotificationCenter.default.addObserver(forName: Notification.Name("DMShellChanged"), object: nil, queue: .main) { [weak self] _ in self?.sync() }
+        }
+        sync()
+    }
+    private func sync() {
+        let host = frontIosTvMirrorHost().map { Unmanaged<UIViewController>.fromOpaque($0).takeUnretainedValue() }
+        let wanted = host != nil && make != nil
+        if let m = mirror, !wanted || m.presentingViewController == nil || m.presentingViewController !== host {
+            mirror = nil
+            if m.presentingViewController != nil { m.dismiss(animated: false) }
+            fputs("picker: the TV's copy is gone\n", stderr)
+        }
+        guard wanted, mirror == nil, let host else { retries = 0; return }
+        if host.presentedViewController != nil || host.view.window == nil {   // the TV's root is busy (a screen moving between the iPad and the TV): soon again
+            if retries < 10 { retries += 1; DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.sync() } }
+            return
+        }
+        retries = 0
+        let h = UIHostingController(rootView: PregameMirrorView())
+        controllerNotForUIKit(h.view)   // Launcher.swift
+        h.view.backgroundColor = .black
+        h.view.isUserInteractionEnabled = false
+        h.modalPresentationStyle = .fullScreen
+        mirror = h
+        host.present(h, animated: false)
+        fputs("picker: the TV shows a copy of the iPad's screen (handheld mode)\n", stderr)
+    }
 }
 private struct PregameMirrorKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var pregameMirror: Bool { get { self[PregameMirrorKey.self] } set { self[PregameMirrorKey.self] = newValue } } }
@@ -158,14 +192,6 @@ private struct PregameMirrorView: View {
         .environment(\.pregameMirror, true)
         .preferredColorScheme(.dark)
     }
-}
-@_cdecl("dm_pregame_mirror_make")
-public func dmPregameMirrorMake() -> UnsafeMutableRawPointer {   // a retained UIViewController (CFBridgingRelease it on the Objective-C side)
-    let h = UIHostingController(rootView: PregameMirrorView())
-    controllerNotForUIKit(h.view)   // Launcher.swift
-    h.view.backgroundColor = .black
-    h.view.isUserInteractionEnabled = false
-    return Unmanaged.passRetained(h as UIViewController).toOpaque()
 }
 
 private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
