@@ -39,21 +39,8 @@ enum DS {
 // larger (Dynamic Type at .accessibility1), tiles and the QR code are larger and notes are left out, as on a console's home screen. Decided by the window the
 // view is in, not by a TV being plugged in: with the picture output set to the iPad the same screens stay at the iPad's sizes
 final class TenFoot: ObservableObject {
-    @Published private(set) var on = false
+    @Published fileprivate(set) var on = false
     @Published fileprivate(set) var screenScale: CGFloat = 1
-    // On the TV's window, or console mode with the picture moved to the iPad before the game (front_ios_tv_waiting): the same layout then, fitted to the
-    // iPad's screen, as the user asked (one look per mode, not per screen)
-    fileprivate var onTV = false { didSet { refresh() } }
-    private var token: NSObjectProtocol?
-    init() {
-        token = NotificationCenter.default.addObserver(forName: Notification.Name("DMShellChanged"), object: nil, queue: .main) { [weak self] _ in self?.refresh() }
-        refresh()
-    }
-    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
-    private func refresh() {
-        let now = onTV || frontIosTvWaiting() != 0
-        if now != on { withAnimation(DS.pop) { on = now } }
-    }
 }
 // Reads the role of the scene the view's window belongs to and its screen's scale; the picker moving between the iPad and the TV (the same controller,
 // presented again) moves it too. On the TV it then raises the hosting controller's display scale by the canvas's scale-up (TenFootStage), so its layers
@@ -74,7 +61,7 @@ private struct TenFootProbe: UIViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 if let t {
                     if t.screenScale != scale { t.screenScale = scale }
-                    if t.onTV != now { t.onTV = now }
+                    if t.on != now { t.on = now }
                 }
                 guard let self, let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
                 let sharp = now && u > 1.01 ? scale * u : 0
@@ -112,7 +99,7 @@ extension View {
 }
 // Back to the TV: shown while a TV is connected but the picture was switched to the iPad and the game has not started (front_ios.m answers, again on
 // each DMShellChanged); the picture goes back to the TV. In the picker's title bar and next to the launcher's Game list
-@_silgen_name("front_ios_tv_waiting") fileprivate func frontIosTvWaiting() -> Int32
+@_silgen_name("front_ios_tv_waiting") private func frontIosTvWaiting() -> Int32
 @_silgen_name("front_ios_back_to_tv") private func frontIosBackToTv()
 struct BackToTVButton: View {
     @State private var waiting = frontIosTvWaiting() != 0
