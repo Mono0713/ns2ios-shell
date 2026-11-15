@@ -10046,17 +10046,22 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
 static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
 static id<MTL4Compiler> g_fx_comp;
-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
+// 1 = metalfx (always), 2 = the launcher's Standard ("off"): MetalFX only while the picture is on a TV, where it is enlarged the most and the iPad is usually on
+// power (front_picture_on_tv), bilinear on the iPad's own screen; 0 = never ("0", a diagnostic)
+static int g_fx_mode = -1;
+__attribute__((weak)) int front_picture_on_tv(void) { return 0; }   // the iOS front end's (front_ios.m); none elsewhere
 static int fx_mode(void) {
     if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 2;
     if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
-    else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
+    else if (e && !strcmp(e, "0")) v = 0;
+    else if (e && *e && strcmp(e, "off")) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx, off or 0; keeping off (MetalFX on a TV only)", e);
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
+    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v == 1 ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it"
+         : v == 2 ? "off: MetalFX while the picture is on a TV, bilinear on the device's screen" : "never, bilinear");
     return g_fx_mode = v;
 }
+static int fx_active(void) { int m = fx_mode(); return m == 1 || (m == 2 && front_picture_on_tv()); }
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
     NSUInteger w = (NSUInteger)vp.width, h = (NSUInteger)vp.height;
@@ -10066,7 +10071,7 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
 // remake_wait: fx is the present thread's, whose textures presents still on the GPU may read: a new scaler waits for them and for FX_REMAKE_PRESENTS presents since the last
 static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake_wait) {
     NSUInteger cw = r[2], ch = r[3], ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
-    if (fx_mode() != 1 || !fx_wanted(vp, cw, ch)) return nil;
+    if (!fx_active() || !fx_wanted(vp, cw, ch)) return nil;
     if (!fx->sc || fx->in.width != cw || fx->in.height != ch || fx->in.pixelFormat != raw.pixelFormat || fx->out.width != ow || fx->out.height != oh || fx->out.pixelFormat != out_pf) {
         NSUInteger key[6] = {cw, ch, raw.pixelFormat, ow, oh, out_pf};
         if (!memcmp(key, fx->refused, sizeof key)) return nil;
