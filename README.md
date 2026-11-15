@@ -37,7 +37,7 @@ repository or CI.
 > nothing else to download and nothing to keep in step by hand. If you mean to work on the packer itself, clone the
 > repository — a release is that repository's snapshot, and both run the same code.
 
-**Which games work**: see [docs/SUPPORTED.md](docs/SUPPORTED.md) — every one with its title ID and the version it was verified on, so you can match the hex in your file name against it.
+**Which games work**: see [docs/SUPPORTED.md](docs/SUPPORTED.md) — every one with its title ID and the version it was verified on, so you can match the hex in your file name against it. For the Windows (Switch Pad) + iPad library route, see [docs/GAMES.zh-TW.md](docs/GAMES.zh-TW.md) (games tested on a real iPad, in Traditional Chinese).
 
 **1. Install the packages** (into **the interpreter you will run the packer with** — they are per interpreter):
 

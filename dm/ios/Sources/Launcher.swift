@@ -730,7 +730,6 @@ private struct LauncherView: View {
     @StateObject private var activity = ActivityModel()
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
-    @State private var shown = false   // the left column rises in once, as the picker's card does
     @StateObject private var tv = TenFoot()   // GamePicker.swift: on the TV's window
 
     var body: some View {
@@ -760,7 +759,6 @@ private struct LauncherView: View {
                     if tv.on { Spacer(minLength: 0) }
                 }
                 .padding(20)
-                .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 24)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 0) {
@@ -825,7 +823,6 @@ private struct LauncherView: View {
             held?.task.cancel()
             if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
         }
-        .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
         .tenFoot(tv)
     }
 
