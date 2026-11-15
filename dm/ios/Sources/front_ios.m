@@ -43,7 +43,8 @@ static BOOL zh_ui(void) {         // Traditional Chinese when the device prefers
 // scale 1, where a card sized for the iPad came out a fraction of the picture
 static CGFloat ui_scale(UIView *root) {
     CGSize b = root.bounds.size; if (b.width <= 0 || b.height <= 0) return 1;
-    return MAX(1.0, MIN(b.width / 1194.0, b.height / 834.0));
+    CGFloat k = MAX(1.0, MIN(b.width / 1194.0, b.height / 834.0));
+    return root.window && root.window == g_tv ? k * 1.35 : k;   // seen from the sofa, a few metres away: larger again
 }
 static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare step's progress and the Home menu: over the picture, wherever it is
 static UIView *overlay_root(void);
@@ -263,17 +264,17 @@ static UILabel *panel_label(CGFloat size, UIFontWeight w, CGFloat white) {
 // the controls card (pause, volume, picture and sound output, change games, close); the time and the battery. Landscape puts the cards side by side, portrait stacks them
 static UIButton *panel_button(NSString *title, NSString *sym, UIColor *bg, UIColor *fg, void (^tap)(void)) {
     UIButtonConfiguration *c = [UIButtonConfiguration filledButtonConfiguration];
-    c.title = title; c.image = sym ? [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]] : nil;
-    c.imagePadding = 8; c.baseBackgroundColor = bg; c.baseForegroundColor = fg; c.cornerStyle = UIButtonConfigurationCornerStyleLarge;
-    c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *in) { NSMutableDictionary *o = [in mutableCopy]; o[NSFontAttributeName] = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; return o; };
+    c.title = title; c.image = sym ? [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] : nil;
+    c.imagePadding = 10; c.baseBackgroundColor = bg; c.baseForegroundColor = fg; c.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+    c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *in) { NSMutableDictionary *o = [in mutableCopy]; o[NSFontAttributeName] = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold]; return o; };
     UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; tap(); }]];
     return b;
 }
 static UISegmentedControl *panel_segments(NSArray<NSString *> *items, void (^changed)(NSInteger)) {
     UISegmentedControl *sg = [[UISegmentedControl alloc] initWithItems:items];
     sg.selectedSegmentTintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1];
-    [sg setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]} forState:UIControlStateSelected];
-    [sg setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.7], NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]} forState:UIControlStateNormal];
+    [sg setTitleTextAttributes:@{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold]} forState:UIControlStateSelected];
+    [sg setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.7], NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightMedium]} forState:UIControlStateNormal];
     __weak UISegmentedControl *w = sg;
     [sg addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; changed(w.selectedSegmentIndex); }] forControlEvents:UIControlEventValueChanged];
     return sg;
@@ -296,15 +297,15 @@ static UIView *tv_panel(CGRect frame) {
     g2.type = kCAGradientLayerRadial; g2.colors = @[(id)[UIColor colorWithRed:0.6 green:0.25 blue:0.9 alpha:0.22].CGColor, (id)UIColor.clearColor.CGColor];
     for (CAGradientLayer *g in @[g1, g2]) { g.startPoint = CGPointMake(0.5, 0.5); g.endPoint = CGPointMake(1, 1); [v.layer addSublayer:g]; }
     // the header: the game's name (SwitchPad before one is chosen) and a live tag; the time and the battery on the right
-    UILabel *title = panel_label(32, UIFontWeightBold, 1); title.adjustsFontSizeToFitWidth = YES; title.minimumScaleFactor = 0.6;
-    UIView *live = [UIView new]; live.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1]; live.layer.cornerRadius = 10; live.layer.cornerCurve = kCACornerCurveContinuous;
-    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(12, 9, 8, 8)]; dot.layer.cornerRadius = 4;
+    UILabel *title = panel_label(42, UIFontWeightBold, 1); title.adjustsFontSizeToFitWidth = YES; title.minimumScaleFactor = 0.6;
+    UIView *live = [UIView new]; live.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1]; live.layer.cornerRadius = 12; live.layer.cornerCurve = kCACornerCurveContinuous;
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(14, 11, 10, 10)]; dot.layer.cornerRadius = 5;
     CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"opacity"]; pulse.fromValue = @1; pulse.toValue = @0.25; pulse.duration = 1.1; pulse.autoreverses = YES; pulse.repeatCount = HUGE_VALF;
     [dot.layer addAnimation:pulse forKey:@"pulse"];
-    UILabel *lt = panel_label(13, UIFontWeightSemibold, 0.9); [live addSubview:dot]; [live addSubview:lt];
-    UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:17 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:0.9 alpha:1]; clock.textAlignment = NSTextAlignmentRight;
+    UILabel *lt = panel_label(17, UIFontWeightSemibold, 0.9); [live addSubview:dot]; [live addSubview:lt];
+    UILabel *clock = [UILabel new]; clock.font = [UIFont monospacedDigitSystemFontOfSize:24 weight:UIFontWeightSemibold]; clock.textColor = [UIColor colorWithWhite:0.9 alpha:1]; clock.textAlignment = NSTextAlignmentRight;
     UIImageView *bat = [UIImageView new]; bat.contentMode = UIViewContentModeScaleAspectFit;
-    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium]; batl.textColor = [UIColor colorWithWhite:0.65 alpha:1];
+    UILabel *batl = [UILabel new]; batl.font = [UIFont monospacedDigitSystemFontOfSize:18 weight:UIFontWeightMedium]; batl.textColor = [UIColor colorWithWhite:0.65 alpha:1];
     for (UIView *x in @[title, live, clock, bat, batl]) [v addSubview:x];
     UIDevice.currentDevice.batteryMonitoringEnabled = YES;
     __weak UILabel *wc = clock, *wbl = batl; __weak UIImageView *wb = bat;
@@ -313,7 +314,7 @@ static UIView *tv_panel(CGRect frame) {
         float lv = UIDevice.currentDevice.batteryLevel; UIDeviceBatteryState st = UIDevice.currentDevice.batteryState;
         BOOL plug = st == UIDeviceBatteryStateCharging || st == UIDeviceBatteryStateFull;
         NSString *sym = plug ? @"battery.100.bolt" : lv > 0.8 ? @"battery.100" : lv > 0.55 ? @"battery.75" : lv > 0.3 ? @"battery.50" : lv > 0.12 ? @"battery.25" : @"battery.0";
-        wb.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightRegular]];
+        wb.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular]];
         wb.tintColor = !plug && lv >= 0 && lv <= 0.12 ? [UIColor colorWithRed:1 green:0.27 blue:0.23 alpha:1] : [UIColor colorWithWhite:0.85 alpha:1];
         wbl.text = lv < 0 ? @"" : [NSString stringWithFormat:@"%d%%", (int)lroundf(lv * 100)];
     };
@@ -323,21 +324,19 @@ static UIView *tv_panel(CGRect frame) {
     // ---- the players card: the QR code to join on the left, the eight numbers on the right ----
     UIView *pc = glass_card(); [v addSubview:pc];
     UIView *pcv = ((UIVisualEffectView *)pc).contentView;
-    UILabel *pt = panel_label(20, UIFontWeightBold, 1); pt.text = z ? @"玩家" : @"Players";
-    UILabel *pn = panel_label(14, UIFontWeightSemibold, 0.55);
+    UILabel *pt = panel_label(28, UIFontWeightBold, 1); pt.text = z ? @"玩家" : @"Players";
+    UILabel *pn = panel_label(20, UIFontWeightSemibold, 0.55);
     UIView *qr = [UIView new]; qr.backgroundColor = UIColor.whiteColor; qr.layer.cornerRadius = 18; qr.layer.cornerCurve = kCACornerCurveContinuous;
     UIImageView *qi = [UIImageView new]; qi.layer.magnificationFilter = kCAFilterNearest; qi.contentMode = UIViewContentModeScaleAspectFit; [qr addSubview:qi];
-    UILabel *jt = panel_label(15, UIFontWeightSemibold, 1); jt.text = z ? @"用手機加入" : @"Join with a phone"; jt.textAlignment = NSTextAlignmentCenter;
-    UILabel *ju = [UILabel new]; ju.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular]; ju.textColor = [UIColor colorWithWhite:1 alpha:0.45]; ju.textAlignment = NSTextAlignmentCenter; ju.adjustsFontSizeToFitWidth = YES;
-    NSString *url = nil; qi.image = phones_qr(&url); ju.text = url ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off");
-    UILabel *tipl = panel_label(12, UIFontWeightMedium, 0.45); tipl.text = z ? @"點玩家可以換號碼、換按鍵配置或移除" : @"Tap a player to change its number or layout, or remove it";
+    UILabel *jt = panel_label(20, UIFontWeightSemibold, 1); jt.text = z ? @"用手機加入" : @"Join with a phone"; jt.textAlignment = NSTextAlignmentCenter;
+    qi.image = phones_qr(NULL); qr.hidden = qi.image == nil; jt.hidden = qr.hidden;   // seen from a few steps away: the code and one line, no address, no tips
     UIView *grid = [UIView new];
-    for (UIView *x in @[pt, pn, qr, jt, ju, tipl, grid]) [pcv addSubview:x];
+    for (UIView *x in @[pt, pn, qr, jt, grid]) [pcv addSubview:x];
 
     // ---- the controls card ----
     UIView *cc = glass_card(); [v addSubview:cc];
     UIView *ccv = ((UIVisualEffectView *)cc).contentView;
-    UILabel *ct = panel_label(20, UIFontWeightBold, 1); ct.text = z ? @"控制" : @"Controls";
+    UILabel *ct = panel_label(28, UIFontWeightBold, 1); ct.text = z ? @"控制" : @"Controls";
     UIColor *accent = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1];
     UIButton *pause = panel_button(@"", @"pause.fill", accent, UIColor.whiteColor, ^{ if (g_root.game) home_menu_toggle(); });
     UIImageView *vlo = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.fill"]], *vhi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.wave.3.fill"]];
@@ -345,10 +344,10 @@ static UIView *tv_panel(CGRect frame) {
     UISlider *vol = [UISlider new]; vol.minimumTrackTintColor = accent; vol.value = volume_pref();
     __weak UISlider *wvol = vol;
     [vol addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; volume_set(wvol.value); }] forControlEvents:UIControlEventValueChanged];
-    UILabel *vl = panel_label(14, UIFontWeightSemibold, 0.8); vl.textAlignment = NSTextAlignmentRight;
-    UILabel *vidl = panel_label(14, UIFontWeightMedium, 0.65); vidl.text = z ? @"畫面輸出" : @"Picture";
+    UILabel *vl = panel_label(20, UIFontWeightSemibold, 0.85); vl.textAlignment = NSTextAlignmentRight;
+    UILabel *vidl = panel_label(18, UIFontWeightSemibold, 0.65); vidl.text = z ? @"畫面輸出" : @"Picture";
     UISegmentedControl *vid = panel_segments(z ? @[@"電視", @"iPad"] : @[@"TV", @"iPad"], ^(NSInteger i) { output_video_set(i == 1); });
-    UILabel *audl = panel_label(14, UIFontWeightMedium, 0.65); audl.text = z ? @"聲音輸出" : @"Sound";
+    UILabel *audl = panel_label(18, UIFontWeightSemibold, 0.65); audl.text = z ? @"聲音輸出" : @"Sound";
     UISegmentedControl *aud = panel_segments(z ? @[@"電視", @"iPad 喇叭"] : @[@"TV", @"iPad speaker"], ^(NSInteger i) { output_audio_set(i == 1); });
     UIButton *change = panel_button(z ? @"換遊戲" : @"Change games", @"square.grid.2x2.fill", [UIColor colorWithWhite:1 alpha:0.12], UIColor.whiteColor, ^{
         panel_confirm(z ? @"換遊戲？" : @"Change games?", z ? @"未存檔的進度會遺失。" : @"Unsaved progress is lost.", z ? @"換遊戲" : @"Change games", ^{ home_menu_quit(1); });
@@ -362,13 +361,13 @@ static UIView *tv_panel(CGRect frame) {
     void (^sync)(void) = ^{
         BOOL game = g_root.game != nil, paused = g_menu != nil && !g_menu_closing;
         wtitle.text = game ? game_name() : @"SwitchPad";
-        wlt.text = !game ? (z ? @"在電視上選擇遊戲" : @"Choose a game on the TV") : paused ? (z ? @"已暫停" : @"Paused") : (z ? @"正在電視上播放" : @"Playing on the TV");
-        [wlt sizeToFit]; wlt.frame = CGRectMake(28, 0, wlt.bounds.size.width, 26);
-        CGRect lf = wlive.frame; lf.size = CGSizeMake(28 + wlt.bounds.size.width + 12, 26); wlive.frame = lf;
+        wlt.text = !game ? (z ? @"在電視上選擇遊戲" : @"Choose a game on the TV") : paused ? (z ? @"已暫停" : @"Paused") : (z ? @"遊戲中" : @"Playing");
+        [wlt sizeToFit]; wlt.frame = CGRectMake(32, 0, wlt.bounds.size.width, 32);
+        CGRect lf = wlive.frame; lf.size = CGSizeMake(32 + wlt.bounds.size.width + 14, 32); wlive.frame = lf;
         wdot.backgroundColor = paused ? [UIColor colorWithRed:1 green:0.62 blue:0.04 alpha:1] : [UIColor colorWithRed:0.19 green:0.82 blue:0.35 alpha:1];
         UIButtonConfiguration *c = wpause.configuration;
-        c.title = !game ? (z ? @"選好遊戲後可以暫停" : @"Pause once a game runs") : paused ? (z ? @"繼續遊戲" : @"Continue") : (z ? @"暫停遊戲" : @"Pause");
-        c.image = [UIImage systemImageNamed:paused ? @"play.fill" : @"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]];
+        c.title = !game ? (z ? @"暫停" : @"Pause") : paused ? (z ? @"繼續遊戲" : @"Continue") : (z ? @"暫停遊戲" : @"Pause");
+        c.image = [UIImage systemImageNamed:paused ? @"play.fill" : @"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
         wpause.configuration = c; wpause.enabled = game;
         wchange.hidden = !(game && several); wquit.hidden = !game;
         if (!wvol.isTracking) wvol.value = volume_pref();
@@ -387,29 +386,28 @@ static UIView *tv_panel(CGRect frame) {
         for (NSArray *r in last) if ([r isKindOfClass:NSArray.class] && r.count >= 3) by[@([r[0] intValue])] = r;
         wpn.text = [NSString stringWithFormat:@"%lu / 8", (unsigned long)by.count];
         for (UIView *x in gr.subviews) [x removeFromSuperview];
-        CGFloat W = gr.bounds.size.width, H = gr.bounds.size.height, gap = 8, cw = (W - gap) / 2, ch = MIN(60, (H - 3 * gap) / 4);
+        CGFloat W = gr.bounds.size.width, H = gr.bounds.size.height, gap = 10, cw = (W - gap) / 2, ch = MIN(104, (H - 3 * gap) / 4);
         for (int p = 1; p <= 8; p++) {
             NSArray *r = by[@(p)]; int col = (p - 1) / 4, rowi = (p - 1) % 4;
             UIButton *t = [UIButton buttonWithType:UIButtonTypeCustom]; t.frame = CGRectMake(col * (cw + gap), rowi * (ch + gap), cw, ch);
-            t.layer.cornerRadius = 16; t.layer.cornerCurve = kCACornerCurveContinuous;
+            t.layer.cornerRadius = 20; t.layer.cornerCurve = kCACornerCurveContinuous;
             t.backgroundColor = [UIColor colorWithWhite:1 alpha:r ? 0.09 : 0.03];
             if (!r) { t.layer.borderWidth = 1; t.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.06].CGColor; }
-            UILabel *b = [[UILabel alloc] initWithFrame:CGRectMake(10, (ch - 30) / 2, 40, 30)]; b.userInteractionEnabled = NO;
-            b.text = [NSString stringWithFormat:@"%dP", p]; b.textAlignment = NSTextAlignmentCenter; b.font = [UIFont systemFontOfSize:14 weight:UIFontWeightHeavy];
-            b.layer.cornerRadius = 9; b.layer.cornerCurve = kCACornerCurveContinuous; b.layer.masksToBounds = YES;
+            // a big number on the player's colour, the name beside it in large type; nothing smaller (it is read from arm's length or the sofa)
+            CGFloat bs = MIN(56, ch - 24);
+            UILabel *b = [[UILabel alloc] initWithFrame:CGRectMake(14, (ch - bs) / 2, bs, bs)]; b.userInteractionEnabled = NO;
+            b.text = [NSString stringWithFormat:@"%dP", p]; b.textAlignment = NSTextAlignmentCenter; b.font = [UIFont systemFontOfSize:21 weight:UIFontWeightHeavy];
+            b.layer.cornerRadius = 14; b.layer.cornerCurve = kCACornerCurveContinuous; b.layer.masksToBounds = YES;
             b.backgroundColor = r ? player_color(p) : [UIColor colorWithWhite:1 alpha:0.06]; b.textColor = r ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
             [t addSubview:b];
+            CGFloat nx = 14 + bs + 14;
             if (r) {
                 BOOL phone = [r[1] intValue] == 2, xbox = r.count > 4 && [r[4] boolValue];
-                UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:phone ? @"iphone" : @"gamecontroller.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]]];
-                ic.tintColor = [UIColor colorWithWhite:1 alpha:0.7]; ic.contentMode = UIViewContentModeCenter; ic.frame = CGRectMake(56, 0, 22, ch); ic.userInteractionEnabled = NO; [t addSubview:ic];
-                UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(84, ch / 2 - 18, cw - 120, 20)]; nm.userInteractionEnabled = NO;
-                nm.text = [r[2] description]; nm.textColor = UIColor.whiteColor; nm.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; [t addSubview:nm];
-                UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(84, ch / 2 + 2, cw - 120, 16)]; m.userInteractionEnabled = NO;
-                m.text = [NSString stringWithFormat:@"%@%@", xbox ? @"Xbox" : @"Switch", p == 1 ? (z ? @" · 操作選單" : @" · runs the menu") : @""];
-                m.textColor = [UIColor colorWithWhite:1 alpha:0.5]; m.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium]; [t addSubview:m];
-                UIImageView *more = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"ellipsis.circle.fill"]]; more.tintColor = [UIColor colorWithWhite:1 alpha:0.35];
-                more.frame = CGRectMake(cw - 32, (ch - 20) / 2, 20, 20); more.userInteractionEnabled = NO; [t addSubview:more];
+                UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(nx, 0, cw - nx - 44, ch)]; nm.userInteractionEnabled = NO;
+                nm.text = [r[2] description]; nm.textColor = UIColor.whiteColor; nm.font = [UIFont systemFontOfSize:21 weight:UIFontWeightSemibold];
+                nm.adjustsFontSizeToFitWidth = YES; nm.minimumScaleFactor = 0.7; [t addSubview:nm];
+                UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:phone ? @"iphone" : @"gamecontroller.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]]];
+                ic.tintColor = [UIColor colorWithWhite:1 alpha:0.55]; ic.contentMode = UIViewContentModeCenter; ic.frame = CGRectMake(cw - 42, 0, 28, ch); ic.userInteractionEnabled = NO; [t addSubview:ic];
                 // what can be done with this player: number (swap), layout, identify, remove; the same commands the launcher uses (shell_players.m)
                 NSMutableArray *to = [NSMutableArray array];
                 for (int q = 1; q <= 8; q++) if (q != p) {
@@ -430,8 +428,8 @@ static UIView *tv_panel(CGRect frame) {
                     [UIView animateWithDuration:0.5 delay:0.04 * rowi usingSpringWithDamping:0.7 initialSpringVelocity:0.4 options:0 animations:^{ t.alpha = 1; t.transform = CGAffineTransformIdentity; } completion:nil];
                 }
             } else {
-                UILabel *e = [[UILabel alloc] initWithFrame:CGRectMake(58, 0, cw - 68, ch)]; e.userInteractionEnabled = NO;
-                e.text = z ? @"空位" : @"Open"; e.textColor = [UIColor colorWithWhite:1 alpha:0.25]; e.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; [t addSubview:e];
+                UILabel *e = [[UILabel alloc] initWithFrame:CGRectMake(nx, 0, cw - nx - 10, ch)]; e.userInteractionEnabled = NO;
+                e.text = z ? @"空位" : @"Open"; e.textColor = [UIColor colorWithWhite:1 alpha:0.25]; e.font = [UIFont systemFontOfSize:20 weight:UIFontWeightMedium]; [t addSubview:e];
             }
             [gr addSubview:t];
         }
@@ -444,32 +442,31 @@ static UIView *tv_panel(CGRect frame) {
         g1.frame = CGRectMake(-S.width * 0.3, -S.height * 0.4, S.width * 1.1, S.width * 1.1);
         g2.frame = CGRectMake(S.width * 0.4, S.height * 0.3, S.width * 0.9, S.width * 0.9);
         [CATransaction commit];
-        title.frame = CGRectMake(L, T, R - L - 200, 38);
-        CGRect lf = live.frame; lf.origin = CGPointMake(L, T + 44); live.frame = lf;
-        batl.frame = CGRectMake(R - 44, T + 6, 44, 26); bat.frame = CGRectMake(R - 44 - 34, T + 6, 30, 26); clock.frame = CGRectMake(R - 44 - 34 - 76, T + 6, 70, 26);
-        CGFloat top = T + 88, ch = B - top;
+        title.frame = CGRectMake(L, T, R - L - 260, 50);
+        CGRect lf = live.frame; lf.origin = CGPointMake(L, T + 58); live.frame = lf;
+        batl.frame = CGRectMake(R - 56, T + 10, 56, 30); bat.frame = CGRectMake(R - 56 - 40, T + 10, 36, 30); clock.frame = CGRectMake(R - 56 - 40 - 96, T + 10, 90, 30);
+        CGFloat top = T + 108, ch = B - top;
         BOOL wide = S.width > S.height;
         CGRect pf, cf;
-        if (wide) { CGFloat cw = MIN(360, (R - L) * 0.34); pf = CGRectMake(L, top, R - L - cw - 18, ch); cf = CGRectMake(R - cw, top, cw, ch); }
+        if (wide) { CGFloat cw = MIN(400, (R - L) * 0.36); pf = CGRectMake(L, top, R - L - cw - 18, ch); cf = CGRectMake(R - cw, top, cw, ch); }
         else { CGFloat hh = MIN(520, ch * 0.56); pf = CGRectMake(L, top, R - L, hh); cf = CGRectMake(L, top + hh + 18, R - L, ch - hh - 18); }
         pc.frame = pf; cc.frame = cf;
         // players card: QR column, then the grid
-        CGFloat pw = pf.size.width, ph = pf.size.height, qs = MIN(170, ph - 150);
-        pt.frame = CGRectMake(22, 18, 120, 26); pn.frame = CGRectMake(22 + 64, 22, 80, 20);
-        qr.frame = CGRectMake(22, 60, qs, qs); qi.frame = CGRectInset(qr.bounds, 12, 12);
-        jt.frame = CGRectMake(22, 60 + qs + 10, qs, 20); ju.frame = CGRectMake(22, 60 + qs + 32, qs, 16);
-        tipl.frame = CGRectMake(22 + qs + 20, ph - 32, pw - qs - 62, 18);
-        CGRect gf = CGRectMake(22 + qs + 20, 60, pw - qs - 62, ph - 60 - 42);
+        CGFloat pw = pf.size.width, ph = pf.size.height, qs = qr.hidden ? -20 : MIN(200, ph - 140);
+        pt.frame = CGRectMake(24, 20, 120, 34); [pt sizeToFit]; pn.frame = CGRectMake(24 + pt.bounds.size.width + 14, 26, 90, 26);
+        qr.frame = CGRectMake(24, 72, qs, qs); qi.frame = CGRectInset(qr.bounds, 14, 14);
+        jt.frame = CGRectMake(24, 72 + qs + 14, qs, 26);
+        CGRect gf = CGRectMake(24 + qs + 20, 72, pw - qs - 68, ph - 72 - 24);
         if (!CGRectEqualToRect(grid.frame, gf)) { grid.frame = gf; [held addObjectsFromArray:@[@1, @2, @3, @4, @5, @6, @7, @8]]; fill(last); }   // a new size: drawn again with no pop
         // controls card: a column
         CGFloat cw2 = cf.size.width - 44, y = 18;
-        ct.frame = CGRectMake(22, y, cw2, 26); y += 44;
-        pause.frame = CGRectMake(22, y, cw2, 52); y += 70;
-        vlo.frame = CGRectMake(22, y + 4, 18, 22); vl.frame = CGRectMake(22 + cw2 - 48, y + 4, 48, 22);
-        vol.frame = CGRectMake(22 + 26, y, cw2 - 26 - 26 - 56, 30); vhi.frame = CGRectMake(22 + cw2 - 48 - 30, y + 4, 24, 22); y += 50;
-        vidl.frame = CGRectMake(22, y, cw2, 18); y += 24; vid.frame = CGRectMake(22, y, cw2, 34); y += 50;
-        audl.frame = CGRectMake(22, y, cw2, 18); y += 24; aud.frame = CGRectMake(22, y, cw2, 34); y += 52;
-        CGFloat bh = 46, by = MAX(y, cf.size.height - 18 - bh);
+        ct.frame = CGRectMake(22, y + 2, cw2, 34); y += 54;
+        pause.frame = CGRectMake(22, y, cw2, 66); y += 86;
+        vlo.frame = CGRectMake(22, y + 4, 24, 28); vl.frame = CGRectMake(22 + cw2 - 60, y + 3, 60, 30);
+        vol.frame = CGRectMake(22 + 32, y + 1, cw2 - 32 - 32 - 70, 34); vhi.frame = CGRectMake(22 + cw2 - 60 - 34, y + 4, 30, 28); y += 58;
+        vidl.frame = CGRectMake(22, y, cw2, 24); y += 30; vid.frame = CGRectMake(22, y, cw2, 46); y += 64;
+        audl.frame = CGRectMake(22, y, cw2, 24); y += 30; aud.frame = CGRectMake(22, y, cw2, 46); y += 64;
+        CGFloat bh = 60, by = MAX(y, cf.size.height - 20 - bh);
         if (wchange.hidden) { quit.frame = CGRectMake(22, by, cw2, bh); }
         else { change.frame = CGRectMake(22, by, (cw2 - 10) / 2, bh); quit.frame = CGRectMake(22 + (cw2 + 10) / 2, by, (cw2 - 10) / 2, bh); }
     };
@@ -876,8 +873,8 @@ static void menu_refresh(int sel) {   // the same page drawn again (a value chan
     g_menu_rows = menu_rows(g_menu_page); g_menu_sel = MAX(0, MIN(sel, (int)g_menu_rows.count - 1));
     g_menu_anim = 0; home_menu_relayout(); home_menu_draw();
 }
-// The Players page: A picks a player up and A again (or a tap on another number) puts it down there; up and down move it number by number. Moving player 1
-// hands the menu to whoever becomes player 1, so the move ends there
+// The Players page: A picks a player up, up and down choose the number it goes to, A puts it down there (or a tap on another number): one swap, so player 1
+// keeps the menu while carrying itself to any number, 8P included, and whoever becomes player 1 runs the menu after
 static void slot_swap(int a, int b) {
     if (a == b || a < 0 || b < 0 || a >= DM_PLAYERS || b >= DM_PLAYERS) return;
     LOG("front end: Home menu: player %d and player %d swap", a + 1, b + 1);
@@ -953,6 +950,7 @@ static UIView *home_menu_make(UIView *root) {
     UIView *menu = [[UIView alloc] initWithFrame:root.bounds];
     menu.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    BOOL onTV = root.window && root.window == g_tv;   // seen from the sofa: larger type, no touch buttons, the card fills most of the screen
     BOOL pl = g_menu_page == 1;   // the Players page: the phones' QR code on the left, the eight numbers on the right
     CGFloat W = pl ? 720 : 440, rowH = pl ? 46 : 60, gap = pl ? 6 : 8, pad = 16, top = 84, x0 = pl ? pad + 236 : pad, rw = W - x0 - pad;
     NSString *qrURL = nil; UIImage *qr = pl ? phones_qr(&qrURL) : nil;
@@ -1024,11 +1022,11 @@ static UIView *home_menu_make(UIView *root) {
             iv.tag = 61; iv.contentMode = UIViewContentModeCenter; ic = iv;
         }
         ic.frame = tile.bounds; [tile addSubview:ic];
-        int tools = held ? 3 : [act isEqualToString:@"volume"] ? 2 : 0;   // small buttons at the row's end, for touch
+        int tools = onTV ? 0 : held ? 3 : [act isEqualToString:@"volume"] ? 2 : 0;   // small buttons at the row's end, for touch (none on the TV, nobody touches it)
         CGFloat x = 12 + tileS + 12, tw = rw - x - 12 - tools * 40;
         BOOL two = [g_menu_rows[i][1] length] > 0;
         UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
-        a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+        a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:(onTV ? 19 : 17) weight:UIFontWeightSemibold];
         UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
         d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13];
         if (slot >= 0 && !held) a.textColor = [UIColor colorWithWhite:1 alpha:0.35];
@@ -1046,12 +1044,12 @@ static UIView *home_menu_make(UIView *root) {
         [card addSubview:row];
     }
     UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(pad, H - 34, W - 2 * pad, 22)];
-    hint.text = pl ? (g_menu_move >= 0 ? (z ? @"↑↓ 換號碼 · A 放下" : @"↑↓ change number · A put down")
-                                      : (z ? @"A 移動 · Y 按鍵配置 · X 移除 · B 返回" : @"A move · Y layout · X remove · B back"))
-                   : (z ? @"A 確定 · ←→ 音量 · B 或 Home 繼續遊戲" : @"A select · ←→ volume · B or Home to play");
-    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.4]; hint.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    hint.text = pl ? (g_menu_move >= 0 ? (z ? @"↑↓ 選號碼   A 放下   B 取消" : @"↑↓ number   A put down   B cancel")
+                                      : (z ? @"A 換號碼   Y 按鍵配置   X 移除" : @"A number   Y layout   X remove"))
+                   : (z ? @"←→ 音量" : @"←→ volume");
+    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.5]; hint.font = [UIFont systemFontOfSize:(onTV ? 15 : 13) weight:UIFontWeightSemibold];
     [card addSubview:hint];
-    CGFloat k = ui_scale(root);
+    CGFloat k = onTV ? MIN(root.bounds.size.width * 0.84 / W, root.bounds.size.height * 0.86 / H) : ui_scale(root);
     CGAffineTransform base = CGAffineTransformMakeScale(k, k);
     card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
     [menu addSubview:card]; [root addSubview:menu];
@@ -1087,16 +1085,16 @@ static void home_menu_relayout(void) {   // the TV came or went while the menu i
 static NSArray<NSString *> *audio_row(void) {
     BOOL z = zh_ui(), ipad = [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"];
     return @[ipad ? (z ? @"聲音輸出：iPad 喇叭" : @"Sound output: iPad speaker") : (z ? @"聲音輸出：電視" : @"Sound output: TV"),
-             z ? @"A 切換" : @"A switches", @"audio"];
+             @"", @"audio"];
 }
 static NSArray<NSString *> *volume_row(void) {
     BOOL z = zh_ui(); int pct = (int)lroundf(volume_pref() * 100);
-    return @[[NSString stringWithFormat:z ? @"音量  %d%%" : @"Volume  %d%%", pct], z ? @"← → 調整" : @"← → to change", @"volume"];
+    return @[[NSString stringWithFormat:z ? @"音量  %d%%" : @"Volume  %d%%", pct], @"", @"volume"];
 }
 static NSArray<NSString *> *video_row(void) {
     BOOL z = zh_ui(), ipad = video_pref_ipad();
     return @[ipad ? (z ? @"畫面輸出：iPad" : @"Picture output: iPad") : (z ? @"畫面輸出：電視" : @"Picture output: TV"),
-             z ? @"A 切換" : @"A switches", @"video"];
+             @"", @"video"];
 }
 // The menu's pages: 0 the main list, 1 the players (the eight numbers, who holds each; joining with a phone on the same page)
 static NSArray *menu_rows(int page) {
@@ -1106,12 +1104,14 @@ static NSArray *menu_rows(int page) {
         shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
         for (int p = 0; p < DM_PLAYERS; p++) {
             NSString *act = [NSString stringWithFormat:@"slot:%d", p];
-            if (info[p].kind == SHELL_SLOT_NONE) { [rows addObject:@[z ? @"空位" : @"Open", g_menu_move >= 0 ? (z ? @"A 移到這裡" : @"A moves here") : @"", act]]; continue; }
+            BOOL target = g_menu_move >= 0 && g_menu_move != p && g_menu_sel == p;   // where the carried player would go
+            if (info[p].kind == SHELL_SLOT_NONE) { [rows addObject:@[z ? @"空位" : @"Open", target ? (z ? @"放到這裡" : @"Put here") : @"", act]]; continue; }
             NSString *kind = info[p].kind == SHELL_SLOT_PHONE ? (z ? @"手機" : @"Phone") : (z ? @"手把" : @"Controller");
             NSString *label = [NSString stringWithUTF8String:info[p].label] ?: @"?";
-            NSString *d = [NSString stringWithFormat:@"%@ · %@%@", kind, info[p].xbox ? @"Xbox" : @"Switch", p == 0 ? (z ? @" · 操作選單" : @" · runs the menu") : @""];
-            if (g_menu_move == p) d = z ? @"移動中：↑↓ 換號碼，A 放下" : @"Moving: ↑↓ to change number, A to put down";
-            if (g_menu_confirm == p) d = z ? @"再按一次 X 移除" : @"Press X again to remove";
+            NSString *d = [NSString stringWithFormat:@"%@ · %@", kind, info[p].xbox ? @"Xbox" : @"Switch"];
+            if (g_menu_move == p) d = z ? @"移動中" : @"Moving";
+            if (target) d = z ? @"和這位交換" : @"Swap here";
+            if (g_menu_confirm == p) d = z ? @"再按 X 移除" : @"X again to remove";
             [rows addObject:@[label, d, act]];
         }
         [rows addObject:@[z ? @"返回" : @"Back", @"", @"back"]];
@@ -1119,12 +1119,12 @@ static NSArray *menu_rows(int page) {
     }
     const char *ng = getenv("DM_SHELL_GAMES"); BOOL several = ng && atoi(ng) > 1;
     int n = 0; { shell_slot_info info[DM_PLAYERS]; shell_slots_list(info); for (int p = 0; p < DM_PLAYERS; p++) n += info[p].kind != SHELL_SLOT_NONE; }
-    [rows addObject:@[z ? @"繼續遊戲" : @"Continue", z ? @"回到遊戲" : @"Back to the game", @"continue"]];
-    [rows addObject:@[z ? @"玩家" : @"Players", [NSString stringWithFormat:z ? @"%d 位 · 加入、換號碼、按鍵配置" : @"%d · join, numbers, layouts", n], @"players"]];
+    [rows addObject:@[z ? @"繼續遊戲" : @"Continue", @"", @"continue"]];
+    [rows addObject:@[z ? @"玩家" : @"Players", [NSString stringWithFormat:z ? @"%d 位" : @"%d", n], @"players"]];
     [rows addObject:volume_row()];
     if (g_tv_scene) { [rows addObject:video_row()]; [rows addObject:audio_row()]; }   // a TV is connected: where the picture and the sound go
-    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"回到選擇遊戲（未存檔進度會遺失）" : @"Back to the game picker (unsaved progress is lost)", @"change"]];
-    [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"結束 SwitchPad（未存檔進度會遺失）" : @"Quits SwitchPad (unsaved progress is lost)", @"quit"]];
+    if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"未存檔進度會遺失" : @"Unsaved progress is lost", @"change"]];
+    [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"未存檔進度會遺失" : @"Unsaved progress is lost", @"quit"]];
     return rows;
 }
 // g_menu_page declared near the top
@@ -1158,12 +1158,8 @@ static void home_menu_input(NSDictionary *u) {
     NSString *k = u[@"key"], *act = g_menu_rows[g_menu_sel][2];
     int slot = [act hasPrefix:@"slot:"] ? [[act substringFromIndex:5] intValue] : -1;
     BOOL up = [k isEqualToString:@"up"], down = [k isEqualToString:@"down"];
-    if ((up || down) && g_menu_move >= 0 && slot >= 0) {   // carrying a player: it moves with the selection, number by number
-        int to = slot + (up ? -1 : 1);
-        if (to < 0 || to >= DM_PLAYERS) return;
-        int from = g_menu_move; slot_swap(from, to);
-        g_menu_move = (from == 0 || to == 0) ? -1 : to;   // player 1 changed hands: the new player 1 runs the menu now
-        menu_refresh(to); return;
+    if ((up || down) && g_menu_move >= 0) {   // carrying a player: the selection chooses where it goes among the eight numbers; nothing changes until A
+        g_menu_sel = MAX(0, MIN(DM_PLAYERS - 1, g_menu_sel + (up ? -1 : 1))); menu_refresh(g_menu_sel); return;
     }
     if (up) g_menu_sel = MAX(0, g_menu_sel - 1);
     else if (down) g_menu_sel = MIN((int)g_menu_rows.count - 1, g_menu_sel + 1);
