@@ -8,8 +8,10 @@
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
 // Game list button comes back here until the game starts (one process runs one game, main.m).
 import SwiftUI
+import Combine
 import UIKit
 import Network
+import CoreImage.CIFilterBuiltins
 
 @_silgen_name("shell_game_choose") private func shellGameChoose(_ gid: UnsafePointer<CChar>)
 
@@ -33,6 +35,142 @@ enum DS {
     static let cardIn = AnyTransition.asymmetric(insertion: .scale(scale: 0.9).combined(with: .offset(y: 24)).combined(with: .opacity),
                                                  removal: .scale(scale: 0.94).combined(with: .opacity))
 }
+// Ten-foot mode: on the TV's window (front_ios.m presents the picker and the launcher there before the game) everyone sits far from the screen, so text is
+// larger (Dynamic Type at .accessibility1), tiles and the QR code are larger and notes are left out, as on a console's home screen. Decided by the window the
+// view is in, not by a TV being plugged in: with the picture output set to the iPad the same screens stay at the iPad's sizes
+final class TenFoot: ObservableObject {
+    @Published private(set) var on = false
+    @Published fileprivate(set) var screenScale: CGFloat = 1
+    // On the TV's window, or console mode with the picture moved to the iPad before the game (front_ios_tv_waiting): the same layout then, fitted to the
+    // iPad's screen, as the user asked (one look per mode, not per screen)
+    fileprivate var onTV = false { didSet { refresh() } }
+    private var token: NSObjectProtocol?
+    init() {
+        token = NotificationCenter.default.addObserver(forName: Notification.Name("DMShellChanged"), object: nil, queue: .main) { [weak self] _ in self?.refresh() }
+        refresh()
+    }
+    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
+    private func refresh() {
+        let now = onTV || frontIosTvWaiting() != 0
+        if now != on { on = now }   // at once: animated, every text and box of the screen moved to its new size on its own when the launcher opened
+    }
+}
+// Reads the role of the scene the view's window belongs to and its screen's scale; the picker moving between the iPad and the TV (the same controller,
+// presented again) moves it too. On the TV it then raises the hosting controller's display scale by the canvas's scale-up (TenFootStage), so its layers
+// (text, the list's cells, images) are drawn at the size they end up on the TV, not at 1920 x 1080 stretched. The traits are only written, a turn later:
+// reading traitOverrides.displayScale while it is not set asserts, which closed art45 at launch
+private struct TenFootProbe: UIViewRepresentable {
+    let tv: TenFoot
+    final class Probe: UIView {
+        weak var tv: TenFoot?
+        private var applied: CGFloat = 0   // the display scale this probe set (0: none)
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let w = window else { return }
+            let now = w.windowScene?.session.role == .windowExternalDisplayNonInteractive
+            let scale = w.windowScene?.screen.scale ?? 1
+            let u = now ? TenFootStage.scale(w.bounds.size) : 1
+            let t = tv
+            DispatchQueue.main.async { [weak self] in
+                if let t {
+                    if t.screenScale != scale { t.screenScale = scale }
+                    if t.onTV != now { t.onTV = now }
+                }
+                guard let self, let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
+                let sharp = now && u > 1.01 ? scale * u : 0
+                if sharp == self.applied { return }
+                if sharp > 0 { vc.traitOverrides.displayScale = sharp } else { vc.traitOverrides.remove(UITraitDisplayScale.self) }
+                self.applied = sharp
+            }
+        }
+    }
+    func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tv = tv; return v }
+    func updateUIView(_ v: Probe, context: Context) { v.tv = tv }
+}
+// On the TV the screen is laid out on a 1920 x 1080 canvas and scaled to the TV's window, so it fills the same share of any TV or projector: a TV's window
+// can be 1920, 2560 or 3840 points across, where sizes in points came out a fraction of the screen
+private struct TenFootStage: ViewModifier {
+    let on: Bool
+    var screenScale: CGFloat = 1
+    static func scale(_ size: CGSize) -> CGFloat { max(0.5, min(size.width / 1920, size.height / 1080)) }
+    func body(content: Content) -> some View {
+        // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
+        GeometryReader { g in
+            let u = on ? TenFootStage.scale(g.size) : 1
+            content.frame(width: g.size.width / u, height: g.size.height / u)
+                // drawn at the size it ends up on the TV, not at the canvas's size stretched (soft on a 1440p or 4K TV); the iPad keeps its own
+                .transformEnvironment(\.displayScale) { if on && u > 1.01 { $0 = screenScale * u } }
+                .scaleEffect(u, anchor: .topLeading)
+                .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+        }
+        .ignoresSafeArea(edges: on ? Edge.Set.all : [])
+    }
+}
+extension View {
+    // The probe and, on the TV, the canvas: the outermost modifiers of the picker's and the launcher's screens
+    func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on, screenScale: tv.screenScale)).background(TenFootProbe(tv: tv)) }
+}
+// Back to the TV: shown while a TV is connected but the picture was switched to the iPad and the game has not started (front_ios.m answers, again on
+// each DMShellChanged); the picture goes back to the TV. In the picker's title bar and next to the launcher's Game list
+@_silgen_name("front_ios_tv_waiting") fileprivate func frontIosTvWaiting() -> Int32
+@_silgen_name("front_ios_back_to_tv") private func frontIosBackToTv()
+struct BackToTVButton: View {
+    @State private var waiting = frontIosTvWaiting() != 0
+    @Environment(\.pregameMirror) private var mirror   // not on the TV's copy
+    var body: some View {
+        Group {
+            if waiting && !mirror {
+                Button { frontIosBackToTv() } label: {
+                    Label(tr("回到電視", "Back to the TV"), systemImage: "tv").font(.headline).foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.accent))
+                }
+                .buttonStyle(.plain)
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .animation(DS.pop, value: waiting)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMShellChanged")).receive(on: DispatchQueue.main)) { _ in
+            waiting = frontIosTvWaiting() != 0
+        }
+        .onAppear { waiting = frontIosTvWaiting() != 0 }
+    }
+}
+
+// Handheld mode with a TV connected: the TV shows the same screen as the iPad, laid out for its own size, following every move (front_ios.m puts
+// dm_pregame_mirror_make's controller in the TV's window). The picker and the launcher set what it shows; the copy there takes no input and posts nothing
+final class PregameStage: ObservableObject {
+    static let shared = PregameStage()
+    @Published private(set) var generation = 0
+    private(set) var make: (() -> AnyView)?
+    func show(_ make: (() -> AnyView)?) { self.make = make; generation += 1 }
+}
+private struct PregameMirrorKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var pregameMirror: Bool { get { self[PregameMirrorKey.self] } set { self[PregameMirrorKey.self] = newValue } } }
+private struct PregameMirrorView: View {
+    @ObservedObject private var stage = PregameStage.shared
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let make = stage.make { make().id(stage.generation).transition(.opacity) }
+        }
+        .animation(.easeInOut(duration: 0.3), value: stage.generation)
+        .environment(\.pregameMirror, true)
+        .preferredColorScheme(.dark)
+    }
+}
+@_cdecl("dm_pregame_mirror_make")
+public func dmPregameMirrorMake() -> UnsafeMutableRawPointer {   // a retained UIViewController (CFBridgingRelease it on the Objective-C side)
+    let h = UIHostingController(rootView: PregameMirrorView())
+    controllerNotForUIKit(h.view)   // Launcher.swift
+    h.view.backgroundColor = .black
+    h.view.isUserInteractionEnabled = false
+    return Unmanaged.passRetained(h as UIViewController).toOpaque()
+}
+
+private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
+
 // A frosted card: thick dark material, the card tint, a hairline edge and a soft shadow (front_ios.m's menu card)
 struct GlassCard: ViewModifier {
     var radius: CGFloat = DS.cardRadius
@@ -213,14 +351,44 @@ private struct StatusBar: View {
     }
 }
 
+// A game's icon is the package's 256 x 256 JPEG; on a TV a tile is 700 to 1000 pixels across. Enlarged once with Lanczos (sharper edges than the GPU's
+// linear filter), up to 1024 pixels, and kept
+private let sharpIcons = NSCache<NSString, UIImage>()
+func tvIcon(_ img: UIImage, key: String? = nil) -> UIImage {   // key: for an icon read from its file again on every redraw (the launcher's)
+    let k = (key ?? "\(ObjectIdentifier(img).hashValue)") as NSString
+    if let done = sharpIcons.object(forKey: k) { return done }
+    let px = max(img.size.width * img.scale, img.size.height * img.scale)
+    guard px > 0, px < 1000, let src = CIImage(image: img) else { return img }
+    let f = CIFilter.lanczosScaleTransform(); f.inputImage = src; f.scale = Float(1024 / px); f.aspectRatio = 1
+    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent.integral) else { return img }
+    let big = UIImage(cgImage: cg, scale: img.scale * 1024 / px, orientation: img.imageOrientation)
+    sharpIcons.setObject(big, forKey: k)
+    return big
+}
+
+// The blurred icon behind the picker and the launcher, blurred once on a small copy and kept: a live 60-point blur of a screen-sized image (two of them
+// while the backdrop cross-fades) was redrawn on every frame of a move, and on a 4K TV that made the moves stutter
+private let blurredIcons = NSCache<NSString, UIImage>()
+func blurredIcon(_ img: UIImage, key: String) -> UIImage? {
+    if let done = blurredIcons.object(forKey: key as NSString) { return done }
+    guard let src = CIImage(image: img), src.extent.width > 0 else { return nil }
+    let small = src.transformed(by: CGAffineTransform(scaleX: 96 / src.extent.width, y: 96 / src.extent.width))
+    let f = CIFilter.gaussianBlur(); f.inputImage = small.clampedToExtent(); f.radius = 5
+    guard let out = f.outputImage?.cropped(to: small.extent), let cg = CIContext().createCGImage(out, from: small.extent) else { return nil }
+    let done = UIImage(cgImage: cg)
+    blurredIcons.setObject(done, forKey: key as NSString)
+    return done
+}
+
 private struct GameTile: View {
     let game: PickerGame
     let focused: Bool
     let side: CGFloat
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
         ZStack {
             if let icon = game.icon {
-                Image(uiImage: icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
+                Image(uiImage: tenFoot ? tvIcon(icon, key: game.id) : icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
             } else {
                 LinearGradient(colors: [Color(white: 0.29), Color(white: 0.11)], startPoint: .top, endPoint: .bottom)
                 Text(game.name).font(.title3.weight(.bold)).foregroundStyle(.white).multilineTextAlignment(.center).padding(12)
@@ -378,10 +546,12 @@ private struct PickerView: View {
     @StateObject private var activity = ActivityModel()
     @State private var held: (key: String, task: Task<Void, Never>)?
     @State private var drag: CGFloat = 0   // how far a finger has moved the row
+    @StateObject private var tv = TenFoot()
+    @Environment(\.pregameMirror) private var mirror   // the TV's copy in handheld mode: shows, takes no input
 
     var body: some View {
         GeometryReader { g in
-            let side = min(g.size.height * 0.36, g.size.width / 4.4, 300)
+            let side = tv.on ? min(g.size.height * 0.42, g.size.width / 3.6) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot (on the 1920 x 1080 canvas): fewer, larger tiles
             let gap = side * 0.14
             let current = m.game(m.focus)
             ZStack {
@@ -397,6 +567,7 @@ private struct PickerView: View {
                     Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.padsOpen = false }
                         .transition(.opacity)
                     PadsCard(m: m, pads: pads, players: players).padding(32)
+                        .dynamicTypeSize(tv.on ? .xLarge ... .xLarge : .xSmall ... .accessibility5)   // its places have fixed sizes: a little larger on a TV, not the whole step
                         .transition(DS.cardIn)
                 }
             }
@@ -405,12 +576,15 @@ private struct PickerView: View {
             .frame(width: g.size.width, height: g.size.height)
             .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down
         }
+        .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // every text style grows together on a TV
+        .environment(\.tenFoot, tv.on)
         .preferredColorScheme(.dark)
         .statusBarHidden()
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { input($0.userInfo) }
-        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { input($0.userInfo) } }
+        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear { held?.task.cancel() }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
+        .tenFoot(tv)
     }
 
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
@@ -455,11 +629,11 @@ private struct PickerView: View {
     private func backdrop(_ game: PickerGame?) -> some View {
         ZStack {
             Color.black
-            if let icon = game?.icon {
-                Image(uiImage: icon).resizable().scaledToFill()
+            if let game, let icon = game.icon, let soft = blurredIcon(icon, key: game.id) {
+                Image(uiImage: soft).resizable().interpolation(.medium).scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .blur(radius: 60).scaleEffect(1.4).opacity(0.55)
-                    .id(game?.id).transition(.opacity)
+                    .scaleEffect(1.4).opacity(0.55)
+                    .id(game.id).transition(.opacity)
             }
             LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
         }
@@ -480,6 +654,7 @@ private struct PickerView: View {
                 Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
             }
             Spacer()
+            BackToTVButton()
             StatusBar()
         }
         .foregroundStyle(.white)
@@ -562,6 +737,7 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = PickerModel()
     let h = UIHostingController(rootView: PickerView(m: model))
+    PregameStage.shared.show { AnyView(PickerView(m: model)) }   // the TV's copy in handheld mode
     controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
@@ -570,6 +746,7 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
         fputs("picker: \(game.id) (\(game.name))\n", stderr)
         NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
         DispatchQueue.main.async {   // let the loading veil draw before main.m reads the game's files
+            PregameStage.shared.show(nil)
             game.id.withCString { shellGameChoose($0) }
             h?.dismiss(animated: true) { done() }
         }
