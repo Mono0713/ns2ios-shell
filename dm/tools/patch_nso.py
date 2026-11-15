@@ -444,31 +444,17 @@ def site_retry_window(parts):
     return start
 
 # ---- Function boundaries (eh_frame_hdr) ----
-m0 = struct.unpack_from('<I', IMG, 4)[0]
-assert IMG[m0:m0 + 4] == b'MOD0'
-ehs = m0 + struct.unpack_from('<i', IMG, m0 + 16)[0]
-def rd(o, enc):
-    fmt, app = enc & 0xF, enc & 0x70
-    v, sz = {0x3: (struct.unpack_from('<I', IMG, o)[0], 4), 0xB: (struct.unpack_from('<i', IMG, o)[0], 4),
-             0x4: (struct.unpack_from('<Q', IMG, o)[0], 8)}[fmt]
-    if app == 0x10: v += o
-    if app == 0x30: v += ehs
-    return v, sz
-_, penc, cenc, tenc = IMG[ehs:ehs + 4]
-o = ehs + 4
-_, s = rd(o, penc); o += s
-nfde, s = rd(o, cenc); o += s
-starts = set()
-for _ in range(nfde):
-    a, s = rd(o, tenc); o += s
-    _, s = rd(o, tenc); o += s
-    starts.add(a)
+# nso_code.fde_table reads the binary search table and returns nothing when the module has no valid eh_frame_hdr (MOD0's range empty or pointing at zeros,
+# as in homebrew and recompiled ports built without one: version byte 0, pointer encodings 0). Reading it here with a table of three formats raised
+# KeyError: 0 on such a module and stopped the pack; without function starts the rewriter falls back to the text's own ranges (fn_range below)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nso_code
+starts = {a for a, _ in nso_code.fde_table(IMG)}
+if not starts: print('[RED] this module has no eh_frame_hdr function table: rewriting without function boundaries', file=sys.stderr)
 starts = sorted(x for x in starts if x < TEXT_END)
 
 # ---- Linear scan to find all rewrite points (not relying on register read/write reports) ----
 # Data blocks in the text (nso_code.py: Absolum's main starts with 1.7 MB of them) are not code: words there that read as rewrite sites are left alone
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import nso_code
 DATA_BLOCKS = nso_code.data_blocks(IMG, TEXT_END, md)
 CODE_RANGES = list(zip([0] + [e for _, e in DATA_BLOCKS], [s for s, _ in DATA_BLOCKS] + [TEXT_END]))
 md_lite = Cs(CS_ARCH_ARM64, CS_MODE_ARM)   # no details: the x18 scan reads only the operand text
@@ -519,7 +505,9 @@ def func_of(a):
     sites before its first FDE (DRAGON QUEST VII Reimagined main, 110 before +0xb310, none in an exclusive window or a br x18), so every other rewrite is byte-identical"""
     i = bisect.bisect_right(starts, a) - 1
     if i >= 0: return (starts[i], starts[i + 1] if i + 1 < len(starts) else TEXT_END)
-    return (max((e for s, e in DATA_BLOCKS if e <= a), default=0), starts[0]) if starts else (a, a + 4)
+    lo = max((e for s, e in DATA_BLOCKS if e <= a), default=0)
+    if starts: return (lo, starts[0])
+    return (lo, min((s for s, e in DATA_BLOCKS if s > a), default=TEXT_END))   # no eh_frame_hdr table at all: the code between data blocks is one function, analysed in pieces when long
 done = set(); windows = []; jumps = {}; tabjumps = {}; tailcalls = set(); retries = []
 def check_before_copy(insl, ctx, ld, idx):
     """The index copied from the checked register before the check, far back (DRAGON QUEST XI S main+0x2dd8cd0: mov w0,w18, then 41 instructions with two other jump tables on x0, then

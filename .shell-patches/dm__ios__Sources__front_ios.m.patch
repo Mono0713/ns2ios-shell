@@ -624,7 +624,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    }];
 +    resume_when_released(g_menu_gen, 0);
 +}
-+// Change games leaves Documents/relaunch.txt behind: a Shortcuts automation ("When SwitchPad is closed": if that file exists, open SwitchPad)
++// Change games leaves Documents/relaunch.txt behind; the next launch takes it (main.m) and the Shortcuts action "SwitchPad 要重開嗎？" (ReopenIntent.swift) answers yes, so an automation on "SwitchPad is closed"
 +// brings the app straight back to the picker with nobody touching the iPad; Close the game leaves none, and the next launch removes it (main.m)
 +static void home_menu_quit(int relaunch) {
 +    if (relaunch) {
