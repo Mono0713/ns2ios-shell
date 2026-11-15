@@ -19,8 +19,47 @@ private let zhHant: Bool = {
 }()
 private func tr(_ zh: String, _ en: String) -> String { zhHant ? zh : en }
 
-// The look (same as Switch Pad on the PC): graphite, rounded rectangles, small chips; app-icon corners on the tiles and a white focus ring
-private let systemBlue = Color(red: 0.04, green: 0.52, blue: 1)
+// SwitchPad's look, shared by the picker and the launcher (docs/DESIGN.zh-TW.md); front_ios.m's in-game menu and Switch Pad on the PC use the same values:
+// graphite, the system blue, rounded rectangles with a continuous curve (never capsules), frosted cards with a hairline edge, small chips, springs
+enum DS {
+    static let accent = Color(red: 0.039, green: 0.518, blue: 1)   // #0A84FF
+    static let card = Color(red: 0.08, green: 0.09, blue: 0.11)      // the tint over a card's frosted glass
+    static let plate = Color.white.opacity(0.06)                     // a row's faint plate
+    static let hairline = Color.white.opacity(0.12)
+    static let chip = Color.white.opacity(0.12)
+    static let cardRadius: CGFloat = 26, rowRadius: CGFloat = 16, tileRadius: CGFloat = 10, chipRadius: CGFloat = 7
+    static let spring = Animation.spring(response: 0.35, dampingFraction: 0.82)   // moving a selection
+    static let pop = Animation.spring(response: 0.45, dampingFraction: 0.74)      // a card coming in
+    static let cardIn = AnyTransition.asymmetric(insertion: .scale(scale: 0.9).combined(with: .offset(y: 24)).combined(with: .opacity),
+                                                 removal: .scale(scale: 0.94).combined(with: .opacity))
+}
+// A frosted card: thick dark material, the card tint, a hairline edge and a soft shadow (front_ios.m's menu card)
+struct GlassCard: ViewModifier {
+    var radius: CGFloat = DS.cardRadius
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.thickMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(DS.card.opacity(0.55)))
+                    .environment(\.colorScheme, .dark)
+            }
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(DS.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.45), radius: 30, y: 14)
+    }
+}
+extension View { func glassCard(_ radius: CGFloat = DS.cardRadius) -> some View { modifier(GlassCard(radius: radius)) } }
+// A key's name in a small box, then what it does: the footer hints of the picker and the launcher
+struct KeyHint: View {
+    let key: String, text: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(key).font(.caption.weight(.bold)).frame(minWidth: 22, minHeight: 22).padding(.horizontal, key.count > 1 ? 4 : 0)
+                .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(Color.white.opacity(0.16)))
+            Text(text)
+        }
+    }
+}
+private let systemBlue = DS.accent
 private func tileRadius(_ side: CGFloat) -> CGFloat { side * 0.2237 }   // the home screen's icon corner
 private struct FocusRing: ViewModifier {
     let focused: Bool
@@ -42,7 +81,7 @@ private struct Chip: View {   // a small rounded box: version, last played, a ke
     var body: some View {
         Text(text).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
+            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
     }
 }
 
@@ -194,7 +233,7 @@ private struct GameTile: View {
     }
 }
 
-private struct PadsTile: View {   // the QR code itself, a green dot for each player that has joined
+private struct PadsTile: View {   // the QR code itself, a short bar in each joined player's colour
     let qr: UIImage?
     let joined: Int
     let focused: Bool
@@ -211,13 +250,13 @@ private struct PadsTile: View {   // the QR code itself, a green dot for each pl
                 }
                 .foregroundStyle(.black.opacity(0.55))
             }
-            HStack(spacing: 6) { ForEach(0..<joined, id: \.self) { _ in Circle().fill(Color(red: 0.12, green: 0.68, blue: 0.36)).frame(width: 9, height: 9) } }
+            HStack(spacing: 5) { ForEach(0..<joined, id: \.self) { i in RoundedRectangle(cornerRadius: 3, style: .continuous).fill(playerColors[i % playerColors.count]).frame(width: 14, height: 6) } }
                 .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, side * 0.04)
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous))
         .modifier(FocusRing(focused: focused, side: side))
-        .accessibilityLabel(tr("手機當手把", "Phone controllers"))
+        .accessibilityLabel(tr("加入玩家", "Add players"))
     }
 }
 
@@ -237,7 +276,7 @@ private struct PadsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack {
-                Text(tr("手機和手把", "Phones and controllers")).font(.title.weight(.bold))
+                Text(tr("玩家", "Players")).font(.title.weight(.bold))
                 Spacer()
                 Text(tr("\(players.players.count) / 8 位玩家", "\(players.players.count) / 8 players")).font(.headline).foregroundStyle(.white.opacity(0.6))
             }
@@ -248,14 +287,13 @@ private struct PadsCard: View {
                         if let qr = pads.qr { Image(uiImage: qr).interpolation(.none).resizable().padding(14) }
                         else { Image(systemName: "wifi.slash").font(.largeTitle).foregroundStyle(.black.opacity(0.5)) }
                     }
-                    .frame(width: 230, height: 230).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .frame(width: 230, height: 230).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     if let url = pads.url {
                         Text(url).font(.callout.monospaced()).padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                    } else {
+                        Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first")).font(.footnote).foregroundStyle(.white.opacity(0.65))
                     }
-                    Text(pads.url == nil ? tr("iPad 連上 Wi-Fi（或開個人熱點）後，手機才能加入", "Connect this iPad to Wi-Fi (or turn on its Personal Hotspot) to let phones join")
-                                         : tr("手機連同一個 Wi-Fi，用相機掃描\n就能當手把，不用裝 App", "Phones on the same Wi-Fi scan this\nand play, no app needed"))
-                        .font(.footnote).foregroundStyle(.white.opacity(0.65)).multilineTextAlignment(.center)
                 }
                 .frame(width: 250)
                 Grid(horizontalSpacing: 10, verticalSpacing: 10) {
@@ -266,14 +304,13 @@ private struct PadsCard: View {
             }
             HStack(spacing: 22) {
                 Spacer()
-                hint("A", tr("震動", "Identify")); hint("−", tr("切換配置", "Layout")); hint("X", tr("移除", "Remove")); hint("B", tr("關閉", "Close"))
+                KeyHint(key: "A", text: tr("震動", "Identify")); KeyHint(key: "−", text: tr("切換配置", "Layout")); KeyHint(key: "X", text: tr("移除", "Remove")); KeyHint(key: "B", text: tr("關閉", "Close"))
             }
-            .font(.callout).foregroundStyle(.white.opacity(0.75))
+            .font(.callout).foregroundStyle(.white.opacity(0.6))
         }
         .padding(30)
         .frame(maxWidth: 980)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(red: 0.11, green: 0.11, blue: 0.118)))
-        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(Color.white.opacity(0.12)))
+        .glassCard()
         .foregroundStyle(.white)
     }
 
@@ -285,25 +322,25 @@ private struct PadsCard: View {
         HStack(spacing: 8) {
             Text("P\(n)").font(.headline.weight(.heavy)).frame(width: 40, height: 32)
                 .foregroundStyle(row == nil ? Color.white.opacity(0.35) : Color.black.opacity(0.85))
-                .background(RoundedRectangle(cornerRadius: 8).fill(row == nil ? Color.white.opacity(0.08) : color))
+                .background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(row == nil ? Color.white.opacity(0.08) : color))
             if let p = row {
                 Image(systemName: p.kind == 2 ? "iphone" : controllerIcon(p.label)).font(.title3).frame(width: 28)
                 Text(padName(p)).font(.headline).lineLimit(1).minimumScaleFactor(0.7)
                 Spacer(minLength: 4)
                 Button { players.send(["op": "layout", "p": n, "xbox": p.xbox ? 0 : 1]) } label: {
                     Text((p.xbox ? "Xbox" : "Switch") + " ⇄").font(.footnote.weight(.semibold)).padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
+                        .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("切換配置", "Button layout"))
                 Button { players.send(["op": "kick", "p": n]) } label: {
-                    Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.12)))
+                    Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("移除", "Remove"))
             } else if let r = back {
                 Image(systemName: controllerIcon(r.label)).font(.title3).frame(width: 28).foregroundStyle(.white.opacity(0.5))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(padName(PlayerRow(player: 0, kind: 1, label: r.label, name: "", xbox: false))).font(.headline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                    Text(tr("已移除，按 A 或點這裡加回", "Removed: A or tap to add back")).font(.caption).foregroundStyle(.white.opacity(0.5)).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(tr("已移除 · 按 A 加回", "Removed · A to add back")).font(.caption).foregroundStyle(.white.opacity(0.5)).lineLimit(1).minimumScaleFactor(0.8)
                 }
                 Spacer(minLength: 0)
             } else {
@@ -315,25 +352,21 @@ private struct PadsCard: View {
         .frame(height: 64)
         .frame(maxWidth: .infinity)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(row == nil ? Color.clear : lit ? color.opacity(0.3) : Color.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous)
+                .fill(row == nil ? Color.clear : lit ? color.opacity(0.3) : DS.plate)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous)
                 .strokeBorder(sel ? systemBlue : row == nil ? Color.white.opacity(0.12) : lit ? color : .clear,
                               style: StrokeStyle(lineWidth: sel ? 2 : row == nil ? 1.5 : 1, dash: row == nil && !sel ? [5, 4] : []))
         }
+        .scaleEffect(lit ? 1.02 : 1)
         .animation(.easeOut(duration: 0.12), value: lit)
+        .animation(DS.spring, value: sel)
         .contentShape(Rectangle())
         .onTapGesture {   // tap: that controller or phone buzzes; a removed one is added back
             m.sel = i
             if row != nil { players.send(["op": "identify", "p": n]) } else if let r = back { players.send(["op": "add", "index": r.index]) }
-        }
-    }
-    private func hint(_ key: String, _ text: String) -> some View {
-        HStack(spacing: 6) {
-            Text(key).font(.caption.weight(.bold)).frame(minWidth: 22, minHeight: 22).background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.18)))
-            Text(text)
         }
     }
 }
@@ -361,13 +394,13 @@ private struct PickerView: View {
                     footer.padding(.horizontal, 32).padding(.bottom, 22)
                 }
                 if m.padsOpen {
-                    Color.black.opacity(0.6).ignoresSafeArea().onTapGesture { m.padsOpen = false }
+                    Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.padsOpen = false }
                         .transition(.opacity)
                     PadsCard(m: m, pads: pads, players: players).padding(32)
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        .transition(DS.cardIn)
                 }
             }
-            .animation(.easeOut(duration: 0.22), value: m.padsOpen)
+            .animation(DS.pop, value: m.padsOpen)
             .environmentObject(activity)
             .frame(width: g.size.width, height: g.size.height)
             .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down
@@ -397,6 +430,8 @@ private struct PickerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { m.choose(at: v) }
                 .accessibilityAddTraits(.isButton)
+                .scaleEffect(m.starting && v == m.pos ? 1.1 : 1)
+                .opacity(m.starting && v != m.pos ? 0 : 1)
                 .offset(x: CGFloat(v - m.pos) * pitch + drag)
             }
         }
@@ -413,7 +448,8 @@ private struct PickerView: View {
                     }
                 }
         )
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: m.pos)
+        .animation(DS.spring, value: m.pos)
+        .animation(.easeOut(duration: 0.3), value: m.starting)
     }
 
     private func backdrop(_ game: PickerGame?) -> some View {
@@ -452,9 +488,8 @@ private struct PickerView: View {
     @ViewBuilder private func details(_ game: PickerGame?) -> some View {
         if m.focus == 0 {
             VStack(spacing: 6) {
-                Text(tr("手機當手把", "Phone controllers")).font(.title.weight(.bold)).foregroundStyle(.white)
-                Text(tr("用相機掃描 QR code，按 A 看已連接的設備", "Scan the QR code with a phone camera; A shows who has joined"))
-                    .font(.callout).foregroundStyle(.white.opacity(0.7))
+                Text(tr("加入玩家", "Add players")).font(.title.weight(.bold)).foregroundStyle(.white)
+                Chip(text: tr("用手機相機掃描", "Scan with a phone camera"))
             }
             .padding(.horizontal, 32)
         } else if let game {
@@ -473,20 +508,13 @@ private struct PickerView: View {
 
     private var footer: some View {
         HStack(spacing: 22) {
-            Text(tr("點遊戲圖示開始", "Tap a game to play")).foregroundStyle(.white.opacity(0.55))
             Spacer()
-            hint("A", m.focus == 0 ? tr("設備清單", "Players") : tr("開始", "Play"))
-            hint("◀ ▶", tr("選擇", "Choose"))
-            hint("Y", tr("手機和手把", "Players"))
+            KeyHint(key: "◀ ▶", text: tr("選擇", "Choose"))
+            KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
+            KeyHint(key: "Y", text: tr("玩家", "Players"))
         }
-        .font(.callout).foregroundStyle(.white.opacity(0.75))
-    }
-    private func hint(_ key: String, _ text: String) -> some View {
-        HStack(spacing: 6) {
-            Text(key).font(.caption.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 3)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.18)))
-            Text(text)
-        }
+        .font(.callout).foregroundStyle(.white.opacity(0.6))
+        .opacity(m.starting ? 0 : 1)
     }
 
     // On the players card: up and down within a column, left and right between the columns; A identifies, − switches the layout, X removes, B closes
