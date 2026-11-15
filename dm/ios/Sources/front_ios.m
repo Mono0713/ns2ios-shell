@@ -158,6 +158,38 @@ static void tv_handheld_note(BOOL on) {
     } else if (!on && n) [n removeFromSuperview];
     if (on) [root bringSubviewToFront:n];
 }
+// Handheld play in game with a TV connected: the TV shows the same game picture as the iPad, fitted to the TV (16:9 fills it); the game presents to the iPad's
+// layer and then draws the frame again into this one (nvn_mtl.m present_mirror). Its drawable is capped at 1920 across: a copy, the TV scales it up
+@interface DmMirrorView : UIView
+@end
+@implementation DmMirrorView
++ (Class)layerClass { return CAMetalLayer.class; }
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CAMetalLayer *l = (CAMetalLayer *)self.layer; CGSize b = self.bounds.size; if (b.width <= 0) return;
+    CGFloat sc = MIN(self.window.windowScene.screen.nativeScale ?: 1, MAX(1.0, 1920.0 / b.width)); l.contentsScale = sc;
+    l.drawableSize = CGSizeMake(b.width * sc, b.height * sc);
+}
+@end
+static void *_Atomic g_mirror_layer;
+void *front_metal_mirror_layer(void) { return g_mirror_layer; }
+static void tv_mirror(BOOL on) {
+    UIView *root = g_tv.rootViewController.view;
+    DmMirrorView *m = (DmMirrorView *)[root viewWithTag:78];
+    if (on && root && !m) {
+        m = [[DmMirrorView alloc] initWithFrame:root.bounds]; m.tag = 78; m.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        CAMetalLayer *l = (CAMetalLayer *)m.layer; l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm; l.framebufferOnly = NO; l.opaque = YES;
+        m.backgroundColor = UIColor.blackColor;
+        [root addSubview:m]; [m setNeedsLayout]; [m layoutIfNeeded];
+        static CAMetalLayer *keep; keep = l;   // never freed under the present thread's copy, which reads the pointer without a lock
+        g_mirror_layer = (__bridge void *)l;
+        LOG("front end: handheld play: the TV mirrors the game picture");
+    } else if (!on) {
+        g_mirror_layer = NULL;
+        if (m) { [m removeFromSuperview]; LOG("front end: TV mirror off"); }
+    }
+    if (on && m) [root bringSubviewToFront:m];
+}
 // A screen presented before the game (the picker, the launcher) moves to where the picture now goes: the same controller, so it keeps its state
 static int g_pregame_moving;   // a move under way (the dip through black waits for it: mode_fade)
 static void pregame_move(UIViewController *from, UIViewController *to) {
@@ -326,11 +358,15 @@ void front_ios_back_to_picker(void) {
 // button in their layout (GamePicker.swift / Launcher.swift), asking here whether to (front_ios_tv_waiting, again on each DMShellChanged) and calling
 // front_ios_back_to_tv. A floating button of its own covered what was under it (art47)
 static void output_video_set(BOOL ipad);
+// Before the game in handheld play with a TV connected: the controller the picker and the launcher present their TV copy on (the same screen as the iPad, fitted
+// to the TV, its selection following the iPad's), nil otherwise; asked again on each DMShellChanged
+void *front_ios_tv_mirror_host(void) { return g_tv && video_pref_ipad() && g_root && !g_root.game ? (__bridge void *)g_tv.rootViewController : NULL; }
 int front_ios_tv_waiting(void) { return g_tv_scene && video_pref_ipad() && g_root && !g_root.game; }
 void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ LOG("front end: Back to the TV tapped"); play_mode_set(NO); }); }
 - (void)placeStage {
     tv_window_ensure();
     tv_handheld_note(g_tv && video_pref_ipad());
+    tv_mirror(g_tv && video_pref_ipad() && self.game);   // in game: the TV shows the same picture (nvn_mtl.m present_mirror)
     g_picture_on_tv = tv_on();
     if (self.stage) {
         UIView *dest = tv_on() ? g_tv.rootViewController.view : self.view;
@@ -920,7 +956,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
 - (void)sceneDidDisconnect:(UIScene *)scene {
     if (scene != g_tv_scene) return;
     LOG("front end: TV disconnected; the picture is back on the iPad");
-    g_tv.hidden = YES; g_tv_scene = nil;
+    g_mirror_layer = NULL; g_tv.hidden = YES; g_tv_scene = nil;
     UIWindow *w = g_tv;
     if (g_root.launched && !g_root.game) pregame_move(w.rootViewController, g_root);   // the picker or the launcher comes back to the iPad
     g_tv = nil;
