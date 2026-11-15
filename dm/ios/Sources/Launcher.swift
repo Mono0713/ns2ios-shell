@@ -188,10 +188,42 @@ func controllerIcon(_ label: String) -> String {
 
 private func playerTitle(_ p: PlayerRow) -> String { p.kind == 2 ? (zhHant ? "\(p.label) " + tr("phone") : "\(p.label) phone") : p.label }
 
+// Switch or Xbox button layout: two words in a rounded square, the picked one on white (a segmented control keeps its small type when the text grows)
+private struct LayoutSwitch: View {
+    let xbox: Bool
+    let set: (Bool) -> Void
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach([false, true], id: \.self) { x in
+                Text(x ? "Xbox" : "Switch").font(.subheadline.weight(.semibold)).lineLimit(1)
+                    .foregroundStyle(x == xbox ? Color.black : Color.white.opacity(0.75))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background { if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(Color.white) } }
+                    .contentShape(Rectangle()).onTapGesture { if x != xbox { set(x) } }
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: DS.chipRadius + 3, style: .continuous).fill(DS.chip))
+        .animation(DS.spring, value: xbox)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tr("Button layout")).accessibilityValue(xbox ? "Xbox" : "Switch")
+        .accessibilityAdjustableAction { _ in set(!xbox) }
+    }
+}
+// A player row's small buttons: an icon (and Move to's words) on a rounded square plate, all the same height
+private extension View {
+    func chipButton(_ color: Color = .white) -> some View {
+        self.font(.subheadline.weight(.semibold)).foregroundStyle(color)
+            .padding(.horizontal, 10).frame(minWidth: 40, minHeight: 36)
+            .background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(DS.chip))
+    }
+}
+
 private struct PlayerRowView: View {
     let p: PlayerRow
     @ObservedObject var m: PlayersModel
     @EnvironmentObject var nav: NavModel
+    @Environment(\.tenFoot) private var tenFoot   // on a TV: no second line, Move to as its icon
 
     private var phone: Bool { p.kind == 2 }
     private var title: String { playerTitle(p) }
@@ -206,18 +238,14 @@ private struct PlayerRowView: View {
             Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.title2).frame(width: 32)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(tr(phone ? "Phone on Wi-Fi" : "Controller")).font(.footnote).foregroundStyle(.secondary)
+                Text(title).lineLimit(1).minimumScaleFactor(0.7)
+                if !tenFoot { Text(tr(phone ? "Phone on Wi-Fi" : "Controller")).font(.footnote).foregroundStyle(.secondary) }
             }
-            Spacer()
-            Picker(tr("Button layout"), selection: Binding(get: { p.xbox }, set: { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) })) {
-                Text("Switch").tag(false)
-                Text("Xbox").tag(true)
-            }
-            .pickerStyle(.segmented).frame(width: 150)
+            Spacer(minLength: 8)
+            LayoutSwitch(xbox: p.xbox) { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) }
             .modifier(NavPart(player: p.player, part: 0))
             Button { m.send(["op": "identify", "p": p.player]) } label: {
-                Image(systemName: "wave.3.right").font(.title3)
+                Image(systemName: "wave.3.right").chipButton()
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(tr("Identify"))
@@ -229,11 +257,16 @@ private struct PlayerRowView: View {
                 }
             } label: {   // while player 1 picks the number: "Move to 3P"
                 let n = nav.focus == "p\(p.player)" ? nav.moveTo : nil
-                Label(tr("Move to") + (n.map { " P\($0)" } ?? ""), systemImage: "arrow.left.arrow.right")
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.left.arrow.right")
+                    if !tenFoot || n != nil { Text((tenFoot ? "" : tr("Move to")) + (n.map { (tenFoot ? "" : " ") + "P\($0)" } ?? "")).lineLimit(1) }
+                }
+                .chipButton()
             }
+            .accessibilityLabel(tr("Move to"))
             .modifier(NavPart(player: p.player, part: 2))
             Button(role: .destructive) { m.send(["op": "kick", "p": p.player]) } label: {
-                Image(systemName: "xmark.circle.fill").font(.title3)
+                Image(systemName: "xmark").chipButton(Color(red: 1, green: 0.271, blue: 0.227))   // #FF453A
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(tr("Remove"))
@@ -340,6 +373,25 @@ private extension LauncherModel {
     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
 }
 
+// On the TV a choice is its name and its value between arrows, on one line as on a console's settings (left and right change it; the TV is not touched).
+// A menu picker there stacks its value under the name once the text is this large, which made every row two lines tall
+private struct TVChoice: View {
+    let title: String, value: String
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title).lineLimit(1).minimumScaleFactor(0.7)
+            Spacer(minLength: 12)
+            HStack(spacing: 10) {
+                Image(systemName: "chevron.left").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+                Text(value).fontWeight(.semibold).lineLimit(1)
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(DS.chip))
+        }
+    }
+}
+
 private struct SettingRow: View {
     let s: Setting
     @ObservedObject var m: LauncherModel
@@ -403,6 +455,9 @@ private struct SettingRow: View {
     var body: some View {
         Group {
             switch s.kind {
+            case "choice" where tenFoot:
+                let v = m.values[s.env] ?? s.def
+                TVChoice(title: tr(s.label), value: (s.options ?? []).first { $0[0] == v }.map { tr($0[1]) } ?? v)
             case "choice":
                 Picker(selection: m.binding(s)) {
                     ForEach(s.options ?? [], id: \.[0]) { Text(tr($0[1])).tag($0[0]) }
@@ -570,7 +625,11 @@ private struct GyroRow: View {
 }
 private struct FpsRow: View {
     @ObservedObject var shell: ShellSettings
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
+        if tenFoot { TVChoice(title: tr("Frame rate cap"), value: "\(shell.fps) fps") } else { menu }
+    }
+    private var menu: some View {
         Picker(selection: $shell.fps) {
             Text("30 fps").tag(30)
             Text("60 fps").tag(60)
@@ -605,23 +664,32 @@ private struct SaveSlotsSection: View {
     @State private var renaming = false
     @State private var newName = ""
     @State private var deleting: SaveSlot?
+    @Environment(\.tenFoot) private var tenFoot   // on the TV: the controller's rows only, in white (renaming and deleting are by touch, on the iPad)
 
     var body: some View {
         Section {
-            Picker(selection: Binding(get: { s.active }, set: { s.switchTo($0) })) {
-                ForEach(s.slots) { Text($0.name).tag($0.id) }
-            } label: {
-                Label(tr("Save in use"), systemImage: "externaldrive.fill")
+            if tenFoot {
+                TVChoice(title: tr("Save in use"), value: s.activeName).nav("slot")
+            } else {
+                Picker(selection: Binding(get: { s.active }, set: { s.switchTo($0) })) {
+                    ForEach(s.slots) { Text($0.name).tag($0.id) }
+                } label: {
+                    Label(tr("Save in use"), systemImage: "externaldrive.fill")
+                }
+                .pickerStyle(.menu)
+                .nav("slot")
             }
-            .pickerStyle(.menu)
-            .nav("slot")
             Button { s.addEmpty() } label: { Label(tr("New empty save"), systemImage: "plus.circle") }
+                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
                 .nav("slotNew")
             Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
+                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
                 .nav("slotCopy")
+            if !tenFoot {
             Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
                 .listRowBackground(rowPlate)
-            if s.slots.count > 1 {
+            }
+            if s.slots.count > 1 && !tenFoot {
                 Menu {
                     ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
                 } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
@@ -685,8 +753,10 @@ private struct LauncherView: View {
                             .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
                     }
                     playButton.padding(.top, 6)
-                    Spacer(minLength: 8)
+                    // on the TV the code joins the game's card in the middle (an empty middle under Play otherwise); on the iPad it sits at the bottom
+                    if tv.on { Color.clear.frame(height: 24) } else { Spacer(minLength: 8) }
                     if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
+                    if tv.on { Spacer(minLength: 0) }
                 }
                 .padding(20)
                 .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 24)
@@ -713,17 +783,22 @@ private struct LauncherView: View {
                             if section == "Game" { FpsRow(shell: shell).nav("fps") }
                             if section == "Controls" {
                                 GyroRow(shell: shell).nav("gyro")
-                                TouchStyleRow(shell: shell, size: false).nav("touchOpacity")
-                                TouchStyleRow(shell: shell, size: true).nav("touchScale")
+                                if !tv.on {   // the touch controls are the iPad's, in handheld mode
+                                    TouchStyleRow(shell: shell, size: false).nav("touchOpacity")
+                                    TouchStyleRow(shell: shell, size: true).nav("touchScale")
+                                }
                             }
                         }
                     }
                     Section {
                         Button { m.reset() } label: { Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise") }
+                            .foregroundStyle(tv.on ? Color.white : Color.accentColor)
                             .disabled(!m.changed)
                             .nav("reset")
-                        Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
-                            .nav("folder")
+                        if !tv.on {   // the Files app opens on the iPad, not on the TV
+                            Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
+                                .nav("folder")
+                        }
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -809,12 +884,12 @@ private struct LauncherView: View {
             }
             if section == "Controls" {
                 if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() })) }
-                items.append(NavItem(id: "touchOpacity", slider: true, adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
-                items.append(NavItem(id: "touchScale", slider: true, adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) }))
+                if !tv.on { items.append(NavItem(id: "touchOpacity", slider: true, adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
+                items.append(NavItem(id: "touchScale", slider: true, adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) })) }
             }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
-        items.append(NavItem(id: "folder", activate: openGameFolder))
+        if !tv.on { items.append(NavItem(id: "folder", activate: openGameFolder)) }
         return items
     }
     private func navDirection(_ key: String) {
