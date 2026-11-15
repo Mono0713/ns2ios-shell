@@ -258,15 +258,19 @@ static void back_to_tv_sync(UIWindowScene *scene, BOOL show) {
         c.imagePadding = 8; c.baseBackgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; c.baseForegroundColor = UIColor.whiteColor;
         c.cornerStyle = UIButtonConfigurationCornerStyleLarge;
         c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *in) { NSMutableDictionary *o = [in mutableCopy]; o[NSFontAttributeName] = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold]; return o; };
-        UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; output_video_set(NO); }]];
-        UIViewController *vc = [UIViewController new]; vc.view.backgroundColor = UIColor.clearColor;
-        b.frame = CGRectMake(0, 0, 176, 52); b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:b];
-        g_back_tv = [[UIWindow alloc] initWithWindowScene:scene]; g_back_tv.rootViewController = vc;
-        g_back_tv.windowLevel = UIWindowLevelAlert + 1; g_back_tv.backgroundColor = UIColor.clearColor;
+        UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; LOG("front end: Back to the TV tapped"); output_video_set(NO); }]];
+        // the window gets its size first and the button the root view's bounds after: a button sized before, with flexible margins, shrank with the full-screen
+        // root view down to the window's size and was too small to hit (art43)
+        g_back_tv = [[UIWindow alloc] initWithWindowScene:scene];
+        g_back_tv.frame = CGRectMake(0, 0, 176, 52); g_back_tv.windowLevel = UIWindowLevelAlert + 1; g_back_tv.backgroundColor = UIColor.clearColor;
+        UIViewController *vc = [UIViewController new]; g_back_tv.rootViewController = vc;
+        vc.view.backgroundColor = UIColor.clearColor; vc.view.frame = g_back_tv.bounds;
+        b.frame = vc.view.bounds; b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:b];
     }
     CGRect sb = scene.coordinateSpace.bounds; UIEdgeInsets in = scene.windows.firstObject.safeAreaInsets;
     g_back_tv.frame = CGRectMake(MAX(24, in.left), sb.size.height - MAX(24, in.bottom) - 52, 176, 52);   // bottom left: the picker's key hints are at the bottom right
     g_back_tv.hidden = NO;
+    LOG("front end: Back to the TV button shown");
 }
 - (void)placeStage {
     tv_window_ensure();
