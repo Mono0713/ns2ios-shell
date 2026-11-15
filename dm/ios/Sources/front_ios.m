@@ -190,29 +190,18 @@ static void tv_mirror(BOOL on) {
     }
     if (on && m) [root bringSubviewToFront:m];
 }
-// Before the game in handheld play with a TV connected: a second copy of the picker or the launcher on the TV (GamePicker.swift dm_pregame_mirror_make), on
-// the same models as the iPad's, so each move on the iPad shows on the TV too, laid out for the TV. Over the Handheld mode card; gone once the game starts
-__attribute__((weak)) void *dm_pregame_mirror_make(void);
-static void tv_pregame_mirror(BOOL on) {
-    static UIViewController *mc;
-    UIViewController *root = g_tv.rootViewController;
-    if (!root || mc.parentViewController != root) { [mc.view removeFromSuperview]; [mc removeFromParentViewController]; mc = nil; }   // the TV went away
-    if (!root) return;
-    if (on && !mc && dm_pregame_mirror_make) {
-        mc = (__bridge_transfer UIViewController *)dm_pregame_mirror_make(); if (!mc) return;
-        [root addChildViewController:mc]; mc.view.frame = root.view.bounds; mc.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [root.view addSubview:mc.view]; [mc didMoveToParentViewController:root];
-        LOG("front end: handheld play: the TV mirrors the screen before the game");
-    } else if (!on && mc) {
-        [mc willMoveToParentViewController:nil]; [mc.view removeFromSuperview]; [mc removeFromParentViewController]; mc = nil;
-    }
-    if (on && mc) [root.view bringSubviewToFront:mc.view];
-}
 // A screen presented before the game (the picker, the launcher) moves to where the picture now goes: the same controller, so it keeps its state
 static int g_pregame_moving;   // a move under way (the dip through black waits for it: mode_fade)
 static void pregame_move(UIViewController *from, UIViewController *to) {
     UIViewController *p = from.presentedViewController;
-    if (!p || !to || to == from || to.presentedViewController || p.isBeingDismissed || p.isBeingPresented) return;
+    if (!p || !to || to == from || p.isBeingDismissed || p.isBeingPresented) return;
+    if (to.presentedViewController && [to isKindOfClass:DmTvRootVC.class]) {   // the TV shows the picker's handheld-play copy (GamePicker.swift PregameStage): it goes, the real one comes
+        UIViewController *copy = to.presentedViewController;
+        g_pregame_moving++;
+        [to dismissViewControllerAnimated:NO completion:^{ (void)copy; g_pregame_moving--; pregame_move(from, to); }];
+        return;
+    }
+    if (to.presentedViewController) return;
     LOG("front end: the screen before the game moves to the %s", [to isKindOfClass:DmTvRootVC.class] ? "TV" : "iPad");
     UIWindow *keep = from.view.window;
     g_pregame_moving++;
@@ -348,6 +337,7 @@ void front_ios_back_to_picker(void) {
     if (self.fps) [self.stage addSubview:self.fps];
     [self placeStage];   // on the TV when one is connected
     home_menu_watch();
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the game started: the picker's TV copy goes (front_ios_tv_mirror_host)
     loading_show(overlay_root());   // under the shader-preparation screen, which front_progress adds on top when it runs
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
@@ -385,7 +375,6 @@ void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ L
     tv_window_ensure();
     tv_handheld_note(g_tv && video_pref_ipad());
     tv_mirror(g_tv && video_pref_ipad() && self.game);   // in game: the TV shows the same picture (nvn_mtl.m present_mirror)
-    tv_pregame_mirror(g_tv && video_pref_ipad() && !self.game && self.launched);   // before it: the picker's / launcher's synced copy
     g_picture_on_tv = tv_on();
     if (self.stage) {
         UIView *dest = tv_on() ? g_tv.rootViewController.view : self.view;
