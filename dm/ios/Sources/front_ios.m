@@ -182,15 +182,35 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
 - (void)placeStage;
 @end
 static DmRootVC *g_root;
-// Handheld <-> console: the iPad and the TV fade from what they showed to what they show now, instead of jumping
+// Handheld <-> console: each screen keeps a still of what it showed, in a window of its own above everything (the picker and the launcher are presented
+// again a moment later by pregame_move, which would land over a still inside the same window), while the change happens under it; the still then fades
+// out with a slight zoom, so the new screen comes up through it in one smooth step. A screen that showed nothing (the TV's window hidden) starts from black
+static UIWindow *mode_still(UIWindowScene *scene, UIWindow *from) {
+    if (!scene) return nil;
+    UIView *still = from && !from.hidden ? [from snapshotViewAfterScreenUpdates:NO] : nil;
+    UIWindow *w = [[UIWindow alloc] initWithWindowScene:scene];
+    w.frame = scene.coordinateSpace.bounds; w.windowLevel = UIWindowLevelAlert + 2; w.userInteractionEnabled = NO; w.backgroundColor = UIColor.clearColor;
+    UIViewController *vc = [UIViewController new]; w.rootViewController = vc; vc.view.backgroundColor = UIColor.clearColor;
+    if (!still) { still = [[UIView alloc] initWithFrame:w.bounds]; still.backgroundColor = UIColor.blackColor; }
+    still.frame = w.bounds; still.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:still];
+    w.hidden = NO;
+    return w;
+}
+static void mode_fade(UIWindow *w) {
+    if (!w) return;
+    static NSMutableArray *alive; if (!alive) alive = [NSMutableArray array]; [alive addObject:w];
+    UIView *still = w.rootViewController.view.subviews.firstObject;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{   // after pregame_move has presented the screen again
+        [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ still.alpha = 0; still.transform = CGAffineTransformMakeScale(1.04, 1.04); }
+                         completion:^(BOOL f) { (void)f; w.hidden = YES; [alive removeObject:w]; }];
+    });
+}
 static void mode_transition(void (^change)(void)) {
+    UIWindow *ipad = g_root.view.window, *a = mode_still(ipad.windowScene, ipad);
+    UIWindowScene *tvs = g_tv_scene; UIWindow *b = mode_still(tvs, g_tv);   // still the screen before the change (black while its window is hidden)
     change();
-    for (UIView *v in @[g_root.view ?: NSNull.null, g_tv.rootViewController.view ?: NSNull.null]) {
-        if (![v isKindOfClass:UIView.class]) continue;
-        CATransition *t = [CATransition animation]; t.type = kCATransitionFade; t.duration = 0.4;
-        t.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [v.layer addAnimation:t forKey:@"dm.mode"];
-    }
+    mode_fade(a);
+    if (g_tv_scene == tvs) mode_fade(b); else b.hidden = YES;   // the TV went away: its still goes with it
 }
 static void launcher_done(void) { [g_root startGame]; }
 static void picker_done(void) { [g_root afterPick]; }
