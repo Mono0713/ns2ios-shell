@@ -165,6 +165,14 @@
   }
   const name = /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'Browser';
 
+  // A SwitchPad that was suspended and then swiped away never closes its connections: the phone would wait minutes for TCP to give up. The page pings every
+  // second and starts over when the iPad has said nothing for 3.5 s
+  let lastRx = 0;
+  setInterval(() => {
+    if (!ws || ws.readyState !== 1 || document.hidden) return;
+    if (performance.now() - lastRx > 3500) { const old = ws; ws = null; old.onclose = null; try { old.close(); } catch (e) {} conn('wait'); backoff = 500; connect(); return; }
+    try { ws.send('{"t":"ping"}'); } catch (e) {}
+  }, 1000);
   function hello() { ws.send(JSON.stringify(join ? { t: 'hello', v: 1, id, name, join: 1 } : { t: 'hello', v: 1, id, name })); join = false; }
   // Reconnecting: only while the page is in front, and not after the iPad said another page of this phone took over. Otherwise a second page (a background tab,
   // the Home Screen copy, another browser) and this one would keep taking the player from each other, both flickering between connected and disconnected
@@ -175,8 +183,9 @@
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     conn('wait');
-    ws.onopen = () => { backoff = 500; hello(); };
+    ws.onopen = () => { backoff = 500; lastRx = performance.now(); hello(); };
     ws.onmessage = ev => {
+      lastRx = performance.now();
       if (typeof ev.data !== 'string') return;
       const m = JSON.parse(ev.data);
       if (m.t === 'assign') {
