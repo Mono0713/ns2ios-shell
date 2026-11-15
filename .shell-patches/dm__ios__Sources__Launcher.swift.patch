@@ -496,7 +496,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,68 +501,474 @@
+@@ -64,68 +501,475 @@
      }
  }
  
@@ -721,11 +721,12 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  private struct LauncherView: View {
      @ObservedObject var m: LauncherModel
 +    @ObservedObject var shell: ShellSettings
++    @ObservedObject var nav: NavModel   // made by dm_show_launcher: the TV's copy in handheld mode follows the same highlight
      let play: () -> Void
 -    @State private var memory = os_proc_available_memory()
 +    let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
 +    @StateObject private var players = PlayersModel()
-+    @StateObject private var nav = NavModel()
++    @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
 +    @StateObject private var activity = ActivityModel()
 +    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
@@ -849,11 +850,11 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 -    @ViewBuilder var playButton: some View {
 -        let button = Button(action: play) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
 -        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
-+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
-+        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
++        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
++        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
 +        .onDisappear {
 +            held?.task.cancel()
-+            NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
++            if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
 +        }
 +        .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
 +        .tenFoot(tv)
@@ -1003,7 +1004,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +980,30 @@
+@@ -137,21 +981,32 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
@@ -1012,12 +1013,13 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
      guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
      let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
 -    let model = LauncherModel(file.settings)
-+    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
++    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings(), nav = NavModel()
      var host: UIViewController?
 -    let view = LauncherView(m: model) {
-+    let view = LauncherView(m: model, shell: shell, play: {
++    let view = LauncherView(m: model, shell: shell, nav: nav, play: {
          guard let h = host else { return }
          host = nil
++        PregameStage.shared.show(nil)
          model.apply()
 -        h.dismiss(animated: false) { done() }
 -    }
@@ -1030,6 +1032,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        fputs("launcher: back to the game list\n", stderr)
 +        h.dismiss(animated: true) { frontIosBackToPicker() }
 +    } : nil)
++    PregameStage.shared.show { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
      let h = UIHostingController(rootView: view)
 +    controllerNotForUIKit(h.view)
      h.modalPresentationStyle = .fullScreen

@@ -116,9 +116,10 @@ extension View {
 @_silgen_name("front_ios_back_to_tv") private func frontIosBackToTv()
 struct BackToTVButton: View {
     @State private var waiting = frontIosTvWaiting() != 0
+    @Environment(\.pregameMirror) private var mirror   // not on the TV's copy
     var body: some View {
         Group {
-            if waiting {
+            if waiting && !mirror {
                 Button { frontIosBackToTv() } label: {
                     Label(tr("回到電視", "Back to the TV"), systemImage: "tv").font(.headline).foregroundStyle(.white)
                         .padding(.horizontal, 14).padding(.vertical, 10)
@@ -134,6 +135,37 @@ struct BackToTVButton: View {
         }
         .onAppear { waiting = frontIosTvWaiting() != 0 }
     }
+}
+
+// Handheld mode with a TV connected: the TV shows the same screen as the iPad, laid out for its own size, following every move (front_ios.m puts
+// dm_pregame_mirror_make's controller in the TV's window). The picker and the launcher set what it shows; the copy there takes no input and posts nothing
+final class PregameStage: ObservableObject {
+    static let shared = PregameStage()
+    @Published private(set) var generation = 0
+    private(set) var make: (() -> AnyView)?
+    func show(_ make: (() -> AnyView)?) { self.make = make; generation += 1 }
+}
+private struct PregameMirrorKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var pregameMirror: Bool { get { self[PregameMirrorKey.self] } set { self[PregameMirrorKey.self] = newValue } } }
+private struct PregameMirrorView: View {
+    @ObservedObject private var stage = PregameStage.shared
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let make = stage.make { make().id(stage.generation).transition(.opacity) }
+        }
+        .animation(.easeInOut(duration: 0.3), value: stage.generation)
+        .environment(\.pregameMirror, true)
+        .preferredColorScheme(.dark)
+    }
+}
+@_cdecl("dm_pregame_mirror_make")
+public func dmPregameMirrorMake() -> UnsafeMutableRawPointer {   // a retained UIViewController (CFBridgingRelease it on the Objective-C side)
+    let h = UIHostingController(rootView: PregameMirrorView())
+    controllerNotForUIKit(h.view)   // Launcher.swift
+    h.view.backgroundColor = .black
+    h.view.isUserInteractionEnabled = false
+    return Unmanaged.passRetained(h as UIViewController).toOpaque()
 }
 
 private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
@@ -515,6 +547,7 @@ private struct PickerView: View {
     @State private var held: (key: String, task: Task<Void, Never>)?
     @State private var drag: CGFloat = 0   // how far a finger has moved the row
     @StateObject private var tv = TenFoot()
+    @Environment(\.pregameMirror) private var mirror   // the TV's copy in handheld mode: shows, takes no input
 
     var body: some View {
         GeometryReader { g in
@@ -547,8 +580,8 @@ private struct PickerView: View {
         .environment(\.tenFoot, tv.on)
         .preferredColorScheme(.dark)
         .statusBarHidden()
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { input($0.userInfo) }
-        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { input($0.userInfo) } }
+        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear { held?.task.cancel() }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
         .tenFoot(tv)
@@ -704,6 +737,7 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = PickerModel()
     let h = UIHostingController(rootView: PickerView(m: model))
+    PregameStage.shared.show { AnyView(PickerView(m: model)) }   // the TV's copy in handheld mode
     controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
@@ -712,6 +746,7 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
         fputs("picker: \(game.id) (\(game.name))\n", stderr)
         NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
         DispatchQueue.main.async {   // let the loading veil draw before main.m reads the game's files
+            PregameStage.shared.show(nil)
             game.id.withCString { shellGameChoose($0) }
             h?.dismiss(animated: true) { done() }
         }

@@ -722,10 +722,11 @@ private func openGameFolder() {   // this app's Documents in the Files app (shar
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     @ObservedObject var shell: ShellSettings
+    @ObservedObject var nav: NavModel   // made by dm_show_launcher: the TV's copy in handheld mode follows the same highlight
     let play: () -> Void
     let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
     @StateObject private var players = PlayersModel()
-    @StateObject private var nav = NavModel()
+    @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
     @StateObject private var activity = ActivityModel()
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
@@ -818,11 +819,11 @@ private struct LauncherView: View {
         .environmentObject(nav)
         .environmentObject(activity)
         .preferredColorScheme(.dark)
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
-        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
+        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear {
             held?.task.cancel()
-            NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
+            if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
         }
         .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
         .tenFoot(tv)
@@ -983,11 +984,12 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     guard let url = (gameRoot ?? Bundle.main.resourceURL)?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
+    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings(), nav = NavModel()
     var host: UIViewController?
-    let view = LauncherView(m: model, shell: shell, play: {
+    let view = LauncherView(m: model, shell: shell, nav: nav, play: {
         guard let h = host else { return }
         host = nil
+        PregameStage.shared.show(nil)
         model.apply()
         shell.apply()
         if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
@@ -998,6 +1000,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         fputs("launcher: back to the game list\n", stderr)
         h.dismiss(animated: true) { frontIosBackToPicker() }
     } : nil)
+    PregameStage.shared.show { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
     let h = UIHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
