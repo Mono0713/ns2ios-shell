@@ -24,3 +24,25 @@ struct ShouldReopenIntent: AppIntent {
     }
 }
 
+
+// One step instead of If + Open App: "重開 SwitchPad（換遊戲後）" brings the app to the front itself when Change games closed it, and does nothing
+// otherwise. iOS 26's dynamic foreground mode: the intent starts in the background and moves to the foreground only when it has to.
+struct ReopenAfterChangeIntent: AppIntent {
+    static var title: LocalizedStringResource = "重開 SwitchPad（換遊戲後）"
+    static var description = IntentDescription("剛用「換遊戲」關閉時重新打開 SwitchPad，其他時候什麼都不做。放在「SwitchPad 已關閉」的自動化裡就好。")
+    static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        if shellRelaunchRequested() != 0 && systemContext.currentMode.canContinueInForeground {
+            try await continueInForeground(alwaysConfirm: false)
+            return .result()
+        }
+        if UIApplication.shared.applicationState == .background {   // a plain close: nothing to do, and nothing left running
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if UIApplication.shared.applicationState == .background { fflush(stderr); exit(0) }
+            }
+        }
+        return .result()
+    }
+}
