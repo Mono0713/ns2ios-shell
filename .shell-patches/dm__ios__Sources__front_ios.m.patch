@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 --- a/dm/ios/Sources/front_ios.m
 +++ b/dm/ios/Sources/front_ios.m
-@@ -1,25 +1,131 @@
+@@ -1,25 +1,142 @@
  // iOS front end (the iOS implementation of front.h): a centered 16:9 Metal view (black bars on both sides) + a full-screen virtual gamepad layer (DmGamepad.m, controls drawn over the picture).
 +// A TV on the iPad's USB-C / HDMI adapter (an external display scene, DmTvSceneDelegate) takes the game's picture once the game starts: the picture fills the TV's own
 +// screen and its resolution instead of the mirrored iPad screen (whose 4:3 shape left bars all round), and the touch controls stay on the iPad. A Home button (a
@@ -15,6 +15,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
  #import <AVFAudio/AVFAudio.h>
 +#import <objc/runtime.h>
  #include <errno.h>
++#include <string.h>
 +#include <os/proc.h>
  #include "front.h"
  #include "hle.h"
@@ -52,6 +53,16 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    CGSize b = root.bounds.size; if (b.width <= 0 || b.height <= 0) return 1;
 +    CGFloat k = MAX(1.0, MIN(b.width / 1194.0, b.height / 834.0));
 +    return root.window && root.window == g_tv ? k * 1.35 : k;   // seen from the sofa, a few metres away: larger again
++}
++// A view drawn larger with a transform keeps its backing at the screen's scale, so its text and symbols were magnified bitmaps (soft on a TV): each layer
++// drawn at the scale it is shown at instead. After the view is in its window (moving into one sets the layers' scale again)
++static void crisp(UIView *v, CGFloat k) {
++    CGFloat s = (v.window.windowScene.screen.scale ?: UIScreen.mainScreen.scale) * k;
++    for (NSMutableArray *q = [NSMutableArray arrayWithObject:v]; q.count; ) {
++        UIView *x = q.lastObject; [q removeLastObject];
++        if (x.layer.contentsScale != s) { x.layer.contentsScale = s; [x.layer setNeedsDisplay]; [x setNeedsDisplay]; }
++        [q addObjectsFromArray:x.subviews];
++    }
 +}
 +static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare step's progress and the Home menu: over the picture, wherever it is
 +static UIView *overlay_root(void);
@@ -133,7 +144,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
  
  @interface DmGameView : UIView
  @end
-@@ -37,24 +143,56 @@
+@@ -37,24 +154,59 @@
  - (void)layoutSubviews {
      [super layoutSubviews];
      CAMetalLayer *l = (CAMetalLayer *)self.layer;
@@ -141,7 +152,10 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    // cost the upscale four times the pixels)
 +    UIScreen *scr = self.window.windowScene.screen ?: UIScreen.mainScreen;
 +    CGFloat sc = scr.nativeScale > 0 ? scr.nativeScale : 1;
-+    if (self.window && self.window == g_tv && self.bounds.size.width > 0) sc = MIN(sc, MAX(1.0, 1920.0 / self.bounds.size.width));
++    // With MetalFX upscaling (the launcher's Upscaling, DM_PRESENT_UPSCALE) the drawable is the TV's own pixels up to 3840 across, so MetalFX does the whole
++    // enlargement to a 4K screen instead of stopping at 1920 and leaving the rest to the display's bilinear scaling
++    const char *up = getenv("DM_PRESENT_UPSCALE"); BOOL fx = up && (!strcmp(up, "metalfx") || !strcmp(up, "1"));
++    if (self.window && self.window == g_tv && self.bounds.size.width > 0) sc = MIN(sc, MAX(1.0, (fx ? 3840.0 : 1920.0) / self.bounds.size.width));
 +    if (l.contentsScale != sc) l.contentsScale = sc;
      l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
  }
@@ -190,7 +204,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
      if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
          UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
          lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-@@ -68,36 +206,387 @@
+@@ -68,36 +220,387 @@
  - (void)startGame {
      if (self.game) return;
      front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
@@ -590,7 +604,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
  }
  - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
  - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
-@@ -129,28 +618,85 @@
+@@ -129,28 +632,85 @@
      const char *e = getenv("DM_SHOW_FPS");
      if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
      UILabel *l = [UILabel new];
@@ -683,15 +697,17 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
              g_prog = [[UIView alloc] initWithFrame:root.bounds]; g_prog.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
              g_prog.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.94];
              UIView *box = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - 320) / 2), floor((root.bounds.size.height - 96) / 2), 320, 96)];
-@@ -161,6 +707,7 @@
+@@ -161,7 +721,8 @@
              g_prog_count = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, 320, 22)]; g_prog_count.textAlignment = NSTextAlignmentCenter;
              g_prog_count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; g_prog_count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
              [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
+-            [root addSubview:g_prog];
 +            CGFloat k = ui_scale(root); if (k > 1) box.transform = CGAffineTransformMakeScale(k, k);   // bigger on a TV
-             [root addSubview:g_prog];
++            [root addSubview:g_prog]; if (k > 1) crisp(box, k);
          }
          g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
-@@ -218,13 +765,22 @@
+         g_prog_count.text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
+@@ -218,13 +779,22 @@
  // so every callback came up 1.3 ms short and was zero-filled, about 47 gaps per second (crackling; reproducible on the Mac by forcing 1024-frame callbacks: 1999 underruns in 2000 callbacks). Ask for 5 ms and the system picks the nearest it supports;
  // the category stays the default SoloAmbient (silent switch and interrupting other apps' audio behave as before). Set once at boot and again on return to the foreground (the system may reset it after an interruption)
  static int g_session_off;   // the last activation failed (another app or a call still held the session): tried again when the app becomes active
@@ -715,7 +731,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
      LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for 5 ms)", s.sampleRate, s.IOBufferDuration * 1000);
  }
  
-@@ -256,12 +812,485 @@
+@@ -256,12 +826,486 @@
      if (!g_layer) return;
      switch (ev) {
          case 0: dm_gamepad_reset(); dm_focus_set(2); break;
@@ -1051,6 +1067,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    CGAffineTransform base = CGAffineTransformMakeScale(k, k);
 +    card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
 +    [menu addSubview:card]; [root addSubview:menu];
++    if (k > 1) crisp(card, k);   // sharp text on the TV
 +    [g_menu_cards addObject:card];
 +    // coming in: opening pops up from a little smaller and lower (a spring) as the dim fades in; a page slides in from the side it goes to
 +    if (g_menu_anim == 1) {

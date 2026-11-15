@@ -11,6 +11,7 @@
 #import <AVFAudio/AVFAudio.h>
 #import <objc/runtime.h>
 #include <errno.h>
+#include <string.h>
 #include <os/proc.h>
 #include "front.h"
 #include "hle.h"
@@ -48,6 +49,16 @@ static CGFloat ui_scale(UIView *root) {
     CGSize b = root.bounds.size; if (b.width <= 0 || b.height <= 0) return 1;
     CGFloat k = MAX(1.0, MIN(b.width / 1194.0, b.height / 834.0));
     return root.window && root.window == g_tv ? k * 1.35 : k;   // seen from the sofa, a few metres away: larger again
+}
+// A view drawn larger with a transform keeps its backing at the screen's scale, so its text and symbols were magnified bitmaps (soft on a TV): each layer
+// drawn at the scale it is shown at instead. After the view is in its window (moving into one sets the layers' scale again)
+static void crisp(UIView *v, CGFloat k) {
+    CGFloat s = (v.window.windowScene.screen.scale ?: UIScreen.mainScreen.scale) * k;
+    for (NSMutableArray *q = [NSMutableArray arrayWithObject:v]; q.count; ) {
+        UIView *x = q.lastObject; [q removeLastObject];
+        if (x.layer.contentsScale != s) { x.layer.contentsScale = s; [x.layer setNeedsDisplay]; [x setNeedsDisplay]; }
+        [q addObjectsFromArray:x.subviews];
+    }
 }
 static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare step's progress and the Home menu: over the picture, wherever it is
 static UIView *overlay_root(void);
@@ -147,7 +158,10 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
     // cost the upscale four times the pixels)
     UIScreen *scr = self.window.windowScene.screen ?: UIScreen.mainScreen;
     CGFloat sc = scr.nativeScale > 0 ? scr.nativeScale : 1;
-    if (self.window && self.window == g_tv && self.bounds.size.width > 0) sc = MIN(sc, MAX(1.0, 1920.0 / self.bounds.size.width));
+    // With MetalFX upscaling (the launcher's Upscaling, DM_PRESENT_UPSCALE) the drawable is the TV's own pixels up to 3840 across, so MetalFX does the whole
+    // enlargement to a 4K screen instead of stopping at 1920 and leaving the rest to the display's bilinear scaling
+    const char *up = getenv("DM_PRESENT_UPSCALE"); BOOL fx = up && (!strcmp(up, "metalfx") || !strcmp(up, "1"));
+    if (self.window && self.window == g_tv && self.bounds.size.width > 0) sc = MIN(sc, MAX(1.0, (fx ? 3840.0 : 1920.0) / self.bounds.size.width));
     if (l.contentsScale != sc) l.contentsScale = sc;
     l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
 }
@@ -708,7 +722,7 @@ void front_progress(const char *title, long done, long total) {
             g_prog_count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; g_prog_count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
             [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
             CGFloat k = ui_scale(root); if (k > 1) box.transform = CGAffineTransformMakeScale(k, k);   // bigger on a TV
-            [root addSubview:g_prog];
+            [root addSubview:g_prog]; if (k > 1) crisp(box, k);
         }
         g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
         g_prog_count.text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
@@ -1139,6 +1153,7 @@ static UIView *home_menu_make(UIView *root) {
     CGAffineTransform base = CGAffineTransformMakeScale(k, k);
     card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
     [menu addSubview:card]; [root addSubview:menu];
+    if (k > 1) crisp(card, k);   // sharp text on the TV
     [g_menu_cards addObject:card];
     // coming in: opening pops up from a little smaller and lower (a spring) as the dim fades in; a page slides in from the side it goes to
     if (g_menu_anim == 1) {
