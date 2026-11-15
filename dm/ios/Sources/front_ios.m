@@ -33,7 +33,9 @@ static CAMetalLayer *g_layer;
 static UIWindow *g_tv;            // the TV's window while one is connected (nil otherwise); it shows the game once the game view exists
 static UIWindowScene *g_tv_scene; // the TV's scene: its window is made as soon as it connects, and shows the picker and the launcher until the game starts
 // Picture: TV / iPad, the Home menu's choice while a TV is connected (kept for the device): the iPad keeps the game, and the TV window steps aside (hidden)
-static BOOL video_pref_ipad(void) { return [NSUserDefaults.standardUserDefaults boolForKey:@"DMVideoOnIPad"]; }
+// The picture on the iPad while a TV is connected: for this connection only (plugging a TV in always starts on the TV), so a tap by mistake is never kept
+static BOOL g_video_ipad;
+static BOOL video_pref_ipad(void) { return g_video_ipad; }
 static BOOL tv_on(void) { return g_tv && !g_tv.hidden; }   // the game's picture is on the TV now
 static BOOL zh_ui(void) {         // Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
@@ -219,6 +221,31 @@ void front_ios_back_to_picker(void) {
 }
 // The game's picture on the TV while one is connected (its window made now), else on the iPad under the touch controls. The Metal layer itself moves with its view,
 // so the graphics backend keeps presenting to the same layer (front_metal_layer); its drawable follows the new size and scale (DmGameView layoutSubviews)
+// Before the game, with a TV connected and the picture moved to the iPad (the panel's Picture switch): the iPad has no panel then, so a small button over the picker
+// or the launcher takes it back. A window of its own the size of the button, above the presented screens, touches elsewhere go to them
+static UIWindow *g_back_tv;
+static void output_video_set(BOOL ipad);
+static void back_to_tv_sync(UIWindowScene *scene, BOOL show) {
+    if (!show) { g_back_tv.hidden = YES; return; }
+    if (!scene) return;
+    BOOL z = zh_ui();
+    if (!g_back_tv || g_back_tv.windowScene != scene) {
+        UIButtonConfiguration *c = [UIButtonConfiguration filledButtonConfiguration];
+        c.title = z ? @"回到電視" : @"Back to the TV";
+        c.image = [UIImage systemImageNamed:@"tv" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]];
+        c.imagePadding = 8; c.baseBackgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; c.baseForegroundColor = UIColor.whiteColor;
+        c.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+        c.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *in) { NSMutableDictionary *o = [in mutableCopy]; o[NSFontAttributeName] = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold]; return o; };
+        UIButton *b = [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; output_video_set(NO); }]];
+        UIViewController *vc = [UIViewController new]; vc.view.backgroundColor = UIColor.clearColor;
+        b.frame = CGRectMake(0, 0, 176, 52); b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [vc.view addSubview:b];
+        g_back_tv = [[UIWindow alloc] initWithWindowScene:scene]; g_back_tv.rootViewController = vc;
+        g_back_tv.windowLevel = UIWindowLevelAlert + 1; g_back_tv.backgroundColor = UIColor.clearColor;
+    }
+    CGRect sb = scene.coordinateSpace.bounds; UIEdgeInsets in = scene.windows.firstObject.safeAreaInsets;
+    g_back_tv.frame = CGRectMake(MAX(24, in.left), sb.size.height - MAX(24, in.bottom) - 52, 176, 52);   // bottom left: the picker's key hints are at the bottom right
+    g_back_tv.hidden = NO;
+}
 - (void)placeStage {
     tv_window_ensure();
     if (g_tv) g_tv.hidden = video_pref_ipad();
@@ -234,6 +261,7 @@ void front_ios_back_to_picker(void) {
     } else if (g_tv && self.launched) {   // before the game: the picker or the launcher follows the picture
         if (tv_on()) pregame_move(self, g_tv.rootViewController); else pregame_move(g_tv.rootViewController, self);
     }
+    back_to_tv_sync(self.view.window.windowScene, g_tv_scene && video_pref_ipad() && !self.game);
     BOOL tv = tv_on();
     if (tv && !self.tvNote) { self.tvNote = tv_panel(self.view.bounds); [self.view insertSubview:self.tvNote atIndex:0]; }
     self.tvNote.hidden = !tv;
@@ -396,7 +424,7 @@ static UIView *tv_panel(CGRect frame) {
             // a big number on the player's colour, the name beside it in large type; nothing smaller (it is read from arm's length or the sofa)
             CGFloat bs = MIN(56, ch - 24);
             UILabel *b = [[UILabel alloc] initWithFrame:CGRectMake(14, (ch - bs) / 2, bs, bs)]; b.userInteractionEnabled = NO;
-            b.text = [NSString stringWithFormat:@"%dP", p]; b.textAlignment = NSTextAlignmentCenter; b.font = [UIFont systemFontOfSize:21 weight:UIFontWeightHeavy];
+            b.text = [NSString stringWithFormat:@"P%d", p]; b.textAlignment = NSTextAlignmentCenter; b.font = [UIFont systemFontOfSize:21 weight:UIFontWeightHeavy];
             b.layer.cornerRadius = 14; b.layer.cornerCurve = kCACornerCurveContinuous; b.layer.masksToBounds = YES;
             b.backgroundColor = r ? player_color(p) : [UIColor colorWithWhite:1 alpha:0.06]; b.textColor = r ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
             [t addSubview:b];
@@ -412,17 +440,17 @@ static UIView *tv_panel(CGRect frame) {
                 NSMutableArray *to = [NSMutableArray array];
                 for (int q = 1; q <= 8; q++) if (q != p) {
                     NSArray *o = by[@(q)];
-                    NSString *tt = o ? [NSString stringWithFormat:z ? @"%dP（和 %@ 對調）" : @"%dP (swap with %@)", q, [o[2] description]] : [NSString stringWithFormat:@"%dP", q];
+                    NSString *tt = o ? [NSString stringWithFormat:z ? @"P%d（和 %@ 對調）" : @"P%d (swap with %@)", q, [o[2] description]] : [NSString stringWithFormat:@"P%d", q];
                     [to addObject:[UIAction actionWithTitle:tt image:nil identifier:nil handler:^(UIAction *a) { (void)a; slot_swap(p - 1, q - 1); }]];
                 }
                 NSMutableArray *items = [NSMutableArray array];
-                if (p != 1) [items addObject:[UIAction actionWithTitle:z ? @"設為 1P" : @"Make player 1" image:[UIImage systemImageNamed:@"1.circle"] identifier:nil handler:^(UIAction *a) { (void)a; slot_swap(p - 1, 0); }]];
+                if (p != 1) [items addObject:[UIAction actionWithTitle:z ? @"設為 P1" : @"Make player 1" image:[UIImage systemImageNamed:@"1.circle"] identifier:nil handler:^(UIAction *a) { (void)a; slot_swap(p - 1, 0); }]];
                 [items addObject:[UIMenu menuWithTitle:z ? @"換號碼" : @"Change number" image:[UIImage systemImageNamed:@"arrow.up.arrow.down"] identifier:nil options:0 children:to]];
                 [items addObject:[UIAction actionWithTitle:xbox ? (z ? @"按鍵配置：改成 Switch" : @"Layout: Switch") : (z ? @"按鍵配置：改成 Xbox" : @"Layout: Xbox") image:[UIImage systemImageNamed:@"gamecontroller"] identifier:nil handler:^(UIAction *a) { (void)a; slot_layout(p - 1); }]];
                 [items addObject:[UIAction actionWithTitle:z ? @"辨識（震動）" : @"Identify" image:[UIImage systemImageNamed:@"wave.3.right"] identifier:nil handler:^(UIAction *a) { (void)a; slot_identify(p - 1); }]];
                 UIAction *rm = [UIAction actionWithTitle:z ? @"移除" : @"Remove" image:[UIImage systemImageNamed:@"xmark.circle"] identifier:nil handler:^(UIAction *a) { (void)a; slot_remove(p - 1); }];
                 rm.attributes = UIMenuElementAttributesDestructive; [items addObject:rm];
-                t.menu = [UIMenu menuWithTitle:[NSString stringWithFormat:@"%dP · %@", p, [r[2] description]] children:items]; t.showsMenuAsPrimaryAction = YES;
+                t.menu = [UIMenu menuWithTitle:[NSString stringWithFormat:@"P%d · %@", p, [r[2] description]] children:items]; t.showsMenuAsPrimaryAction = YES;
                 if (![held containsObject:@(p)]) {   // just joined
                     t.alpha = 0; t.transform = CGAffineTransformMakeScale(0.85, 0.85);
                     [UIView animateWithDuration:0.5 delay:0.04 * rowi usingSpringWithDamping:0.7 initialSpringVelocity:0.4 options:0 animations:^{ t.alpha = 1; t.transform = CGAffineTransformIdentity; } completion:nil];
@@ -745,7 +773,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)o {
     (void)session; (void)o;
     if (![scene isKindOfClass:UIWindowScene.class]) return;
-    g_tv_scene = (UIWindowScene *)scene;
+    g_tv_scene = (UIWindowScene *)scene; g_video_ipad = NO;   // a TV plugged in: the picture goes there
     // Edge to edge: the default (scale) shrinks the picture inside the TV's frame for TVs that crop their edges, which left a black border on the ones that do not
     g_tv_scene.screen.overscanCompensation = UIScreenOverscanCompensationNone;
     CGSize sz = g_tv_scene.screen.bounds.size;
@@ -903,7 +931,7 @@ static void slot_remove(int p) {
 }
 static void output_video_set(BOOL ipad) {   // the picture moves at once, the menu with it, and the choice stays
     if (ipad == video_pref_ipad()) return;
-    [NSUserDefaults.standardUserDefaults setBool:ipad forKey:@"DMVideoOnIPad"];
+    g_video_ipad = ipad;
     LOG("front end: picture output -> %s", ipad ? "iPad" : "TV");
     [g_root placeStage]; home_menu_relayout(); home_menu_draw();
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
@@ -1013,7 +1041,7 @@ static UIView *home_menu_make(UIView *root) {
         tile.layer.cornerRadius = 10; tile.layer.cornerCurve = kCACornerCurveContinuous;
         UIView *ic;
         if (slot >= 0) {   // a player's number on its own colour, instead of an icon
-            UILabel *n = [[UILabel alloc] initWithFrame:tile.bounds]; n.text = [NSString stringWithFormat:@"%dP", slot + 1]; n.textAlignment = NSTextAlignmentCenter;
+            UILabel *n = [[UILabel alloc] initWithFrame:tile.bounds]; n.text = [NSString stringWithFormat:@"P%d", slot + 1]; n.textAlignment = NSTextAlignmentCenter;
             n.font = [UIFont systemFontOfSize:13 weight:UIFontWeightHeavy]; n.textColor = held ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
             tile.backgroundColor = held ? player_color(slot + 1) : [UIColor colorWithWhite:1 alpha:0.06]; tile.tag = 63;   // not lit by the selection
             ic = n;
