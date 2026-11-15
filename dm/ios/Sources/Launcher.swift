@@ -662,7 +662,7 @@ private struct LauncherView: View {
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
     @State private var shown = false   // the left column rises in once, as the picker's card does
-    @StateObject private var tv = TenFoot()   // GamePicker.swift: a TV is connected
+    @StateObject private var tv = TenFoot()   // GamePicker.swift: on the TV's window
 
     var body: some View {
         GeometryReader { geometry in
@@ -747,6 +747,7 @@ private struct LauncherView: View {
             NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
         }
         .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
+        .tenFoot(tv)
     }
 
     // The game's icon blurred over black, as behind the picker's row

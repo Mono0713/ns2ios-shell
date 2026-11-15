@@ -437,7 +437,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,68 +446,450 @@
+@@ -64,68 +446,451 @@
      }
  }
  
@@ -658,7 +658,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
 +    @State private var shown = false   // the left column rises in once, as the picker's card does
-+    @StateObject private var tv = TenFoot()   // GamePicker.swift: a TV is connected
++    @StateObject private var tv = TenFoot()   // GamePicker.swift: on the TV's window
  
      var body: some View {
          GeometryReader { geometry in
@@ -775,6 +775,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
 +        }
 +        .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
++        .tenFoot(tv)
 +    }
 +
 +    // The game's icon blurred over black, as behind the picker's row
@@ -921,7 +922,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +901,30 @@
+@@ -137,21 +902,30 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }

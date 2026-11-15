@@ -33,23 +33,46 @@ enum DS {
     static let cardIn = AnyTransition.asymmetric(insertion: .scale(scale: 0.9).combined(with: .offset(y: 24)).combined(with: .opacity),
                                                  removal: .scale(scale: 0.94).combined(with: .opacity))
 }
-// Ten-foot mode: while a TV is connected (the picker and the launcher are mirrored to it before the game starts), everyone sits far from the screen,
-// so text is larger (Dynamic Type at .accessibility1), tiles and the QR code are larger and notes are left out, as on a console's home screen
+// Ten-foot mode: on the TV's window (front_ios.m presents the picker and the launcher there before the game) everyone sits far from the screen, so text is
+// larger (Dynamic Type at .accessibility1), tiles and the QR code are larger and notes are left out, as on a console's home screen. Decided by the window the
+// view is in, not by a TV being plugged in: with the picture output set to the iPad the same screens stay at the iPad's sizes
 final class TenFoot: ObservableObject {
-    @Published private(set) var on = TenFoot.connected
-    private var tokens: [NSObjectProtocol] = []
-    static var connected: Bool {
-        UIScreen.screens.count > 1 || UIApplication.shared.connectedScenes.contains { $0.session.role == .windowExternalDisplayNonInteractive }
-    }
-    init() {
-        let nc = NotificationCenter.default
-        for n in [UIScreen.didConnectNotification, UIScreen.didDisconnectNotification, UIScene.willConnectNotification, UIScene.didDisconnectNotification] {
-            tokens.append(nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in
-                DispatchQueue.main.async { let now = TenFoot.connected; if self?.on != now { withAnimation(DS.pop) { self?.on = now } } }   // after the scene list settles
-            })
+    @Published fileprivate(set) var on = false
+}
+// Reads the role of the scene the view's window belongs to; the picker moving between the iPad and the TV (the same controller, presented again) moves it too
+private struct TenFootProbe: UIViewRepresentable {
+    let tv: TenFoot
+    final class Probe: UIView {
+        weak var tv: TenFoot?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let w = window else { return }
+            let now = w.windowScene?.session.role == .windowExternalDisplayNonInteractive
+            let t = tv
+            DispatchQueue.main.async { if let t, t.on != now { t.on = now } }
         }
     }
-    deinit { tokens.forEach(NotificationCenter.default.removeObserver) }
+    func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tv = tv; return v }
+    func updateUIView(_ v: Probe, context: Context) { v.tv = tv }
+}
+// On the TV the screen is laid out on a 1920 x 1080 canvas and scaled to the TV's window, so it fills the same share of any TV or projector: a TV's window
+// can be 1920, 2560 or 3840 points across, where sizes in points came out a fraction of the screen
+private struct TenFootStage: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
+        GeometryReader { g in
+            let u = on ? max(0.5, min(g.size.width / 1920, g.size.height / 1080)) : 1
+            content.frame(width: g.size.width / u, height: g.size.height / u)
+                .scaleEffect(u, anchor: .topLeading)
+                .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+        }
+        .ignoresSafeArea(edges: on ? Edge.Set.all : [])
+    }
+}
+extension View {
+    // The probe and, on the TV, the canvas: the outermost modifiers of the picker's and the launcher's screens
+    func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on)).background(TenFootProbe(tv: tv)) }
 }
 private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
@@ -403,7 +426,7 @@ private struct PickerView: View {
 
     var body: some View {
         GeometryReader { g in
-            let side = tv.on ? min(g.size.height * 0.44, g.size.width / 3.4, 420) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot: fewer, larger tiles
+            let side = tv.on ? min(g.size.height * 0.42, g.size.width / 3.6) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot (on the 1920 x 1080 canvas): fewer, larger tiles
             let gap = side * 0.14
             let current = m.game(m.focus)
             ZStack {
@@ -436,6 +459,7 @@ private struct PickerView: View {
         .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
         .onDisappear { held?.task.cancel() }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
+        .tenFoot(tv)
     }
 
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
