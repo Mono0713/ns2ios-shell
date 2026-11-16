@@ -121,7 +121,13 @@ struct BackToTVButton: View {
         Group {
             if waiting {
                 Button { frontIosBackToTv() } label: {
-                    Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.headline).foregroundStyle(.white)
+                    HStack(spacing: 10) {
+                        Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.headline)
+                        // a controller's Home (Xbox, − and + together, the phone page's ⌂) switches too, before the game (front_ios.m)
+                        Text("Home").font(.caption.weight(.bold)).padding(.horizontal, 6).frame(minHeight: 22)
+                            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(Color.white.opacity(0.22)))
+                    }
+                    .foregroundStyle(.white)
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.accent))
                 }
