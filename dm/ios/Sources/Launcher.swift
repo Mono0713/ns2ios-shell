@@ -824,6 +824,7 @@ private struct LauncherView: View {
             if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
         }
         .tenFoot(tv)
+        .settleOnArrival()   // GamePicker.swift: one plain fade in
     }
 
     // The game's icon blurred over black, as behind the picker's row

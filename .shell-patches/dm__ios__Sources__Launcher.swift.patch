@@ -496,7 +496,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  }
              default:
                  Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-@@ -64,68 +501,472 @@
+@@ -64,68 +501,473 @@
      }
  }
  
@@ -855,6 +855,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
 +        }
 +        .tenFoot(tv)
++        .settleOnArrival()   // GamePicker.swift: one plain fade in
 +    }
 +
 +    // The game's icon blurred over black, as behind the picker's row
@@ -1001,7 +1002,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +978,32 @@
+@@ -137,21 +979,32 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
