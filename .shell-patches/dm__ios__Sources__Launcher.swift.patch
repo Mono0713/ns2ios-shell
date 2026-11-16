@@ -80,7 +80,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
 +        "連接同一個 Wi-Fi 的手機都能成為獨立玩家，依連線順序取得下一個空的編號，最多 8 位。重新整理頁面會保留原本的玩家編號。",
 +    "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
-+    "Move to": "換到", "On": "開", "Off": "關", "Button layout": "按鍵配置",
++    "Move to": "換到", "On": "開", "Off": "關", "Switch mode": "切換模式", "Button layout": "按鍵配置",
 +    "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描左側的 QR Code。",
 +    "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
 +        "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
@@ -482,7 +482,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,81 +484,516 @@
+@@ -51,81 +484,520 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -794,7 +794,11 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                    // on the TV the code joins the game's card in the middle (an empty middle under Play otherwise); on the iPad it sits at the bottom
 +                    if tv.on { Color.clear.frame(height: 24 * k) } else { Spacer(minLength: 8) }
 +                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
-+                    if tv.on { Spacer(minLength: 0) }
++                    if tv.on {
++                        Spacer(minLength: 0)
++                        KeyHint(key: "Home", text: tr("Switch mode"))   // GamePicker.swift; on the TV, the same in console and handheld mode
++                            .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
++                    }
 +                }
 +                .padding(20 * k)
                  .frame(width: geometry.size.width / 3, height: geometry.size.height)
@@ -1036,7 +1040,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +1005,32 @@
+@@ -137,21 +1009,32 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
