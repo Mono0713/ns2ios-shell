@@ -64,6 +64,9 @@ static void crisp(UIView *v, CGFloat k) {
     }
 }
 static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare step's progress and the Home menu: over the picture, wherever it is
+// Handheld play with a TV connected: the TV shows the same screens as in console play, so these have a second copy there, over the mirrored picture (tv_copies_sync)
+static UIView *g_loading_tv, *g_prog_tv, *g_menu_tv;
+static void tv_copies_sync(void);
 static UIView *overlay_root(void);
 static void home_menu_toggle(void);
 static void home_menu_relayout(void);
@@ -416,6 +419,7 @@ void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ L
     self.tvNote.hidden = !tv;
     self.pad.hidden = tv;   // console play: no touch controls over the iPad's panel, which has its own controls
     self.menuButton.hidden = YES;   // the TV panel's own Pause button; handheld: the touch controls' ⌂ key
+    tv_copies_sync();
     [self.view setNeedsLayout];
     front_ios_audio_session();   // the TV came or went: the sound follows the choice for TV play (audio_on_ipad)
 }
@@ -780,12 +784,11 @@ static UILabel *front_ios_fps_label(void) {
 
 // Loading screen from Play to the game's first frame (front.h front_first_frame): a spinner and a line over the black game view, which otherwise looked like a hang
 // for the seconds the game takes to boot. Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
-static void loading_show(UIView *root) {
-    if (g_loading || !root) return;
+static UIView *loading_make(UIView *root) {
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
     BOOL zh = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
-    g_loading = [[UIView alloc] initWithFrame:root.bounds]; g_loading.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    g_loading.backgroundColor = UIColor.blackColor; g_loading.userInteractionEnabled = NO;
+    UIView *v = [[UIView alloc] initWithFrame:root.bounds]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    v.backgroundColor = UIColor.blackColor; v.userInteractionEnabled = NO;
     UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
     spin.color = UIColor.whiteColor; spin.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds) - 14);
     spin.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
@@ -799,13 +802,18 @@ static void loading_show(UIView *root) {
         spin.transform = CGAffineTransformMakeScale(k, k); l.font = [UIFont systemFontOfSize:15 * k];
         l.frame = CGRectMake(0, CGRectGetMidY(root.bounds) + 24 * k, root.bounds.size.width, 24 * k);
     }
-    [g_loading addSubview:spin]; [g_loading addSubview:l]; [root addSubview:g_loading];
+    [v addSubview:spin]; [v addSubview:l]; [root addSubview:v];
+    return v;
+}
+static void loading_show(UIView *root) {
+    if (g_loading || !root) return;
+    g_loading = loading_make(root); tv_copies_sync();
 }
 // The loading screen's line for the current step (main.m: checking shaders, starting the game). Main thread
 void front_ios_loading_text(NSString *zh, NSString *en) {
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
     BOOL z = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
-    ((UILabel *)[g_loading viewWithTag:1]).text = z ? zh : en; LOG("front end: loading screen: %s", en.UTF8String);
+    ((UILabel *)[g_loading viewWithTag:1]).text = z ? zh : en; ((UILabel *)[g_loading_tv viewWithTag:1]).text = z ? zh : en; LOG("front end: loading screen: %s", en.UTF8String);
 }
 // The launcher's automatic memory (hle_runmark.c): the run counts as working once frames have kept coming for 40 s after the first, in the foreground, and as
 // memory pressure when iOS warns or under 256 MB is left for this process (iOS kills a process at its limit with no crash log, so the pressure is recorded before it)
@@ -830,33 +838,39 @@ static void run_watch_start(void) {
     dispatch_resume(t);
 }
 void front_first_frame(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; LOG("front end: first frame, loading screen hidden"); });
+    dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; tv_copies_sync(); LOG("front end: first frame, loading screen hidden"); });
 }
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
-static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
+static UIView *prog_make(UIView *root) {   // the title (tag 1), the bar (2) and the count (3)
+    UIView *v = [[UIView alloc] initWithFrame:root.bounds]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    v.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.94];
+    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - 320) / 2), floor((root.bounds.size.height - 96) / 2), 320, 96)];
+    box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 4, 320, 30)]; title.textAlignment = NSTextAlignmentCenter; title.textColor = UIColor.whiteColor; title.tag = 1;
+    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+    UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault]; bar.frame = CGRectMake(20, 48, 280, 4); bar.tag = 2;
+    UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, 320, 22)]; count.textAlignment = NSTextAlignmentCenter; count.tag = 3;
+    count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
+    [box addSubview:title]; [box addSubview:bar]; [box addSubview:count]; [v addSubview:box];
+    CGFloat k = ui_scale(root); if (k > 1) box.transform = CGAffineTransformMakeScale(k, k);   // bigger on a TV
+    [root addSubview:v]; if (k > 1) crisp(box, k);
+    return v;
+}
+static void prog_copy(UIView *to, UIView *from) {   // the TV's copy shows what the iPad's shows
+    if (!to || !from) return;
+    for (NSInteger t = 1; t <= 3; t += 2) ((UILabel *)[to viewWithTag:t]).text = ((UILabel *)[from viewWithTag:t]).text;
+    ((UIProgressView *)[to viewWithTag:2]).progress = ((UIProgressView *)[from viewWithTag:2]).progress;
+}
 void front_progress(const char *title, long done, long total) {
     if (!g_layer) return;
     NSString *tt = title ? @(title) : nil;
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!tt) { [g_prog removeFromSuperview]; g_prog = nil; return; }
-        if (!g_prog) {
-            UIView *root = overlay_root(); if (!root) return;
-            g_prog = [[UIView alloc] initWithFrame:root.bounds]; g_prog.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            g_prog.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.94];
-            UIView *box = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - 320) / 2), floor((root.bounds.size.height - 96) / 2), 320, 96)];
-            box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-            g_prog_title = [[UILabel alloc] initWithFrame:CGRectMake(0, 4, 320, 30)]; g_prog_title.textAlignment = NSTextAlignmentCenter; g_prog_title.textColor = UIColor.whiteColor;
-            g_prog_title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
-            g_prog_bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault]; g_prog_bar.frame = CGRectMake(20, 48, 280, 4);
-            g_prog_count = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, 320, 22)]; g_prog_count.textAlignment = NSTextAlignmentCenter;
-            g_prog_count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; g_prog_count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
-            [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
-            CGFloat k = ui_scale(root); if (k > 1) box.transform = CGAffineTransformMakeScale(k, k);   // bigger on a TV
-            [root addSubview:g_prog]; if (k > 1) crisp(box, k);
-        }
-        g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
-        g_prog_count.text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
+        if (!tt) { [g_prog removeFromSuperview]; g_prog = nil; tv_copies_sync(); return; }
+        if (!g_prog) { UIView *root = overlay_root(); if (!root) return; g_prog = prog_make(root); }
+        ((UILabel *)[g_prog viewWithTag:1]).text = tt; ((UIProgressView *)[g_prog viewWithTag:2]).progress = total > 0 ? (float)done / (float)total : 0;
+        ((UILabel *)[g_prog viewWithTag:3]).text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
                              [NSNumberFormatter localizedStringFromNumber:@(total) numberStyle:NSNumberFormatterDecimalStyle]];
+        if (g_prog_tv) prog_copy(g_prog_tv, g_prog); else tv_copies_sync();
     });
 }
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
@@ -1026,7 +1040,6 @@ static NSString *game_name(void) {
     return [n isKindOfClass:NSString.class] && n.length ? n : ([NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"SwitchPad");
 }
 static NSMutableArray<UIView *> *g_menu_cards;   // the card on the TV and the iPad's copy (touch), or only the iPad's
-static UIView *g_menu_ipad;   // the iPad's copy of the menu while g_menu is on the TV
 static unsigned g_menu_gen;   // each opening: a close's late resume does not undo a menu opened again
 // The selection is a pill that slides to the chosen row (a spring), under the rows' text; the chosen row's icon tile lights up
 static void home_menu_draw(void) {
@@ -1061,14 +1074,14 @@ static void home_menu_close(void) {
     if (!g_menu || g_menu_closing) return;
     g_menu_closing = 1;
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @0}];
-    UIView *m = g_menu, *mi = g_menu_ipad;
+    UIView *m = g_menu, *mi = g_menu_tv;
     NSArray<UIView *> *cards = [g_menu_cards copy];
     [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
         m.alpha = 0; mi.alpha = 0;
         for (UIView *c in cards) c.transform = CGAffineTransformScale(c.transform, 0.94, 0.94);
     } completion:^(BOOL f) {
         (void)f; [m removeFromSuperview]; [mi removeFromSuperview];
-        if (g_menu == m) { g_menu = nil; g_menu_ipad = nil; g_menu_cards = nil; g_menu_closing = 0; }
+        if (g_menu == m) { g_menu = nil; g_menu_tv = nil; g_menu_cards = nil; g_menu_closing = 0; }
     }];
     resume_when_released(g_menu_gen, 0);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the TV panel's Pause / Continue
@@ -1309,14 +1322,31 @@ static void home_menu_build(void) {
     UIView *root = overlay_root(); if (!root) return;
     g_menu_cards = [NSMutableArray array];
     g_menu = home_menu_make(root);
-    // with the picture on the TV the iPad keeps its own panel (tv_panel), whose controls do what the menu does: no copy of the menu there
+    // with the picture on the TV the iPad keeps its own panel (tv_panel), whose controls do what the menu does: no copy of the menu there.
+    // Handheld play with a TV: the menu is on the iPad, under the player's fingers, and its copy on the TV (tv_copies_sync), as in console play
+    tv_copies_sync();
     g_menu_anim = 0;
     home_menu_draw();
 }
 static void home_menu_relayout(void) {   // the TV came or went while the menu is up: draw it again where the picture is now
     if (!g_menu || g_menu_closing) return;
-    [g_menu removeFromSuperview]; [g_menu_ipad removeFromSuperview]; g_menu = nil; g_menu_ipad = nil;
+    [g_menu removeFromSuperview]; [g_menu_tv removeFromSuperview]; g_menu = nil; g_menu_tv = nil;
     home_menu_build();
+}
+// The TV is the same in console and handheld play (the user's rule, art53): only the iPad differs. In handheld play in game the TV shows the mirrored picture
+// (tv_mirror), and over it copies of what covers the iPad's picture: the loading screen, the prepare step's progress and the Home menu, laid out for the TV
+// as in console play. The copies take no touches; the iPad's own ones are the ones used
+static void tv_copies_sync(void) {
+    UIView *tv = g_tv.rootViewController.view;
+    BOOL want = tv && g_tv && video_pref_ipad() && g_root.game;
+    if (want && g_loading && !g_loading_tv) { g_loading_tv = loading_make(tv); ((UILabel *)[g_loading_tv viewWithTag:1]).text = ((UILabel *)[g_loading viewWithTag:1]).text; }
+    if ((!want || !g_loading) && g_loading_tv) { [g_loading_tv removeFromSuperview]; g_loading_tv = nil; }
+    if (want && g_prog && !g_prog_tv) { g_prog_tv = prog_make(tv); prog_copy(g_prog_tv, g_prog); }
+    if ((!want || !g_prog) && g_prog_tv) { [g_prog_tv removeFromSuperview]; g_prog_tv = nil; }
+    if (want && g_menu && !g_menu_closing && !g_menu_tv) { g_menu_tv = home_menu_make(tv); home_menu_draw(); }
+    if ((!want || !g_menu) && g_menu_tv && !g_menu_closing) { [g_menu_tv removeFromSuperview]; g_menu_tv = nil; }
+    for (UIView *v in @[g_loading_tv ?: NSNull.null, g_prog_tv ?: NSNull.null, g_menu_tv ?: NSNull.null])   // over the mirrored picture, in the iPad's order
+        if ([v isKindOfClass:UIView.class]) { v.userInteractionEnabled = NO; [tv bringSubviewToFront:v]; }
 }
 static NSArray<NSString *> *audio_row(void) {
     BOOL z = zh_ui(), ipad = [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"];
