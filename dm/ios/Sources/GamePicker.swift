@@ -110,26 +110,26 @@ extension View {
     // The probe and, on the TV, the canvas: the outermost modifiers of the picker's and the launcher's screens
     func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on, screenScale: tv.screenScale)).background(TenFootProbe(tv: tv)) }
 }
-// Back to the TV: shown while a TV is connected but the picture was switched to the iPad and the game has not started (front_ios.m answers, again on
-// each DMShellChanged); the picture goes back to the TV. In the picker's title bar and next to the launcher's Game list
+// Console mode: shown in handheld mode while a TV is connected and the game has not started (front_ios.m answers, again on each DMShellChanged), on the
+// iPad and on the TV's copy alike (the copy's is not tapped: a controller switches there); a tap moves the picture to the TV. In the picker's title bar
+// and next to the launcher's Game list
 @_silgen_name("front_ios_tv_waiting") fileprivate func frontIosTvWaiting() -> Int32
 @_silgen_name("front_ios_back_to_tv") private func frontIosBackToTv()
 struct BackToTVButton: View {
     @State private var waiting = frontIosTvWaiting() != 0
-    @Environment(\.pregameMirror) private var mirror   // not on the TV's copy
     var body: some View {
         Group {
-            if waiting && !mirror {
+            if waiting {
                 Button { frontIosBackToTv() } label: {
-                    Label(tr("回到電視", "Back to the TV"), systemImage: "tv").font(.headline).foregroundStyle(.white)
+                    Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.headline).foregroundStyle(.white)
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.accent))
                 }
                 .buttonStyle(.plain)
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
+                .transition(.opacity)
             }
         }
-        .animation(DS.pop, value: waiting)
+        .animation(.easeInOut(duration: 0.2), value: waiting)
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMShellChanged")).receive(on: DispatchQueue.main)) { _ in
             waiting = frontIosTvWaiting() != 0
         }
@@ -167,6 +167,18 @@ public func dmPregameMirrorMake() -> UnsafeMutableRawPointer {   // a retained U
     h.view.isUserInteractionEnabled = false
     return Unmanaged.passRetained(h as UIViewController).toOpaque()
 }
+
+// A screen arriving (the picker back from the launcher, the launcher from the picker) comes in as one plain fade, the presentation's: for its first moment
+// no part of it animates on its own (sizes settling, the row taking its place, a button appearing)
+private struct Settle: ViewModifier {
+    @State private var settled = false
+    func body(content: Content) -> some View {
+        content
+            .transaction { if !settled { $0.animation = nil; $0.disablesAnimations = true } }
+            .task { try? await Task.sleep(for: .seconds(0.6)); settled = true }
+    }
+}
+extension View { func settleOnArrival() -> some View { modifier(Settle()) } }
 
 private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
@@ -585,6 +597,7 @@ private struct PickerView: View {
         .onDisappear { held?.task.cancel() }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
         .tenFoot(tv)
+        .settleOnArrival()   // one plain fade in
     }
 
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
