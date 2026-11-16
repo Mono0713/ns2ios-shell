@@ -285,10 +285,14 @@ static void mode_fade(UIWindow *w) {
     [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ still.alpha = 0; still.transform = CGAffineTransformMakeScale(0.97, 0.97); } completion:nil];
     // the black lifts once the screen is presented again and has drawn its first frame (a 4K TV's picker takes a moment), not on a fixed clock that
     // lifted it over a screen still building (the hitch in art48)
-    CFTimeInterval t0 = CACurrentMediaTime();
+    // The moved screen also lays itself out again for its new window (the ten-foot canvas, the status line) over a few frames; lifting the black on
+    // its first frame showed that settling as a shake (art49), so the black stays until the move has been done for a short while
+    CFTimeInterval t0 = CACurrentMediaTime(); __block CFTimeInterval done = 0;
     __block void (^lift)(void);
     lift = ^{
-        if ((g_pregame_moving || CACurrentMediaTime() - t0 < 0.22) && CACurrentMediaTime() - t0 < 1.2) {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (g_pregame_moving) done = 0; else if (!done) done = now;
+        if ((!done || now - done < 0.35 || now - t0 < 0.22) && now - t0 < 1.6) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC), dispatch_get_main_queue(), lift); return;
         }
         [CATransaction setCompletionBlock:^{   // after the frame now being committed (the new screen's first)
@@ -321,6 +325,14 @@ void front_ios_back_to_picker(void) {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
     front_ios_power_watch();
+    // Before the game, with a TV connected, player 1's Home (a controller's Home button, − and + together, a phone's ⌂) switches between console and
+    // handheld mode: the TV shows the same screen in both, so a controller can always bring the picture back. In the game Home opens the menu (home_menu_watch)
+    [NSNotificationCenter.defaultCenter addObserverForName:@"DMHomePressed" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+        if (g_root.game || !g_tv_scene || g_pregame_moving || [n.userInfo[@"p"] intValue] != 1) return;
+        static CFTimeInterval last; CFTimeInterval now = CACurrentMediaTime(); if (now - last < 1.0) return; last = now;   // one switch per press, not a second during the dip
+        LOG("front end: Home before the game: %s mode", video_pref_ipad() ? "console" : "handheld");
+        play_mode_set(!video_pref_ipad());
+    }];
     if (front_ios_pick_needed()) return;   // the game picker first (viewDidAppear); afterPick does the rest
     if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
@@ -525,7 +537,7 @@ static UIView *tv_panel(CGRect frame) {
     UILabel *vl = panel_label(20, UIFontWeightSemibold, 0.85); vl.textAlignment = NSTextAlignmentRight;
     UILabel *vidl = panel_label(18, UIFontWeightSemibold, 0.65); vidl.text = z ? @"模式" : @"Mode";
     // the switch slides first, then the screens change (their dip through black would otherwise cut the slide short)
-    UISegmentedControl *vid = panel_segments(z ? @[@"主機", @"掌機"] : @[@"Console", @"Handheld"], ^(NSInteger i) {
+    UISegmentedControl *vid = panel_segments(z ? @[@"主機模式", @"掌機模式"] : @[@"Console", @"Handheld"], ^(NSInteger i) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 280 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ play_mode_set(i == 1); });
     });
     UILabel *audl = panel_label(18, UIFontWeightSemibold, 0.65); audl.text = z ? @"聲音輸出" : @"Sound";
@@ -1317,7 +1329,7 @@ static NSArray<NSString *> *volume_row(void) {
 }
 static NSArray<NSString *> *video_row(void) {
     BOOL z = zh_ui(), ipad = video_pref_ipad();
-    return @[ipad ? (z ? @"模式：掌機" : @"Mode: handheld") : (z ? @"模式：主機" : @"Mode: console"),
+    return @[ipad ? (z ? @"掌機模式" : @"Handheld mode") : (z ? @"主機模式" : @"Console mode"),
              @"", @"video"];
 }
 // The menu's pages: 0 the main list, 1 the players (the eight numbers, who holds each; joining with a phone on the same page)
