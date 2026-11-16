@@ -747,6 +747,38 @@ def capture_have(d):
     return {n for n in names if re.fullmatch(r'[0-9a-f]{16}\.(vert|frag)', n)}
 
 
+def vk_capture_have(d):
+    """The SPIR-V modules a capture folder holds (<key>.spv, whole files: the host writes each under a temporary name first)."""
+    try: names = os.listdir(d)
+    except OSError: return set()
+    return {n for n in names if re.fullmatch(r'[0-9a-f]{16}\.spv', n)}
+
+
+def vk_runtime(*dirs):
+    """The profile says the game generates its SPIR-V at run time: upstream's vk_capture.tsv lists what its Mac run captured
+    (Super Mario Galaxy 1 and 2). A derived profile leaves the table out, so the registered one answers for it."""
+    return any(d and (d / 'vk_capture.tsv').is_file() for d in dirs)
+
+
+def vk_capture_want(*dirs):
+    for d in dirs:
+        try: return {l.strip() for l in (d / 'vk_capture.tsv').read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')}
+        except (OSError, TypeError): continue
+    return set()
+
+
+def has_spirv(romfs):
+    """Any file in the RomFS that starts with the SPIR-V magic (vk_shaders.py finds them the same way): only the first four
+    bytes of each file are read, and the walk stops at the first one."""
+    for d, _, fs in os.walk(romfs):
+        for n in fs:
+            try:
+                with open(os.path.join(d, n), 'rb') as f:
+                    if f.read(4) == b'\x03\x02\x23\x07': return True
+            except OSError: pass
+    return False
+
+
 def build_mac_host(work, gid):
     """dm/host's own compile line (make -n) with the output moved: make takes no target path with spaces, and
     dm/host/dmhost may belong to another build."""
@@ -1716,14 +1748,31 @@ def main():
             run(args, log=work / 'logs' / 'gl_prebuilt.log', what='generating the GLSL from the game files')
         if cap is not None: step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
     vk_out = None
+    vk_record = False   # the package records the SPIR-V the game generates, on the phone (Documents/vk_capture/<title ID>)
     if route == 'vulkan' and not a.no_shaders:   # --no-shaders is the capture run: a game that builds its SPIR-V at run
                                                  # time has none in the RomFS, and a missing folder is not an error there
         # SPIR-V, not GLSL: vk_shaders.py only needs spirv-cross here (Apple's Metal compiler is the missing half, and
         # --source-only skips it), so a Windows machine produces the same table a Mac does. Most Vulkan games keep their
         # SPIR-V in the RomFS (Hades: 74 files in Content/EffectsForgeSwitch), so nothing has to be captured; a game that
         # builds its modules at run time needs --vk-capture with what DM_VK_CAPTURE wrote.
+        vcap = Path(a.vk_capture).resolve() if a.vk_capture else None
+        have = vk_capture_have(vcap) if vcap else set()
+        # Super Mario Galaxy 1 and 2: Hagi generates its GX shaders as SPIR-V at run time and the RomFS has none. Upstream
+        # boots the game on a Mac to capture them; there is no Mac here, so the phone does it, as for Roof Rage's GLSL: the
+        # package records every module the game creates (DM_VK_CAPTURE, Documents/vk_capture/<title ID>), Switch Pad takes
+        # them back and the next pack translates them. The first package draws nothing; Galaxy creates all of its modules
+        # while it shows "Initializing system...", so one launch of about a minute is enough. The recording stays on, so
+        # a module a later area creates is taken the same way.
+        vk_record = vk_runtime(gdir, reg) or not has_spirv(game / 'RomFS')
+        if vk_record:
+            want = vk_capture_want(gdir, reg)
+            say('Vulkan game whose SPIR-V shaders exist only at run time: %s' % (
+                '%d recorded on the phone%s' % (len(have), ' (the profile lists %d)' % len(want) if want else '') if have
+                else 'none recorded yet, building without shaders; open it once on the iPad (no picture, about a minute), '
+                     'which records them, then pack again'))
+    if route == 'vulkan' and not a.no_shaders and (not vk_record or have):
         root = work / 'build' / 'vkroot'
-        ins = [game / 'RomFS'] + ([Path(a.vk_capture).resolve()] if a.vk_capture else [])
+        ins = [game / 'RomFS'] + ([vcap] if vcap and have else [])
         run([PY, GFX / 'vk_shaders.py', *ins, root, '--source-only'],
             log=work / 'logs' / 'vk_shaders.log', what='translating the SPIR-V to Metal source')
         vk_out = root / 'vk'
@@ -1731,7 +1780,7 @@ def main():
         tbl = [l for l in (vk_out / 'vk_shaders.tsv').read_text(encoding='utf-8').splitlines() if l and not l.startswith('#')]
         say('Vulkan shaders: %d translated (%d sources) -> %s' % (len(tbl), len(list((vk_out / 'src').glob('*.metal'))), vk_out))
     # A GL game with a capture needs neither: its shaders came from the capture, and there is nothing left to refuse.
-    if route != 'nvn' and not a.no_shaders and not gl_record and gl_out is None and vk_out is None:
+    if route != 'nvn' and not a.no_shaders and not gl_record and not vk_record and gl_out is None and vk_out is None:
         # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
         # would only see a black screen with no explanation. The flag exists for the capture run that produces the shaders.
         die('%s game: its shaders are %s, so no game file holds them; upstream captures them by booting the game on a Mac.\n'
@@ -1824,6 +1873,12 @@ def main():
         shutil.copytree(vk_out, dst)
         say('Vulkan shader table and %d sources → msl/vk (the phone compiles them at first launch)'
             % len(list((dst / 'src').glob('*.metal'))))
+    if vk_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_VK_CAPTURE=')] + ['DM_VK_CAPTURE=vk_capture/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_VK_CAPTURE=vk_capture/%s (the phone records the SPIR-V the game generates there)' % tid)
     if gl_record:
         env = A / 'dm' / 'env.txt'
         lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []

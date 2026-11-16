@@ -24,6 +24,7 @@
 #include <mach-o/ldsyms.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <sys/stat.h>
 #include <time.h>
 
 int mtl_fps_target(void);   // nvn_mtl.m: 60, or 30 when the frame rate is halved
@@ -820,11 +821,17 @@ VK(vkCreateFramebuffer, VkResult, VkDevice d, const VkFramebufferCreateInfo *ci,
 VK(vkDestroyFramebuffer, void, VkDevice d, VkFramebuffer fb, const VkAllocationCallbacks *a) { (void)d; (void)a; free(fb); }
 
 // ---------- Shaders and pipelines ----------
-// DM_VK_CAPTURE=<dir> (Mac): every SPIR-V module the game creates is written to <dir>/<key>.spv. Super Mario Galaxy generates its GX shaders as SPIR-V at run time
-// (over 3,000 at boot, from the pipeline database), so no game file holds them; vk_shaders.py translates a capture folder like a RomFS
+// DM_VK_CAPTURE=<dir>: every SPIR-V module the game creates is written to <dir>/<key>.spv. Super Mario Galaxy generates its GX shaders as SPIR-V at run time
+// (over 3,000 at boot, from the pipeline database), so no game file holds them; vk_shaders.py translates a capture folder like a RomFS. On the phone the packer writes
+// DM_VK_CAPTURE=vk_capture/<title ID> into the game's dm/env.txt (relative to Documents) when it had none yet; the folder is made here, and Switch Pad takes it back
 static void sh_capture(const char *key, const void *code, size_t n) {
     static const char *dir; static int init;
-    if (!init) { init = 1; dir = getenv("DM_VK_CAPTURE"); if (dir) VLOG("shader capture → %s", dir); }
+    if (!init) {
+        init = 1; dir = getenv("DM_VK_CAPTURE");
+        if (dir && !*dir) dir = NULL;
+        if (dir) { char p[1024]; snprintf(p, sizeof p, "%s", dir); for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; } mkdir(p, 0755);
+                   LOG("[vk] shader capture → %s (the next pack translates what is recorded here)", dir); }
+    }
     if (!dir) return;
     char p[1024]; snprintf(p, sizeof p, "%s/%s.spv", dir, key);
     if (access(p, F_OK) == 0) return;
