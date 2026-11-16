@@ -33,7 +33,7 @@
 #   offsets relative to its start. A shader whose size differs from its raw size is compressed.
 # Usage: uepak.py probe <RomFS> <main NSO> [<oodle_serve>]               what the shader tools see in the paks and IoStore containers (a game they do not read yet)
 #        uepak.py list <pak> <main NSO> <out tsv>                       every file in the pak: path, raw size, stored size, compression, encrypted, blocks
-#        uepak.py job <RomFS> <main NSO> <work dir> [<Mac host> <rewritten modules>]   the shader code archives of every pak, and an Oodle job of their Oodle-compressed shaders (LZ4 ones
+#        uepak.py job <RomFS> <main NSO> <work dir> [<Mac host> <rewritten modules> | <oodle_serve>]   the shader code archives of every pak, and an Oodle job of their Oodle-compressed shaders (LZ4 ones
 #                                                                       decoded at once); IoStore shader libraries (UE 5.6) decoded at once through the game's Oodle in the host (OodleHost)
 #        uepak.py finish <work dir> <out dir>                           after the host has run the job: the archives with every shader decoded
 import ctypes, json, os, struct, sys
@@ -72,8 +72,8 @@ def _aes_backend():
             if bc.BCryptDecrypt(k, ctypes.c_char_p(bytes(data)), len(data), None, None, 0, out, len(data), ctypes.byref(got), 0): raise ValueError('BCryptDecrypt failed')
             return out.raw[:got.value]
         return dec
-    import ctypes.util
-    lc = ctypes.CDLL(ctypes.util.find_library('crypto') or 'libcrypto.so')
+    from ctypes.util import find_library   # (import ctypes.util here would make ctypes local to the whole function: UnboundLocalError on Windows and the Mac)
+    lc = ctypes.CDLL(find_library('crypto') or 'libcrypto.so')
     lc.EVP_CIPHER_CTX_new.restype = ctypes.c_void_p; lc.EVP_aes_256_ecb.restype = ctypes.c_void_p
     for f in (lc.EVP_DecryptInit_ex, lc.EVP_CIPHER_CTX_set_padding, lc.EVP_DecryptUpdate, lc.EVP_CIPHER_CTX_free): f.argtypes = None
     def dec(key, data):
@@ -159,7 +159,7 @@ class OodleHost:
     def __init__(self, host, modules, env=None):
         import subprocess, tempfile
         self.err = tempfile.TemporaryFile()
-        self.p = subprocess.Popen([str(host), str(modules)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, env=dict(env or os.environ, DM_OODLE_SERVE='1'))
+        self.p = subprocess.Popen([os.path.abspath(str(host)), str(modules)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, env=dict(env or os.environ, DM_OODLE_SERVE='1'))
         self.n = 0
     def __call__(self, comp, n):
         try:
@@ -663,7 +663,7 @@ if __name__ == '__main__':
         used = sorted({p.entry(x)['method'] for x in p.files} - {''})
         print(f'pak version {p.version}, mount {p.mount}, {len(p.files)} files, compression {used}')
     elif cmd == 'job':
-        dec = OodleHost(*sys.argv[5:7]) if len(sys.argv) > 6 else None
+        dec = OodleHost(*sys.argv[5:7]) if len(sys.argv) > 6 else Ooz(sys.argv[5]) if len(sys.argv) > 5 else None   # the Mac host and its modules, or oodle_serve
         try: listing, n = job(*sys.argv[2:5], decode=dec)
         finally:
             if dec: dec.close()
