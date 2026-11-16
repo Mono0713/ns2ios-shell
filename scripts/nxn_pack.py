@@ -922,7 +922,8 @@ def fill_mem_used(patched, mods, gdir, rows):
     aborts during nninitStartup -- which is what Absolum 1.0.4 did: 138 MB of modules against a 64 MB default. Returns the
     value written, or None when the profile already has enough.
     """
-    total = sum(q.stat().st_size for q in patched.glob('*.patched.bin'))   # the rewritten modules, as step_rewrite names them
+    # the rewritten modules, as step_rewrite names them; not the NROs beside them, which the game loads into buffers of its own heap
+    total = sum((patched / (m + '.patched.bin')).stat().st_size for m in mods if (patched / (m + '.patched.bin')).is_file())
     have = one(rows, 'mem_used')
     if have and int(have, 0) >= total: return None
     if not total: return None                                # nothing rewritten yet
@@ -958,13 +959,47 @@ def step_rewrite(exe_dir, mods, out, work, force=False):
     todo = list(mods)
     if not force and all((out / (m + '.patched.bin')).is_file() and (out / (m + '.fixups.tsv')).is_file() for m in mods):
         if 'sdk' not in mods or old == auto_text:
-            say('rewritten modules already there'); return
-        say('sdk auto cuts changed: rewriting sdk again'); todo = ['sdk']
+            say('rewritten modules already there'); todo = []
+        else:
+            say('sdk auto cuts changed: rewriting sdk again'); todo = ['sdk']
     out.mkdir(parents=True, exist_ok=True)
     for m in todo:
         run([PY, TOOLS / 'patch_nso.py', exe_dir / m, out, m], env=env,
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
     if 'sdk' in todo: marker.write_text(auto_text, encoding='utf-8', newline='\n')
+    step_nros(exe_dir.parent / 'RomFS', out, work, env, force)
+
+
+def nro_names(manifest):   # the NROs an nro.tsv lists, without the rows named 'refused' (online SDKs the host never loads)
+    if not manifest.is_file(): return []
+    return [l.split('\t')[0] for l in manifest.read_text(encoding='utf-8').splitlines() if l and not l.startswith('#') and not l.startswith('refused\t')]
+
+
+def step_nros(romfs, out, work, env, force=False):
+    """The NRO modules a game loads at run time with nn::ro (Super Mario Party Jamboree: 139 in nro/NX_Release; Super Smash Bros. Ultimate: 98
+    in data.arc), as upstream's build_ipa_from_nsp.py collect_nros / rewrite: every SHA-256 the RomFS's NRR files register, found by
+    dm/tools/nro_collect.py, rewritten by patch_nso.py beside the other modules, and listed in <patched>/nro.tsv, which the host maps at start
+    (loader.c preload_nros) and step_guest puts into the Guest library (guest_nro.py). Without them the game aborts at its first
+    ro::LoadModule: '[RED] ro::LoadModule: no rewritten NRO with SHA-256 ...: it is not in the patched modules' nro.tsv'."""
+    nrrs = sorted(p for p in romfs.rglob('*.nrr') if p.is_file()) if romfs.is_dir() else []   # Smash keeps them in a folder named .nrr
+    manifest = out / 'nro.tsv'
+    if not nrrs:
+        if manifest.is_file(): manifest.unlink()   # an update can remove its NRRs: no manifest from an earlier pack
+        return []
+    coll = work / 'build' / 'nro'
+    if force or not (coll / 'nro.tsv').is_file():
+        shutil.rmtree(coll, ignore_errors=True)
+        run([PY, TOOLS / 'nro_collect.py', romfs, coll], log=work / 'logs' / 'nro_collect.log',
+            what='collecting the NROs %d NRR file(s) register' % len(nrrs))
+    names = nro_names(coll / 'nro.tsv')
+    todo = [n for n in names if force or not ((out / (n + '.patched.bin')).is_file() and (out / (n + '.fixups.tsv')).is_file())]
+    if todo: say('rewriting %d NROs%s' % (len(todo), '' if len(todo) == len(names) else ' (%d already there)' % (len(names) - len(todo))))
+    for n in todo:
+        run([PY, TOOLS / 'patch_nso.py', coll / (n + '.nro'), out, n], env=env, log=work / 'logs' / ('rewrite_%s.log' % n))
+    shutil.copyfile(coll / 'nro.tsv', manifest)
+    refused = len([l for l in manifest.read_text(encoding='utf-8').splitlines() if l.startswith('refused\t')])
+    say('NROs: %d rewritten%s, listed in nro.tsv' % (len(names), ', %d online SDK(s) refused' % refused if refused else ''))
+    return names
 
 
 def precheck(game, prof_dir, folder):
@@ -1297,10 +1332,11 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
 
 
 def step_guest(patched, mods, stage):
+    # guest_nro.write is guest_dylib.write for a game without NROs (the same bytes), and adds the NRO table for one with them
     sys.path.insert(0, str(TOOLS))
-    import guest_dylib
-    fw, n = guest_dylib.write(str(patched), str(stage / 'Frameworks'), mods)
-    say('Frameworks/Guest.framework: %d bytes' % n)
+    import guest_nro
+    fw, n, k = guest_nro.write(str(patched), str(stage / 'Frameworks'), mods)
+    say('Frameworks/Guest.framework: %d bytes%s' % (n, ' with %d NROs' % k if k else ''))
 
 
 def env_for(rows):
@@ -1419,10 +1455,12 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     say('shell unpacked: %s' % A.name)
 
     step_guest(patched, mods, A)
-    for m in mods:
+    # the NROs' tables too, and nro.tsv, which the loader reads from the same folder (loader.c preload_nros)
+    for m in list(mods) + nro_names(patched / 'nro.tsv'):
         for suf in ('.fixups.tsv', '.gates.tsv', '.cuts.tsv', '.obs.tsv'):
             s = patched / (m + suf)
             if s.is_file(): shutil.copyfile(s, A / 'dm' / s.name)
+    if (patched / 'nro.tsv').is_file(): shutil.copyfile(patched / 'nro.tsv', A / 'dm' / 'nro.tsv')
 
     # shader libraries: the directory name is the chain version, which the shell reads at run time
     if msl_dir.is_dir():
@@ -1773,7 +1811,7 @@ def main():
             shutil.rmtree(dst, ignore_errors=True); shutil.copytree(out, dst)
             say('%d files → %s' % (len(os.listdir(dst)), dst))
         return say('stopped after the capture')
-    check_gates(stamp, patched, mods)
+    check_gates(stamp, patched, list(mods) + nro_names(patched / 'nro.tsv'))
 
     # NVN games hold their shaders in the game files, so they are split out and translated here. A GL or Vulkan game does not:
     # its shaders only exist once it runs (LÖVE assembles each one in Lua), and upstream captures them by booting the game on a
