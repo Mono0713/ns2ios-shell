@@ -37,3 +37,6 @@ sys_resource	0x0
 # ---- Shader split (shader_split.py; BNSH in HAL's .cmp containers, the loose shader/ files and main) ----
 shader_groups	/gfx/=gfx /ptcl/=ptcl /lyt/=lyt /shader/=shader
 shader_note	Kirby Star Allies shaders
+# the deferred G-buffer is RGBA16F, RGBA8 sRGB, RGBA8Uint (material bits), RG11B10F (upstream note): colour 2 is an integer target, so every pixel shader writing it
+# declares it uint (shader_split.py fout_rule). Without it the iPad drew with sound but parts of the picture missing (the lighting pass reads the material bits)
+shader_fout	2=uint
