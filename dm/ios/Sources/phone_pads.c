@@ -61,6 +61,7 @@ enum { HTTP = 0, WS = 1, SESSION = 2 };   // a connection before (or without) th
 #define ALIVE_NS 300000000ull    // heard within this: the page is in front (it sends at least every 100 ms while it is)
 #define REQ_NS 10000000000ull     // a connection that has sent no request this long (since it opened, or since its last request) is closed
 #define RUMBLE_GAP_NS 30000000ull       // rumble changes reach a phone at most this often
+#define MIN_HOLD_NS 50000000ull   // a press the game is sure to see: a tap shorter than this (or a press and its release that the Wi-Fi delivered together) is held this long
 #define RUMBLE_REPEAT_NS 400000000ull   // and a running rumble is repeated this often (the page's vibration pattern runs a little longer)
 typedef struct {
     int fd, kind, player;        // fd: -1 a free entry; player: slot index, -1 before the hello
@@ -68,6 +69,8 @@ typedef struct {
     void *tls;                   // the connection's TLS (phone_pads_tls.h), NULL for plain HTTP
     size_t n; uint8_t in[IN_CAP];
     int last_seq; uint64_t last_ns; int released;
+    uint16_t raw; int32_t axes[4];   // the buttons and sticks the phone last sent; what the game gets adds the taps still held (MIN_HOLD_NS)
+    uint16_t kept; uint64_t press_ns[16], hold_until;   // kept: buttons the phone let go of that stay down until hold_until; when each button went down
     uint64_t open_ns, seen_ns;   // when the connection opened, when anything last arrived on it (a session: its last request)
     char name[64], id[64];       // id: the phone's own (its page's localStorage), the slot table's name for it
     char out[OUT_CAP]; size_t on;   // a session's messages for the phone, until its next request takes them
@@ -181,7 +184,16 @@ static int rumble_due(client *c, uint64_t t) {   // 1: a rumble message is waiti
 
 // ---- Players ----
 static void send_assign(client *c, int p);
-static void release(client *c) { int p = shell_slot_of(c); if (p >= 0 && !c->released) { dm_pad_set_player(p, 0, 0, 0, 0, 0); c->released = 1; } }
+static void release(client *c) { int p = shell_slot_of(c); c->raw = 0; c->kept = 0; c->hold_until = 0; if (p >= 0 && !c->released) { dm_pad_set_player(p, 0, 0, 0, 0, 0); c->released = 1; } }
+// A game reads the buttons once a frame, so a press and its release closer together than a frame or two are never seen: a quick tap (Tetris), or two packets the
+// Wi-Fi held back and handed over at once. A button let go within MIN_HOLD_NS of going down stays down until then (the loop below lets it go)
+static void hold_expire(client *c, int p, uint64_t t) {
+    if (!c->kept || t < c->hold_until) return;
+    uint16_t still = 0; uint64_t until = 0;
+    for (int b = 0; b < 16; b++) if (c->kept >> b & 1 && t - c->press_ns[b] < MIN_HOLD_NS) { still |= 1 << b; if (!until || c->press_ns[b] + MIN_HOLD_NS < until) until = c->press_ns[b] + MIN_HOLD_NS; }   // the next to let go
+    c->kept = still; c->hold_until = until;
+    if (p >= 0) { dm_pad_set_player(p, c->raw | c->kept, c->axes[0], c->axes[1], c->axes[2], c->axes[3]); shell_slot_input(p, c->raw | c->kept, c->axes[0], c->axes[1]); }
+}
 static void drop(client *c) {
     if (c->player >= 0) {
         release(c);
@@ -263,10 +275,19 @@ static void on_binary(client *c, const uint8_t *b, size_t n) {
     int seq = b[1];
     if (c->last_seq >= 0 && ((seq - c->last_seq) & 255) > 128) return;   // older than the last one taken: arrived out of order
     c->last_seq = seq; c->last_ns = now_ns(); c->released = 0;
-    uint64_t btn = (uint64_t)(b[2] | b[3] << 8);
-    int32_t ax[4]; for (int i = 0; i < 4; i++) ax[i] = (int8_t)b[4 + i] * (DM_STICK_MAX / 127);
-    dm_pad_set_player(p, btn, ax[0], ax[1], ax[2], ax[3]);
-    shell_slot_input(p, btn, ax[0], ax[1]);
+    uint16_t raw = (uint16_t)(b[2] | b[3] << 8), down = raw & ~c->raw, up = c->raw & ~raw;
+    uint64_t t = c->last_ns;
+    for (int k = 0; k < 16; k++) {
+        if (down >> k & 1) { c->press_ns[k] = t; c->kept &= ~(1 << k); }
+        else if (up >> k & 1 && t - c->press_ns[k] < MIN_HOLD_NS) c->kept |= 1 << k;
+    }
+    c->hold_until = 0;
+    for (int k = 0; k < 16; k++) if (c->kept >> k & 1 && (!c->hold_until || c->press_ns[k] + MIN_HOLD_NS < c->hold_until)) c->hold_until = c->press_ns[k] + MIN_HOLD_NS;
+    c->raw = raw;
+    for (int i = 0; i < 4; i++) c->axes[i] = (int8_t)b[4 + i] * (DM_STICK_MAX / 127);
+    uint64_t btn = raw | c->kept;
+    dm_pad_set_player(p, btn, c->axes[0], c->axes[1], c->axes[2], c->axes[3]);
+    shell_slot_input(p, btn, c->axes[0], c->axes[1]);
 }
 
 // ---- The launcher's moves and removals (shell_slots.h handlers): called on the main thread, carried out by the server thread ----
@@ -448,6 +469,10 @@ static void *serve(void *arg) {
         wait_ms = 200;
         for (int i = 0; i < MAX_CLIENTS; i++) if (used(&g_cl[i]) && rumble_due(&g_cl[i], t)) wait_ms = 10;
         for (int i = 0; i < MAX_CLIENTS; i++) if (used(&g_cl[i]) && g_cl[i].hp >= 0 && g_cl[i].kind == WS && wait_ms > 30) wait_ms = 30;   // the game's rumble is looked at this often
+        for (int i = 0; i < MAX_CLIENTS; i++) if (used(&g_cl[i]) && g_cl[i].kept) {   // taps held for the game (MIN_HOLD_NS) let go when their time is up
+            hold_expire(&g_cl[i], g_cl[i].player < 0 ? -1 : shell_slot_of(&g_cl[i]), t);
+            if (g_cl[i].kept) { int ms = (int)((g_cl[i].hold_until - t) / 1000000) + 1; if (ms < wait_ms) wait_ms = ms; }
+        }
         for (int i = 0; i < MAX_CLIENTS; i++) if (used(&g_cl[i]) && g_cl[i].player >= 0 && t - g_cl[i].last_ns > SILENT_NS) release(&g_cl[i]);
         for (int i = 0; i < MAX_CLIENTS; i++) if (used(&g_cl[i]) && g_cl[i].player >= 0 && t - (g_cl[i].kind == SESSION ? g_cl[i].seen_ns : g_cl[i].last_ns) > GONE_NS) {
             LOG("phone pads: '%s' silent for %llu s: its page is gone", g_cl[i].name, GONE_NS / 1000000000ull);

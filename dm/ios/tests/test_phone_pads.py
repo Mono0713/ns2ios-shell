@@ -206,6 +206,24 @@ class PhonePadsTests(unittest.TestCase):
         for ph in [a, b, b2, ninth] + more: ph.close()
         self.assertEqual(self.host()['mask'], 0)
 
+    def test_quick_tap_is_held_for_the_game(self):   # a press and its release together (a quick tap, or two packets the Wi-Fi handed over at once) still reach the game
+        a = Phone(self.port, 'phone-tap')
+        real, sent = a.s, []
+        a.s = type('W', (), {'sendall': lambda self, d: sent.append(d)})()
+        a.state(1, 1 << 14); a.state(2, 0)   # D-pad right and let go, in one write: the server takes both in one read
+        a.s = real; real.sendall(b''.join(sent))
+        seen, t0 = 0, time.time()
+        while time.time() - t0 < 0.2:
+            try: seen |= json.loads(self.state_file.read_text())['players'][0][0]
+            except (ValueError, OSError): pass
+            time.sleep(0.005)
+        self.assertEqual(seen & (1 << 14), 1 << 14)
+        self.assertEqual(self.host()['players'][0][0], 0)   # and let go after it
+        # a button held longer than that goes up as soon as the phone lets go
+        a.state(3, 1 << 0); time.sleep(0.1); a.state(4, 0)
+        self.assertEqual(self.host()['players'][0][0], 0)
+        a.close()
+
     def test_silent_page_is_dropped(self):   # a page left in a background tab keeps its socket open but sends nothing: after 15 s its player is freed
         g = Phone(self.port)
         self.assertEqual(g.hello('phone-gone')['t'], 'assign')
