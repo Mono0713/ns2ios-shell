@@ -19,7 +19,8 @@ Usage:
   --keep-work   keep the working folder (<NSP folder>/<title ID>_pack) instead of removing it after a good pack, so a
                 rerun reuses the extraction, the rewritten modules and the compiled shaders. Worth it when repacking the
                 same game repeatedly; the folder is several times the size of the game.
-  --clean       delete that working folder without packing anything
+  --clean       delete that working folder without packing anything (<title ID>_shader_cache beside it stays: it is
+                what makes the next repack of the game take minutes instead of hours; delete it by hand to free it)
   --no-shaders  an OpenGL/Vulkan game: build it with no shader library, so it boots (music, no picture) and can capture
                 its own shaders -- the first step of the route below
   --gl-capture  an OpenGL game's captured shaders (<key>.vert / <key>.frag, written by DM_GL_CAPTURE): translated to Metal
@@ -1067,6 +1068,28 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
     return pkg, tb
 
 
+def shader_cache(work, tid):
+    """<NSP folder>/<title ID>_shader_cache: the shader cache a repack of this game starts from (see step_translate)"""
+    return work.parent / (tid + '_shader_cache')
+
+
+def prune_shader_cache(cas):
+    """Drop the translated libraries no shader of the game points at any more (index/<key>.json names each one's
+    current entry), so the cache holds one generation of them rather than one more per translation change. The
+    compiled libraries (metallib/, by Metal source) stay: a later change that restores a shader's source reuses them."""
+    idx, lib = cas / 'index', cas / 'shader'
+    if not idx.is_dir() or not lib.is_dir(): return
+    live = set()
+    for j in idx.glob('*.json'):
+        try: live.add(json.load(open(j, encoding='utf-8'))['digest'])
+        except Exception: return   # an index entry that cannot be read: keep everything rather than guess
+    freed = 0
+    for d in lib.iterdir():
+        if d.is_dir() and d.name not in live and d.parent.resolve() == lib.resolve():
+            freed += folder_size(d); shutil.rmtree(d, ignore_errors=True)
+    if freed: say('shader cache: removed %.1f MB of libraries no shader uses any more' % (freed / 1048576))
+
+
 def step_translate(pkg, work, xlate, iosout, tid, force=False):
     """dmsh_build.py, with no metal compiler: nometal_run.py turns `xcrun metal` into a copy, so the "libraries" hold MSL
     source and the phone compiles them once on first launch. dmsh_build.py creates <iosout>/b-<chain version> itself."""
@@ -1125,11 +1148,19 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # when the toolchain lock changes. It reads the tables, so it costs nothing to do every time.
     run([PY, nometal, GFX / 'dmsh_chain.py', '--header'], env=genv,
         log=work / 'logs' / 'chain_header.log', what='dmsh_chain --header')
+    # The per-shader cache (translated libraries by their inputs, compiled libraries by their Metal source) lives beside
+    # the working folder, not in it, so the temporary files going after a good pack do not take it along: a repack after
+    # an update that left the shaders alone (a rewriter fix, a new package format) takes every library from it, and one
+    # after a translation change compiles only the shaders whose source came out different. It replaced a full rebuild
+    # of every shader on every repack (Super Mario Odyssey: 75 of its 82 minutes).
+    cas = shader_cache(work, tid)
     run([PY, nometal, GFX / 'dmsh_build.py', pkg, work / 'shader' / 'cache'],
-        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8'), 'DM_GAME': tid},
+        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8'), 'DM_GAME': tid,
+             'DMSH_CAS': os.environ.get('DMSH_CAS', str(cas))},
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
     n = len(list(iosout.glob('b-*/*_b.metallib'))) if iosout.is_dir() else 0
     if not n: die('no shader libraries were produced (see %s)' % (work / 'logs' / 'shaders.log'))
+    if 'DMSH_CAS' not in os.environ: prune_shader_cache(cas)
     mfile.write_text(mode + '\n', encoding='utf-8')
     say('%d shader libraries' % n)
 
