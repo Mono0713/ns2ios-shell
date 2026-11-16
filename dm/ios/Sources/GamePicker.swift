@@ -91,7 +91,7 @@ private struct TenFootProbe: UIViewRepresentable {
 }
 // On the TV the screen is laid out on a 1920 x 1080 canvas and scaled to the TV's window, so it fills the same share of any TV or projector: a TV's window
 // can be 1920, 2560 or 3840 points across, where sizes in points came out a fraction of the screen
-private struct TenFootStage: ViewModifier {
+struct TenFootStage: ViewModifier {
     let on: Bool
     var screenScale: CGFloat = 1
     var native = false
@@ -151,11 +151,20 @@ struct BackToTVButton: View {
 
 // Handheld mode with a TV connected: the TV shows the same screen as the iPad, laid out for its own size, following every move (front_ios.m puts
 // dm_pregame_mirror_make's controller in the TV's window). The picker and the launcher set what it shows; the copy there takes no input and posts nothing
+// The picker's copy stays built while a game's launcher is over it (as on the iPad, where the picker's model is kept), so coming back shows it at once:
+// building it again at the TV's size made the TV come back well after the iPad
 final class PregameStage: ObservableObject {
     static let shared = PregameStage()
-    @Published private(set) var generation = 0
-    private(set) var make: (() -> AnyView)?
-    func show(_ make: (() -> AnyView)?) { self.make = make; generation += 1 }
+    @Published private(set) var pickerGen = 0
+    @Published private(set) var launcherGen = 0
+    private(set) var picker: (() -> AnyView)?
+    private(set) var launcher: (() -> AnyView)?
+    func showPicker(_ make: @escaping () -> AnyView, fresh: Bool) {
+        if fresh || picker == nil { picker = make; pickerGen += 1 }
+        if launcher != nil { launcher = nil; launcherGen += 1 }
+    }
+    func showLauncher(_ make: @escaping () -> AnyView) { launcher = make; launcherGen += 1 }
+    func clear() { picker = nil; launcher = nil; pickerGen += 1; launcherGen += 1 }   // the game starts
 }
 private struct PregameMirrorKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var pregameMirror: Bool { get { self[PregameMirrorKey.self] } set { self[PregameMirrorKey.self] = newValue } } }
@@ -164,9 +173,10 @@ private struct PregameMirrorView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let make = stage.make { make().id(stage.generation).transition(.opacity) }
+            if let picker = stage.picker { picker().id(stage.pickerGen).opacity(stage.launcher == nil ? 1 : 0) }
+            if let launcher = stage.launcher { launcher().id(stage.launcherGen).transition(.opacity) }
         }
-        .animation(.easeInOut(duration: 0.3), value: stage.generation)
+        .animation(.easeInOut(duration: 0.25), value: stage.launcherGen)
         .environment(\.pregameMirror, true)
         .preferredColorScheme(.dark)
     }
@@ -307,6 +317,7 @@ private final class PickerModel: ObservableObject {
     let games: [PickerGame]
     @Published var pos = 0
     static var lastPicked: String?   // the game chosen last: coming back from its launcher, the row stands on it again (not on Add players)
+    static var kept: PickerModel?    // one model for the process: the picker shown again (back from a launcher) keeps its place, and the TV's copy its view
     init() {
         games = loadGames()
         if let id = PickerModel.lastPicked, let i = games.firstIndex(where: { $0.id == id }) { pos = i + 1 }
@@ -410,13 +421,14 @@ private struct StatusBar: View {
 // A game's icon is the package's 256 x 256 JPEG; on a TV a tile is 700 to 1000 pixels across. Enlarged once with Lanczos (sharper edges than the GPU's
 // linear filter), up to 1024 pixels, and kept
 private let sharpIcons = NSCache<NSString, UIImage>()
+private let ciContext = CIContext(options: [.cacheIntermediates: false])   // one for every icon (a context per call cost more than the filter)
 func tvIcon(_ img: UIImage, key: String? = nil) -> UIImage {   // key: for an icon read from its file again on every redraw (the launcher's)
     let k = (key ?? "\(ObjectIdentifier(img).hashValue)") as NSString
     if let done = sharpIcons.object(forKey: k) { return done }
     let px = max(img.size.width * img.scale, img.size.height * img.scale)
     guard px > 0, px < 1000, let src = CIImage(image: img) else { return img }
     let f = CIFilter.lanczosScaleTransform(); f.inputImage = src; f.scale = Float(1024 / px); f.aspectRatio = 1
-    guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent.integral) else { return img }
+    guard let out = f.outputImage, let cg = ciContext.createCGImage(out, from: out.extent.integral) else { return img }
     let big = UIImage(cgImage: cg, scale: img.scale * 1024 / px, orientation: img.imageOrientation)
     sharpIcons.setObject(big, forKey: k)
     return big
@@ -430,7 +442,7 @@ func blurredIcon(_ img: UIImage, key: String) -> UIImage? {
     guard let src = CIImage(image: img), src.extent.width > 0 else { return nil }
     let small = src.transformed(by: CGAffineTransform(scaleX: 96 / src.extent.width, y: 96 / src.extent.width))
     let f = CIFilter.gaussianBlur(); f.inputImage = small.clampedToExtent(); f.radius = 5
-    guard let out = f.outputImage?.cropped(to: small.extent), let cg = CIContext().createCGImage(out, from: small.extent) else { return nil }
+    guard let out = f.outputImage?.cropped(to: small.extent), let cg = ciContext.createCGImage(out, from: small.extent) else { return nil }
     let done = UIImage(cgImage: cg)
     blurredIcons.setObject(done, forKey: key as NSString)
     return done
@@ -799,9 +811,18 @@ private struct PickerView: View {
 @_cdecl("dm_show_picker")
 public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) {
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = PickerModel()
+    let fresh = PickerModel.kept == nil
+    let model = PickerModel.kept ?? PickerModel()
+    PickerModel.kept = model
+    model.starting = false; model.padsOpen = false
     let h = UIHostingController(rootView: PickerView(m: model))
-    PregameStage.shared.show { AnyView(PickerView(m: model)) }   // the TV's copy in handheld mode
+    PregameStage.shared.showPicker({ AnyView(PickerView(m: model)) }, fresh: fresh)   // the TV's copy in handheld mode
+    // The blurred backdrops and, with a TV, the enlarged icons made ahead, off the main thread: the TV's copy (built again on the way back from the
+    // launcher) had to make them all as it appeared, and came in well after the iPad
+    let games = model.games, tvToo = UIApplication.shared.connectedScenes.contains { $0.session.role == .windowExternalDisplayNonInteractive }
+    DispatchQueue.global(qos: .userInitiated).async {
+        for g in games { if let i = g.icon { _ = blurredIcon(i, key: g.id); if tvToo { _ = tvIcon(i, key: g.id) } } }
+    }
     controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
@@ -811,7 +832,6 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
         fputs("picker: \(game.id) (\(game.name))\n", stderr)
         NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
         DispatchQueue.main.async {   // let the loading veil draw before main.m reads the game's files
-            PregameStage.shared.show(nil)
             game.id.withCString { shellGameChoose($0) }
             h?.dismiss(animated: true) { done() }
         }

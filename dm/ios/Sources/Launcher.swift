@@ -77,7 +77,7 @@ private let zhText: [String: String] = [
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
         "連接同一個 Wi-Fi 的手機都能成為獨立玩家，依連線順序取得下一個空的編號，最多 8 位。重新整理頁面會保留原本的玩家編號。",
     "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
-    "Move to": "換到", "Button layout": "按鍵配置",
+    "Move to": "換到", "On": "開", "Off": "關", "Button layout": "按鍵配置",
     "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描左側的 QR Code。",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
         "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
@@ -167,12 +167,13 @@ final class ActivityModel: ObservableObject {
 private struct PlayerBadge: View {
     let player: Int
     @EnvironmentObject var activity: ActivityModel
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
     var body: some View {
         let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
-        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85)).minimumScaleFactor(0.5).lineLimit(1)
-            .frame(width: 44, height: 36).background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(color))
-            .overlay(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).stroke(Color.white, lineWidth: on ? 3 : 0))
-            .shadow(color: color, radius: on ? 12 : 0)
+        Text("P\(player)").font(.ds(.headline, .heavy, k: k).monospacedDigit()).foregroundStyle(.black.opacity(0.85)).minimumScaleFactor(0.5).lineLimit(1)
+            .frame(width: 44 * k, height: 36 * k).background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(color))
+            .overlay(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).stroke(Color.white, lineWidth: on ? 3 * k : 0))
+            .shadow(color: color, radius: on ? 12 * k : 0)
             .scaleEffect(on ? 1.15 : 1)
             .animation(.easeOut(duration: 0.15), value: on)
     }
@@ -192,18 +193,19 @@ private func playerTitle(_ p: PlayerRow) -> String { p.kind == 2 ? (zhHant ? "\(
 private struct LayoutSwitch: View {
     let xbox: Bool
     let set: (Bool) -> Void
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 2 * k) {
             ForEach([false, true], id: \.self) { x in
-                Text(x ? "Xbox" : "Switch").font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1)
                     .foregroundStyle(x == xbox ? Color.black : Color.white.opacity(0.75))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background { if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(Color.white) } }
+                    .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
+                    .background { if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white) } }
                     .contentShape(Rectangle()).onTapGesture { if x != xbox { set(x) } }
             }
         }
-        .padding(3)
-        .background(RoundedRectangle(cornerRadius: DS.chipRadius + 3, style: .continuous).fill(DS.chip))
+        .padding(3 * k)
+        .background(RoundedRectangle(cornerRadius: (DS.chipRadius + 3) * k, style: .continuous).fill(DS.chip))
         .animation(DS.spring, value: xbox)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tr("Button layout")).accessibilityValue(xbox ? "Xbox" : "Switch")
@@ -212,10 +214,10 @@ private struct LayoutSwitch: View {
 }
 // A player row's small buttons: an icon (and Move to's words) on a rounded square plate, all the same height
 private extension View {
-    func chipButton(_ color: Color = .white) -> some View {
-        self.font(.subheadline.weight(.semibold)).foregroundStyle(color)
-            .padding(.horizontal, 10).frame(minWidth: 40, minHeight: 36)
-            .background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(DS.chip))
+    func chipButton(_ color: Color = .white, k: CGFloat) -> some View {
+        self.font(.ds(.subheadline, .semibold, k: k)).foregroundStyle(color)
+            .padding(.horizontal, 10 * k).frame(minWidth: 40 * k, minHeight: 36 * k)
+            .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
     }
 }
 
@@ -224,6 +226,7 @@ private struct PlayerRowView: View {
     @ObservedObject var m: PlayersModel
     @EnvironmentObject var nav: NavModel
     @Environment(\.tenFoot) private var tenFoot   // on a TV: no second line, Move to as its icon
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     private var phone: Bool { p.kind == 2 }
     private var title: String { playerTitle(p) }
@@ -233,19 +236,19 @@ private struct PlayerRowView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 12 * k) {
             PlayerBadge(player: p.player)
-            Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.title2).frame(width: 32)
+            Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.ds(.title2, k: k)).frame(width: 32 * k)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).lineLimit(1).minimumScaleFactor(0.7)
                 if !tenFoot { Text(tr(phone ? "Phone on Wi-Fi" : "Controller")).font(.footnote).foregroundStyle(.secondary) }
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 8 * k)
             LayoutSwitch(xbox: p.xbox) { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) }
             .modifier(NavPart(player: p.player, part: 0))
             Button { m.send(["op": "identify", "p": p.player]) } label: {
-                Image(systemName: "wave.3.right").chipButton()
+                Image(systemName: "wave.3.right").chipButton(k: k)
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(tr("Identify"))
@@ -257,16 +260,16 @@ private struct PlayerRowView: View {
                 }
             } label: {   // while player 1 picks the number: "Move to 3P"
                 let n = nav.focus == "p\(p.player)" ? nav.moveTo : nil
-                HStack(spacing: 6) {
+                HStack(spacing: 6 * k) {
                     Image(systemName: "arrow.left.arrow.right")
                     if !tenFoot || n != nil { Text((tenFoot ? "" : tr("Move to")) + (n.map { (tenFoot ? "" : " ") + "P\($0)" } ?? "")).lineLimit(1) }
                 }
-                .chipButton()
+                .chipButton(k: k)
             }
             .accessibilityLabel(tr("Move to"))
             .modifier(NavPart(player: p.player, part: 2))
             Button(role: .destructive) { m.send(["op": "kick", "p": p.player]) } label: {
-                Image(systemName: "xmark").chipButton(Color(red: 1, green: 0.271, blue: 0.227))   // #FF453A
+                Image(systemName: "xmark").chipButton(Color(red: 1, green: 0.271, blue: 0.227), k: k)   // #FF453A
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(tr("Remove"))
@@ -277,6 +280,7 @@ private struct PlayerRowView: View {
 
 private struct PlayersSection: View {
     @ObservedObject var m: PlayersModel   // the launcher's, which its controller navigation also uses
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     var body: some View {
         Section {
@@ -285,11 +289,11 @@ private struct PlayersSection: View {
             }
             ForEach(m.players) { PlayerRowView(p: $0, m: m).nav("p\($0.player)") }
             ForEach(m.removed) { r in
-                HStack(spacing: 12) {
-                    Image(systemName: controllerIcon(r.label)).font(.title2).frame(width: 44).foregroundStyle(.secondary)
+                HStack(spacing: 12 * k) {
+                    Image(systemName: controllerIcon(r.label)).font(.ds(.title2, k: k)).frame(width: 44 * k).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(r.label)
-                        Text(tr("Not playing")).font(.footnote).foregroundStyle(.secondary)
+                        Text(tr("Not playing")).font(.ds(.footnote, k: k)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button(tr("Add")) { m.send(["op": "add", "index": r.index]) }.buttonStyle(.borderless)
@@ -297,7 +301,7 @@ private struct PlayersSection: View {
                 .nav("r\(r.index)")
             }
         } header: {
-            Text(tr("Players"))
+            Text(tr("Players")).font(.ds(.footnote, .semibold, k: k))
         }
     }
 }
@@ -336,29 +340,30 @@ private struct PhonePadsCard: View {   // under Play, in the launcher's left col
     @Environment(\.tenFoot) private var tenFoot   // on a TV the code is larger: it is scanned from the sofa
     @State private var url = phonePadsURL()
     @State private var qr: UIImage?   // made once per address, not on every redraw
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 14 * k) {
             if let url, let qr {
-                Image(uiImage: qr).interpolation(.none).resizable().frame(width: tenFoot ? 150 : 96, height: tenFoot ? 150 : 96)
-                    .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Image(uiImage: qr).interpolation(.none).resizable().frame(width: (tenFoot ? 150 : 96) * k, height: (tenFoot ? 150 : 96) * k)
+                    .padding(8 * k).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14 * k, style: .continuous))
                     .accessibilityLabel("QR code of \(url)")
             }
-            VStack(alignment: .leading, spacing: 6) {
-                Label(tr("Add players"), systemImage: "qrcode").font(.headline)
+            VStack(alignment: .leading, spacing: 6 * k) {
+                Label(tr("Add players"), systemImage: "qrcode").font(.ds(.headline, k: k))
                 if let url {
-                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.5)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                    Text(url).font(.ds(.footnote, design: .monospaced, k: k)).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.5)
+                        .padding(.horizontal, 8 * k).padding(.vertical, 3 * k)
+                        .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                 } else {
-                    Text(tr("Connect to Wi-Fi first")).font(.footnote).foregroundStyle(.secondary)
+                    Text(tr("Connect to Wi-Fi first")).font(.ds(.footnote, k: k)).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(12 * k)
         .frame(maxWidth: .infinity)
-        .glassCard(20)
+        .glassCard(20 * k)
         .task {
             while !Task.isCancelled {   // the Wi-Fi address can change while the launcher is shown
                 let now = phonePadsURL()
@@ -377,17 +382,18 @@ private extension LauncherModel {
 // A menu picker there stacks its value under the name once the text is this large, which made every row two lines tall
 private struct TVChoice: View {
     let title: String, value: String
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 12 * k) {
             Text(title).lineLimit(1).minimumScaleFactor(0.7)
-            Spacer(minLength: 12)
-            HStack(spacing: 10) {
-                Image(systemName: "chevron.left").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
-                Text(value).fontWeight(.semibold).lineLimit(1)
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+            Spacer(minLength: 12 * k)
+            HStack(spacing: 10 * k) {
+                Image(systemName: "chevron.left").font(.ds(.footnote, .bold, k: k)).foregroundStyle(.secondary)
+                Text(value).font(.ds(.body, .semibold, k: k)).lineLimit(1)
+                Image(systemName: "chevron.right").font(.ds(.footnote, .bold, k: k)).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(DS.chip))
+            .padding(.horizontal, 12 * k).padding(.vertical, 6 * k)
+            .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
         }
     }
 }
@@ -458,6 +464,11 @@ private struct SettingRow: View {
             case "choice" where tenFoot:
                 let v = m.values[s.env] ?? s.def
                 TVChoice(title: tr(s.label), value: (s.options ?? []).first { $0[0] == v }.map { tr($0[1]) } ?? v)
+            // on the TV a slider or a switch is a value between arrows too: the controls themselves keep their small iPad size there
+            case "range" where tenFoot:
+                TVChoice(title: tr(s.label), value: percentage)
+            case "memory" where tenFoot:
+                TVChoice(title: tr(s.label), value: String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + memoryDefaultLabel : ""))
             case "choice":
                 Picker(selection: m.binding(s)) {
                     ForEach(s.options ?? [], id: \.[0]) { Text(tr($0[1])).tag($0[0]) }
@@ -492,8 +503,12 @@ private struct SettingRow: View {
                     if let n = memoryAutoNote { Text(n.text).font(.footnote).foregroundStyle(n.warn ? Color.orange : Color.secondary) }
                 }
             default:
-                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-                    settingLabel
+                if tenFoot {
+                    TVChoice(title: tr(s.label), value: (m.values[s.env] ?? s.def) == s.onValue ? tr("On") : tr("Off"))
+                } else {
+                    Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
+                        settingLabel
+                    }
                 }
             }
         }
@@ -534,11 +549,12 @@ private struct PressScale: ButtonStyle {
 private struct NavPart: ViewModifier {   // a ring around the player row's control player 1 picked
     let player, part: Int
     @EnvironmentObject var nav: NavModel
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
     func body(content: Content) -> some View {
         content.overlay {
-            if nav.focus == "p\(player)" && nav.part == part { RoundedRectangle(cornerRadius: 10).stroke(Color.white, lineWidth: 2.5).padding(-5) }
+            if nav.focus == "p\(player)" && nav.part == part { RoundedRectangle(cornerRadius: 10 * k).stroke(Color.white, lineWidth: 2.5 * k).padding(-5 * k) }
             else if player > 1 && nav.own[player] == part {   // the player's own, in its colour
-                RoundedRectangle(cornerRadius: 10).stroke(playerColors[(player - 1) % playerColors.count], lineWidth: 2.5).padding(-5)
+                RoundedRectangle(cornerRadius: 10 * k).stroke(playerColors[(player - 1) % playerColors.count], lineWidth: 2.5 * k).padding(-5 * k)
             }
         }
     }
@@ -616,7 +632,11 @@ private struct NoteLabel: View {   // a setting's name and its note (left out on
 // The rows: frame rate in the Game section, the rest in Controls
 private struct GyroRow: View {
     @ObservedObject var shell: ShellSettings
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
+        if tenFoot { TVChoice(title: tr("Motion controls"), value: shell.gyro ? tr("On") : tr("Off")) } else { toggle }
+    }
+    private var toggle: some View {
         Toggle(isOn: $shell.gyro) {
             noteLabel("Motion controls", "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.")
         }
@@ -665,6 +685,7 @@ private struct SaveSlotsSection: View {
     @State private var newName = ""
     @State private var deleting: SaveSlot?
     @Environment(\.tenFoot) private var tenFoot   // on the TV: the controller's rows only, in white (renaming and deleting are by touch, on the iPad)
+    @Environment(\.uiK) private var k
 
     var body: some View {
         Section {
@@ -696,7 +717,7 @@ private struct SaveSlotsSection: View {
                 .listRowBackground(rowPlate)
             }
         } header: {
-            Text(tr("Saves"))
+            Text(tr("Saves")).font(.ds(.footnote, .semibold, k: k))
         } footer: {
             if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
         }
@@ -730,48 +751,49 @@ private struct LauncherView: View {
     @StateObject private var activity = ActivityModel()
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
-    @StateObject private var tv = TenFoot()   // GamePicker.swift: on the TV's window
+    @StateObject private var tv = TenFoot(native: true)   // GamePicker.swift: on the TV's window, laid out at its own size (sharp text)
 
     var body: some View {
         GeometryReader { geometry in
+            let k = tv.on ? TenFootStage.scale(geometry.size) : 1   // GamePicker.swift: the TV's size over 1920 x 1080 (the views inside get it as uiK)
             HStack(spacing: 0) {
-                VStack(spacing: 16) {
+                VStack(spacing: 16 * k) {
                     Spacer(minLength: 0)
                     if let icon = appIcon() {
-                        let side: CGFloat = tv.on ? 180 : 128
+                        let side: CGFloat = (tv.on ? 180 : 128) * k
                         Image(uiImage: tv.on ? tvIcon(icon, key: "launcher:" + (gameRoot?.path ?? "")) : icon).resizable().interpolation(.high).frame(width: side, height: side)
                             .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
                             .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
+                            .shadow(color: .black.opacity(0.5), radius: 18 * k, y: 10 * k)
                             .accessibilityHidden(true)
                     }
                     Text((info("CFBundleDisplayName") as? String) ?? tr("Game"))
-                        .font(.title.weight(.bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
+                        .font(.ds(.title, .bold, k: k)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
                     if let v = info("CFBundleShortVersionString") as? String, !v.isEmpty {
-                        Text("v" + v).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
-                            .padding(.horizontal, 9).padding(.vertical, 4)
-                            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                        Text("v" + v).font(.ds(.footnote, .semibold, k: k)).foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 9 * k).padding(.vertical, 4 * k)
+                            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                     }
-                    playButton.padding(.top, 6)
+                    playButton(k).padding(.top, 6 * k)
                     // on the TV the code joins the game's card in the middle (an empty middle under Play otherwise); on the iPad it sits at the bottom
-                    if tv.on { Color.clear.frame(height: 24) } else { Spacer(minLength: 8) }
+                    if tv.on { Color.clear.frame(height: 24 * k) } else { Spacer(minLength: 8) }
                     if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
                     if tv.on { Spacer(minLength: 0) }
                 }
-                .padding(20)
+                .padding(20 * k)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 0) {
                     if let back {
                         Button(action: back) {
-                            Label(tr("Game list"), systemImage: "chevron.left").font(.headline).foregroundStyle(.white)
-                                .padding(.horizontal, 14).padding(.vertical, 10)
-                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.chip))
+                            Label(tr("Game list"), systemImage: "chevron.left").font(.ds(.headline, k: k)).foregroundStyle(.white)
+                                .padding(.horizontal, 14 * k).padding(.vertical, 10 * k)
+                                .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
                         }
-                        .buttonStyle(.plain).padding(16)
-                        .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white, lineWidth: 3).padding(12) } }
+                        .buttonStyle(.plain).padding(16 * k)
+                        .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16 * k, style: .continuous).stroke(Color.white, lineWidth: 3 * k).padding(12 * k) } }
                     }
-                    BackToTVButton().padding(.vertical, 16).padding(.leading, back == nil ? 16 : 0)   // GamePicker.swift: when the picture was moved to the iPad
+                    BackToTVButton().padding(.vertical, 16 * k).padding(.leading, back == nil ? 16 * k : 0)   // GamePicker.swift: when the picture was moved to the iPad
                     }
                 }
                 ScrollViewReader { proxy in
@@ -779,7 +801,7 @@ private struct LauncherView: View {
                     PlayersSection(m: players)
                     if saves.available { SaveSlotsSection(s: saves) }
                     ForEach(m.sections, id: \.self) { section in
-                        Section(tr(section)) {
+                        Section {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
                             ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m).nav("s:" + $0.env) }
                             if section == "Game" { FpsRow(shell: shell).nav("fps") }
@@ -790,6 +812,8 @@ private struct LauncherView: View {
                                     TouchStyleRow(shell: shell, size: true).nav("touchScale")
                                 }
                             }
+                        } header: {
+                            Text(tr(section)).font(.ds(.footnote, .semibold, k: k))
                         }
                     }
                     Section {
@@ -804,8 +828,10 @@ private struct LauncherView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .font(.ds(.body, k: k))   // the rows' text: Dynamic Type's on the iPad, the TV's size there
+                .environment(\.defaultMinListRowHeight, 44 * k)
                 .scrollContentBackground(.hidden)   // the game's blurred icon shows through, as in the picker
-                .contentMargins(.horizontal, 12, for: .scrollContent)
+                .contentMargins(.horizontal, 12 * k, for: .scrollContent)
                 .onChange(of: nav.focus) { _, id in withAnimation { proxy.scrollTo(id == "play" ? "p1" : id, anchor: .center) } }
                 }
                 .frame(width: geometry.size.width * 2 / 3)
@@ -842,16 +868,16 @@ private struct LauncherView: View {
     }
 
     // Play: a rounded rectangle in the accent colour (not a capsule), a white ring while player 1's highlight is on it; it gives a little when pressed
-    var playButton: some View {
+    func playButton(_ k: CGFloat) -> some View {
         let focused = nav.focus == "play"
         return Button(action: play) {
-            Label(tr("Play"), systemImage: "play.fill").font(.title3.weight(.semibold)).foregroundStyle(.white)
-                .frame(maxWidth: 260).frame(minHeight: 54).padding(.vertical, 2)
-                .background(RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous).fill(DS.accent))
-                .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: focused ? 16 : 10)
+            Label(tr("Play"), systemImage: "play.fill").font(.ds(.title3, .semibold, k: k)).foregroundStyle(.white)
+                .frame(maxWidth: 260 * k).frame(minHeight: 54 * k).padding(.vertical, 2 * k)
+                .background(RoundedRectangle(cornerRadius: DS.rowRadius * k, style: .continuous).fill(DS.accent))
+                .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: (focused ? 16 : 10) * k)
         }
         .buttonStyle(PressScale())
-        .overlay { if focused { RoundedRectangle(cornerRadius: DS.rowRadius + 6, style: .continuous).stroke(Color.white, lineWidth: 3).padding(-6) } }
+        .overlay { if focused { RoundedRectangle(cornerRadius: (DS.rowRadius + 6) * k, style: .continuous).stroke(Color.white, lineWidth: 3 * k).padding(-6 * k) } }
         .scaleEffect(focused ? 1.03 : 1)
         .animation(DS.spring, value: focused)
     }
@@ -987,7 +1013,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     let view = LauncherView(m: model, shell: shell, nav: nav, play: {
         guard let h = host else { return }
         host = nil
-        PregameStage.shared.show(nil)
+        PregameStage.shared.clear()
         model.apply()
         shell.apply()
         if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
@@ -998,7 +1024,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         fputs("launcher: back to the game list\n", stderr)
         h.dismiss(animated: true) { frontIosBackToPicker() }
     } : nil)
-    PregameStage.shared.show { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
+    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
     let h = UIHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
