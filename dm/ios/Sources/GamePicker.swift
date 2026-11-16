@@ -8,8 +8,10 @@
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
 // Game list button comes back here until the game starts (one process runs one game, main.m).
 import SwiftUI
+import Combine
 import UIKit
 import Network
+import CoreImage.CIFilterBuiltins
 
 @_silgen_name("shell_game_choose") private func shellGameChoose(_ gid: UnsafePointer<CChar>)
 
@@ -33,6 +35,200 @@ enum DS {
     static let cardIn = AnyTransition.asymmetric(insertion: .scale(scale: 0.9).combined(with: .offset(y: 24)).combined(with: .opacity),
                                                  removal: .scale(scale: 0.94).combined(with: .opacity))
 }
+// Ten-foot mode: on the TV's window (front_ios.m presents the picker and the launcher there before the game) everyone sits far from the screen, so text is
+// larger (Dynamic Type at .accessibility1), tiles and the QR code are larger and notes are left out, as on a console's home screen. Decided by the window the
+// view is in, not by a TV being plugged in: with the picture output set to the iPad the same screens stay at the iPad's sizes
+final class TenFoot: ObservableObject {
+    @Published private(set) var on = false
+    @Published fileprivate(set) var screenScale: CGFloat = 1
+    let native: Bool   // laid out at the window's own size with sizes times k (the picker), not on the 1920 x 1080 canvas scaled (the launcher)
+    init(native: Bool = false) {
+        self.native = native
+        token = NotificationCenter.default.addObserver(forName: Notification.Name("DMShellChanged"), object: nil, queue: .main) { [weak self] _ in self?.refresh() }
+        refresh()
+    }
+    // On the TV's window, or console mode with the picture moved to the iPad before the game (front_ios_tv_waiting): the same layout then, fitted to the
+    // iPad's screen, as the user asked (one look per mode, not per screen)
+    fileprivate var onTV = false { didSet { refresh() } }
+    private var token: NSObjectProtocol?
+    deinit { if let token { NotificationCenter.default.removeObserver(token) } }
+    private func refresh() {
+        let now = onTV || frontIosTvWaiting() != 0
+        if now != on { on = now }   // at once: animated, every text and box of the screen moved to its new size on its own when the launcher opened
+    }
+}
+// Reads the role of the scene the view's window belongs to and its screen's scale; the picker moving between the iPad and the TV (the same controller,
+// presented again) moves it too. On the TV it then raises the hosting controller's display scale by the canvas's scale-up (TenFootStage), so its layers
+// (text, the list's cells, images) are drawn at the size they end up on the TV, not at 1920 x 1080 stretched. The traits are only written, a turn later:
+// reading traitOverrides.displayScale while it is not set asserts, which closed art45 at launch
+private struct TenFootProbe: UIViewRepresentable {
+    let tv: TenFoot
+    final class Probe: UIView {
+        weak var tv: TenFoot?
+        private var applied: CGFloat = 0   // the display scale this probe set (0: none)
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let w = window else { return }
+            let now = w.windowScene?.session.role == .windowExternalDisplayNonInteractive
+            let scale = w.windowScene?.screen.scale ?? 1
+            let u = now ? TenFootStage.scale(w.bounds.size) : 1
+            let t = tv
+            DispatchQueue.main.async { [weak self] in
+                if let t {
+                    if t.screenScale != scale { t.screenScale = scale }
+                    if t.onTV != now { t.onTV = now }
+                }
+                guard let self, let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
+                let sharp = now && u > 1.01 && t?.native != true ? scale * u : 0
+                if sharp == self.applied { return }
+                if sharp > 0 { vc.traitOverrides.displayScale = sharp } else { vc.traitOverrides.remove(UITraitDisplayScale.self) }
+                self.applied = sharp
+            }
+        }
+    }
+    func makeUIView(context: Context) -> Probe { let v = Probe(); v.isUserInteractionEnabled = false; v.tv = tv; return v }
+    func updateUIView(_ v: Probe, context: Context) { v.tv = tv }
+}
+// On the TV the screen is laid out on a 1920 x 1080 canvas and scaled to the TV's window, so it fills the same share of any TV or projector: a TV's window
+// can be 1920, 2560 or 3840 points across, where sizes in points came out a fraction of the screen
+struct TenFootStage: ViewModifier {
+    let on: Bool
+    var screenScale: CGFloat = 1
+    var native = false
+    static func scale(_ size: CGSize) -> CGFloat { max(0.5, min(size.width / 1920, size.height / 1080)) }
+    func body(content: Content) -> some View {
+        // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
+        GeometryReader { g in
+            let u = on ? TenFootStage.scale(g.size) : 1
+            let s = native ? 1 : u   // native: no stretching, the sizes are k times instead
+            content.environment(\.uiK, native ? u : 1)
+                .frame(width: g.size.width / s, height: g.size.height / s)
+                // drawn at the size it ends up on the TV, not at the canvas's size stretched (soft on a 1440p or 4K TV); the iPad keeps its own
+                .transformEnvironment(\.displayScale) { if on && s > 1.01 { $0 = screenScale * s } }
+                .scaleEffect(s, anchor: .topLeading)
+                .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+        }
+        .ignoresSafeArea(edges: on ? Edge.Set.all : [])
+    }
+}
+extension View {
+    // The probe and, on the TV, the canvas: the outermost modifiers of the picker's and the launcher's screens
+    func tenFoot(_ tv: TenFoot) -> some View { modifier(TenFootStage(on: tv.on, screenScale: tv.screenScale, native: tv.native)).background(TenFootProbe(tv: tv)) }
+}
+// Console mode: shown in handheld mode while a TV is connected and the game has not started (front_ios.m answers, again on each DMShellChanged), on the
+// iPad and on the TV's copy alike (the copy's is not tapped: a controller switches there); a tap moves the picture to the TV. In the picker's title bar
+// and next to the launcher's Game list
+@_silgen_name("front_ios_tv_waiting") fileprivate func frontIosTvWaiting() -> Int32
+@_silgen_name("front_ios_back_to_tv") private func frontIosBackToTv()
+struct BackToTVButton: View {
+    @State private var waiting = frontIosTvWaiting() != 0
+    @Environment(\.uiK) private var k
+    var body: some View {
+        Group {
+            if waiting {
+                Button { frontIosBackToTv() } label: {
+                    HStack(spacing: 10) {
+                        Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.ds(.headline, k: k))
+                        // a controller's Home (Xbox, − and + together, the phone page's ⌂) switches too, before the game (front_ios.m)
+                        Text("Home").font(.ds(.caption, .bold, k: k)).padding(.horizontal, 6 * k).frame(minHeight: 22 * k)
+                            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white.opacity(0.22)))
+                    }
+                    .foregroundStyle(.white)
+                        .padding(.horizontal, 14 * k).padding(.vertical, 10 * k)
+                        .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.accent))
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: waiting)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMShellChanged")).receive(on: DispatchQueue.main)) { _ in
+            waiting = frontIosTvWaiting() != 0
+        }
+        .onAppear { waiting = frontIosTvWaiting() != 0 }
+    }
+}
+
+// Handheld mode with a TV connected: the TV shows the same screen as the iPad, laid out for its own size, following every move (front_ios.m puts
+// dm_pregame_mirror_make's controller in the TV's window). The picker and the launcher set what it shows; the copy there takes no input and posts nothing
+// The picker's copy stays built while a game's launcher is over it (as on the iPad, where the picker's model is kept), so coming back shows it at once:
+// building it again at the TV's size made the TV come back well after the iPad
+final class PregameStage: ObservableObject {
+    static let shared = PregameStage()
+    @Published private(set) var pickerGen = 0
+    @Published private(set) var launcherGen = 0
+    private(set) var picker: (() -> AnyView)?
+    private(set) var launcher: (() -> AnyView)?
+    func showPicker(_ make: @escaping () -> AnyView, fresh: Bool) {
+        if fresh || picker == nil { picker = make; pickerGen += 1 }
+        if launcher != nil { launcher = nil; launcherGen += 1 }
+    }
+    func showLauncher(_ make: @escaping () -> AnyView) { launcher = make; launcherGen += 1 }
+    func clear() { picker = nil; launcher = nil; pickerGen += 1; launcherGen += 1 }   // the game starts
+}
+private struct PregameMirrorKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var pregameMirror: Bool { get { self[PregameMirrorKey.self] } set { self[PregameMirrorKey.self] = newValue } } }
+private struct PregameMirrorView: View {
+    @ObservedObject private var stage = PregameStage.shared
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let picker = stage.picker { picker().id(stage.pickerGen).opacity(stage.launcher == nil ? 1 : 0) }
+            if let launcher = stage.launcher { launcher().id(stage.launcherGen).transition(.opacity) }
+        }
+        .animation(.easeInOut(duration: 0.25), value: stage.launcherGen)
+        .environment(\.pregameMirror, true)
+        .preferredColorScheme(.dark)
+    }
+}
+@_cdecl("dm_pregame_mirror_make")
+public func dmPregameMirrorMake() -> UnsafeMutableRawPointer {   // a retained UIViewController (CFBridgingRelease it on the Objective-C side)
+    let h = UIHostingController(rootView: PregameMirrorView())
+    controllerNotForUIKit(h.view)   // Launcher.swift
+    h.view.backgroundColor = .black
+    h.view.isUserInteractionEnabled = false
+    return Unmanaged.passRetained(h as UIViewController).toOpaque()
+}
+
+// A screen arriving (the picker back from the launcher, the launcher from the picker) comes in as one plain fade, the presentation's: for its first moment
+// no part of it animates on its own (sizes settling, the row taking its place, a button appearing)
+private struct Settle: ViewModifier {
+    @State private var settled = false
+    func body(content: Content) -> some View {
+        content
+            .transaction { if !settled { $0.animation = nil; $0.disablesAnimations = true } }
+            .task { try? await Task.sleep(for: .seconds(0.6)); settled = true }
+    }
+}
+extension View { func settleOnArrival() -> some View { modifier(Settle()) } }
+
+private struct TenFootKey: EnvironmentKey { static let defaultValue = false }
+// The picker on a TV is laid out at the TV's own size (not a 1920 x 1080 canvas stretched, whose text stayed soft on a 4K TV): every size in it is the
+// ten-foot size times k, the TV's size over 1920 x 1080 (1 on the iPad's own layout)
+private struct UiKKey: EnvironmentKey { static let defaultValue: CGFloat = 1 }
+extension EnvironmentValues { var uiK: CGFloat { get { self[UiKKey.self] } set { self[UiKKey.self] = newValue } } }
+extension Font {
+    // A text style: Dynamic Type's at k 1; else its ten-foot size (Dynamic Type's accessibility-1 size, the TV layout's) times k
+    static func ds(_ style: Font.TextStyle, _ weight: Font.Weight? = nil, design: Font.Design? = nil, k: CGFloat) -> Font {
+        if abs(k - 1) < 0.001 { return .system(style, design: design, weight: weight) }
+        let size: CGFloat
+        switch style {
+        case .largeTitle: size = 44
+        case .title: size = 38
+        case .title2: size = 34
+        case .title3: size = 31
+        case .callout: size = 26
+        case .subheadline: size = 25
+        case .footnote: size = 23
+        case .caption: size = 22
+        case .caption2: size = 20
+        default: size = 28   // body, headline
+        }
+        return .system(size: size * k, weight: weight ?? (style == .headline ? .semibold : .regular), design: design ?? .default)
+    }
+}
+extension EnvironmentValues { var tenFoot: Bool { get { self[TenFootKey.self] } set { self[TenFootKey.self] = newValue } } }
+
 // A frosted card: thick dark material, the card tint, a hairline edge and a soft shadow (front_ios.m's menu card)
 struct GlassCard: ViewModifier {
     var radius: CGFloat = DS.cardRadius
@@ -51,10 +247,11 @@ extension View { func glassCard(_ radius: CGFloat = DS.cardRadius) -> some View 
 // A key's name in a small box, then what it does: the footer hints of the picker and the launcher
 struct KeyHint: View {
     let key: String, text: String
+    @Environment(\.uiK) private var k
     var body: some View {
-        HStack(spacing: 6) {
-            Text(key).font(.caption.weight(.bold)).frame(minWidth: 22, minHeight: 22).padding(.horizontal, key.count > 1 ? 4 : 0)
-                .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(Color.white.opacity(0.16)))
+        HStack(spacing: 6 * k) {
+            Text(key).font(.ds(.caption, .bold, k: k)).frame(minWidth: 22 * k, minHeight: 22 * k).padding(.horizontal, key.count > 1 ? 4 * k : 0)
+                .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white.opacity(0.16)))
             Text(text)
         }
     }
@@ -64,13 +261,14 @@ private func tileRadius(_ side: CGFloat) -> CGFloat { side * 0.2237 }   // the h
 private struct FocusRing: ViewModifier {
     let focused: Bool
     let side: CGFloat
+    @Environment(\.uiK) private var k
     func body(content: Content) -> some View {
         content
             .overlay {
-                RoundedRectangle(cornerRadius: tileRadius(side) + 7, style: .continuous)
-                    .stroke(focused ? Color.white.opacity(0.95) : .clear, lineWidth: 4).padding(-8)
+                RoundedRectangle(cornerRadius: tileRadius(side) + 7 * k, style: .continuous)
+                    .stroke(focused ? Color.white.opacity(0.95) : .clear, lineWidth: 4 * k).padding(-8 * k)
             }
-            .shadow(color: .black.opacity(focused ? 0.55 : 0.4), radius: focused ? 22 : 8, y: focused ? 14 : 4)
+            .shadow(color: .black.opacity(focused ? 0.55 : 0.4), radius: (focused ? 22 : 8) * k, y: (focused ? 14 : 4) * k)
             .scaleEffect(focused ? 1 : 0.84)
             .opacity(focused ? 1 : 0.6)
             .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
@@ -78,10 +276,11 @@ private struct FocusRing: ViewModifier {
 }
 private struct Chip: View {   // a small rounded box: version, last played, a key's name
     let text: String
+    @Environment(\.uiK) private var k
     var body: some View {
-        Text(text).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+        Text(text).font(.ds(.footnote, .semibold, k: k)).foregroundStyle(.white.opacity(0.8))
+            .padding(.horizontal, 9 * k).padding(.vertical, 4 * k)
+            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
     }
 }
 
@@ -117,7 +316,12 @@ private func loadGames() -> [PickerGame] {
 private final class PickerModel: ObservableObject {
     let games: [PickerGame]
     @Published var pos = 0
-    init() { games = loadGames() }
+    static var lastPicked: String?   // the game chosen last: coming back from its launcher, the row stands on it again (not on Add players)
+    static var kept: PickerModel?    // one model for the process: the picker shown again (back from a launcher) keeps its place, and the TV's copy its view
+    init() {
+        games = loadGames()
+        if let id = PickerModel.lastPicked, let i = games.firstIndex(where: { $0.id == id }) { pos = i + 1 }
+    }
     var focus: Int { ((pos % count) + count) % count }
     func item(_ v: Int) -> Int { ((v % count) + count) % count }
     @Published var starting = false
@@ -196,34 +400,67 @@ private final class StatusModel: ObservableObject {
 
 private struct StatusBar: View {
     @StateObject private var s = StatusModel()
+    @Environment(\.uiK) private var k
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 14 * k) {
             TimelineView(.everyMinute) { t in Text(t.date, style: .time).monospacedDigit() }   // redrawn on each new minute
             Image(systemName: !s.online ? "wifi.slash" : s.wifi ? "wifi" : "network")
                 .opacity(s.online ? 1 : 0.5)
                 .accessibilityLabel(s.online ? tr("已連線", "Online") : tr("未連線", "Offline"))
-            HStack(spacing: 5) {
+            HStack(spacing: 5 * k) {
                 if s.battery >= 0 { Text("\(Int((s.battery * 100).rounded()))%").monospacedDigit() }
                 Image(systemName: s.batterySymbol)
                     .foregroundStyle(s.battery >= 0 && s.battery < 0.2 && !s.charging ? Color.red : Color.white)
             }
         }
-        .font(.title3.weight(.medium))
+        .font(.ds(.title3, .medium, k: k))
         .foregroundStyle(.white.opacity(0.85))
     }
+}
+
+// A game's icon is the package's 256 x 256 JPEG; on a TV a tile is 700 to 1000 pixels across. Enlarged once with Lanczos (sharper edges than the GPU's
+// linear filter), up to 1024 pixels, and kept
+private let sharpIcons = NSCache<NSString, UIImage>()
+private let ciContext = CIContext(options: [.cacheIntermediates: false])   // one for every icon (a context per call cost more than the filter)
+func tvIcon(_ img: UIImage, key: String? = nil) -> UIImage {   // key: for an icon read from its file again on every redraw (the launcher's)
+    let k = (key ?? "\(ObjectIdentifier(img).hashValue)") as NSString
+    if let done = sharpIcons.object(forKey: k) { return done }
+    let px = max(img.size.width * img.scale, img.size.height * img.scale)
+    guard px > 0, px < 1000, let src = CIImage(image: img) else { return img }
+    let f = CIFilter.lanczosScaleTransform(); f.inputImage = src; f.scale = Float(1024 / px); f.aspectRatio = 1
+    guard let out = f.outputImage, let cg = ciContext.createCGImage(out, from: out.extent.integral) else { return img }
+    let big = UIImage(cgImage: cg, scale: img.scale * 1024 / px, orientation: img.imageOrientation)
+    sharpIcons.setObject(big, forKey: k)
+    return big
+}
+
+// The blurred icon behind the picker and the launcher, blurred once on a small copy and kept: a live 60-point blur of a screen-sized image (two of them
+// while the backdrop cross-fades) was redrawn on every frame of a move, and on a 4K TV that made the moves stutter
+private let blurredIcons = NSCache<NSString, UIImage>()
+func blurredIcon(_ img: UIImage, key: String) -> UIImage? {
+    if let done = blurredIcons.object(forKey: key as NSString) { return done }
+    guard let src = CIImage(image: img), src.extent.width > 0 else { return nil }
+    let small = src.transformed(by: CGAffineTransform(scaleX: 96 / src.extent.width, y: 96 / src.extent.width))
+    let f = CIFilter.gaussianBlur(); f.inputImage = small.clampedToExtent(); f.radius = 5
+    guard let out = f.outputImage?.cropped(to: small.extent), let cg = ciContext.createCGImage(out, from: small.extent) else { return nil }
+    let done = UIImage(cgImage: cg)
+    blurredIcons.setObject(done, forKey: key as NSString)
+    return done
 }
 
 private struct GameTile: View {
     let game: PickerGame
     let focused: Bool
     let side: CGFloat
+    @Environment(\.tenFoot) private var tenFoot
+    @Environment(\.uiK) private var k
     var body: some View {
         ZStack {
             if let icon = game.icon {
-                Image(uiImage: icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
+                Image(uiImage: tenFoot ? tvIcon(icon, key: game.id) : icon).resizable().interpolation(.high).antialiased(true).scaledToFill()
             } else {
                 LinearGradient(colors: [Color(white: 0.29), Color(white: 0.11)], startPoint: .top, endPoint: .bottom)
-                Text(game.name).font(.title3.weight(.bold)).foregroundStyle(.white).multilineTextAlignment(.center).padding(12)
+                Text(game.name).font(.ds(.title3, .bold, k: k)).foregroundStyle(.white).multilineTextAlignment(.center).padding(12 * k)
             }
         }
         .frame(width: side, height: side)
@@ -238,6 +475,7 @@ private struct PadsTile: View {   // the QR code itself, a short bar in each joi
     let joined: Int
     let focused: Bool
     let side: CGFloat
+    @Environment(\.uiK) private var k
     var body: some View {
         ZStack {
             Color.white
@@ -246,11 +484,11 @@ private struct PadsTile: View {   // the QR code itself, a short bar in each joi
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "wifi.slash").font(.system(size: side * 0.18))
-                    Text(tr("連上 Wi-Fi 後\n手機才能加入", "Join Wi-Fi\nto let phones in")).font(.headline).multilineTextAlignment(.center)
+                    Text(tr("連上 Wi-Fi 後\n手機才能加入", "Join Wi-Fi\nto let phones in")).font(.ds(.headline, k: k)).multilineTextAlignment(.center)
                 }
                 .foregroundStyle(.black.opacity(0.55))
             }
-            HStack(spacing: 5) { ForEach(0..<joined, id: \.self) { i in RoundedRectangle(cornerRadius: 3, style: .continuous).fill(playerColors[i % playerColors.count]).frame(width: 14, height: 6) } }
+            HStack(spacing: 5 * k) { ForEach(0..<joined, id: \.self) { i in RoundedRectangle(cornerRadius: 3 * k, style: .continuous).fill(playerColors[i % playerColors.count]).frame(width: 14 * k, height: 6 * k) } }
                 .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, side * 0.04)
         }
         .frame(width: side, height: side)
@@ -273,44 +511,48 @@ private struct PadsCard: View {
     @ObservedObject var pads: PadsModel
     @ObservedObject var players: PlayersModel
     @EnvironmentObject var activity: ActivityModel
+    @Environment(\.uiK) private var k
+    @Environment(\.tenFoot) private var tenFoot
+    // its places have fixed sizes: its text a size smaller than the rest of the TV layout (Dynamic Type's xLarge, as before), the boxes k times
+    private var t: CGFloat { tenFoot ? k * 0.68 : 1 }
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 22 * k) {
             HStack {
-                Text(tr("玩家", "Players")).font(.title.weight(.bold))
+                Text(tr("玩家", "Players")).font(.ds(.title, .bold, k: t))
                 Spacer()
-                Text(tr("\(players.players.count) / 8 位玩家", "\(players.players.count) / 8 players")).font(.headline).foregroundStyle(.white.opacity(0.6))
+                Text(tr("\(players.players.count) / 8 位玩家", "\(players.players.count) / 8 players")).font(.ds(.headline, k: t)).foregroundStyle(.white.opacity(0.6))
             }
-            HStack(alignment: .top, spacing: 28) {
-                VStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 28 * k) {
+                VStack(spacing: 12 * k) {
                     ZStack {
                         Color.white
-                        if let qr = pads.qr { Image(uiImage: qr).interpolation(.none).resizable().padding(14) }
-                        else { Image(systemName: "wifi.slash").font(.largeTitle).foregroundStyle(.black.opacity(0.5)) }
+                        if let qr = pads.qr { Image(uiImage: qr).interpolation(.none).resizable().padding(14 * k) }
+                        else { Image(systemName: "wifi.slash").font(.ds(.largeTitle, k: t)).foregroundStyle(.black.opacity(0.5)) }
                     }
-                    .frame(width: 230, height: 230).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .frame(width: 230 * k, height: 230 * k).clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
                     if let url = pads.url {
-                        Text(url).font(.callout.monospaced()).padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                        Text(url).font(.ds(.callout, design: .monospaced, k: t)).lineLimit(1).minimumScaleFactor(0.6).padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
+                            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                     } else {
-                        Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first")).font(.footnote).foregroundStyle(.white.opacity(0.65))
+                        Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first")).font(.ds(.footnote, k: t)).foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .frame(width: 250)
-                Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                .frame(width: 250 * k)
+                Grid(horizontalSpacing: 10 * k, verticalSpacing: 10 * k) {
                     ForEach(0..<4, id: \.self) { r in
                         GridRow { place(r); place(r + 4) }
                     }
                 }
             }
-            HStack(spacing: 22) {
+            HStack(spacing: 22 * k) {
                 Spacer()
                 KeyHint(key: "A", text: tr("震動", "Identify")); KeyHint(key: "−", text: tr("切換配置", "Layout")); KeyHint(key: "X", text: tr("移除", "Remove")); KeyHint(key: "B", text: tr("關閉", "Close"))
             }
-            .font(.callout).foregroundStyle(.white.opacity(0.6))
+            .font(.ds(.callout, k: t)).foregroundStyle(.white.opacity(0.6))
         }
-        .padding(30)
-        .frame(maxWidth: 980)
-        .glassCard()
+        .padding(30 * k)
+        .frame(maxWidth: 980 * k)
+        .glassCard(DS.cardRadius * k)
         .foregroundStyle(.white)
     }
 
@@ -319,46 +561,46 @@ private struct PadsCard: View {
         let row = players.players.first { $0.player == n }
         let back = removedAt(i, players)   // a controller removed here, offered in a free place so it can be added back
         let lit = activity.lit.contains(n), sel = m.sel == i
-        HStack(spacing: 8) {
-            Text("P\(n)").font(.headline.weight(.heavy)).frame(width: 40, height: 32)
+        HStack(spacing: 8 * k) {
+            Text("P\(n)").font(.ds(.headline, .heavy, k: t)).frame(width: 40 * k, height: 32 * k)
                 .foregroundStyle(row == nil ? Color.white.opacity(0.35) : Color.black.opacity(0.85))
-                .background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(row == nil ? Color.white.opacity(0.08) : color))
+                .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(row == nil ? Color.white.opacity(0.08) : color))
             if let p = row {
-                Image(systemName: p.kind == 2 ? "iphone" : controllerIcon(p.label)).font(.title3).frame(width: 28)
-                Text(padName(p)).font(.headline).lineLimit(1).minimumScaleFactor(0.7)
-                Spacer(minLength: 4)
+                Image(systemName: p.kind == 2 ? "iphone" : controllerIcon(p.label)).font(.ds(.title3, k: t)).frame(width: 28 * k)
+                Text(padName(p)).font(.ds(.headline, k: t)).lineLimit(1).minimumScaleFactor(0.7)
+                Spacer(minLength: 4 * k)
                 Button { players.send(["op": "layout", "p": n, "xbox": p.xbox ? 0 : 1]) } label: {
-                    Text((p.xbox ? "Xbox" : "Switch") + " ⇄").font(.footnote.weight(.semibold)).padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                    Text((p.xbox ? "Xbox" : "Switch") + " ⇄").font(.ds(.footnote, .semibold, k: t)).padding(.horizontal, 9 * k).padding(.vertical, 4 * k)
+                        .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("切換配置", "Button layout"))
                 Button { players.send(["op": "kick", "p": n]) } label: {
-                    Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                    Image(systemName: "xmark").font(.ds(.footnote, .bold, k: t)).frame(width: 30 * k, height: 30 * k).background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("移除", "Remove"))
             } else if let r = back {
-                Image(systemName: controllerIcon(r.label)).font(.title3).frame(width: 28).foregroundStyle(.white.opacity(0.5))
+                Image(systemName: controllerIcon(r.label)).font(.ds(.title3, k: t)).frame(width: 28 * k).foregroundStyle(.white.opacity(0.5))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(padName(PlayerRow(player: 0, kind: 1, label: r.label, name: "", xbox: false))).font(.headline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                    Text(tr("已移除 · 按 A 加回", "Removed · A to add back")).font(.caption).foregroundStyle(.white.opacity(0.5)).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(padName(PlayerRow(player: 0, kind: 1, label: r.label, name: "", xbox: false))).font(.ds(.headline, k: t)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                    Text(tr("已移除 · 按 A 加回", "Removed · A to add back")).font(.ds(.caption, k: t)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).minimumScaleFactor(0.8)
                 }
                 Spacer(minLength: 0)
             } else {
-                Text(tr("空位", "Free")).font(.headline.weight(.regular)).foregroundStyle(.white.opacity(0.4)).padding(.leading, 36)
+                Text(tr("空位", "Free")).font(.ds(.headline, .regular, k: t)).foregroundStyle(.white.opacity(0.4)).padding(.leading, 36 * k)
                 Spacer(minLength: 0)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 64)
+        .padding(.horizontal, 12 * k)
+        .frame(height: 64 * k)
         .frame(maxWidth: .infinity)
         .background {
-            RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: DS.rowRadius * k, style: .continuous)
                 .fill(row == nil ? Color.clear : lit ? color.opacity(0.3) : DS.plate)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: DS.rowRadius * k, style: .continuous)
                 .strokeBorder(sel ? systemBlue : row == nil ? Color.white.opacity(0.12) : lit ? color : .clear,
-                              style: StrokeStyle(lineWidth: sel ? 2 : row == nil ? 1.5 : 1, dash: row == nil && !sel ? [5, 4] : []))
+                              style: StrokeStyle(lineWidth: (sel ? 2 : row == nil ? 1.5 : 1) * k, dash: row == nil && !sel ? [5 * k, 4 * k] : []))
         }
         .scaleEffect(lit ? 1.02 : 1)
         .animation(.easeOut(duration: 0.12), value: lit)
@@ -378,25 +620,29 @@ private struct PickerView: View {
     @StateObject private var activity = ActivityModel()
     @State private var held: (key: String, task: Task<Void, Never>)?
     @State private var drag: CGFloat = 0   // how far a finger has moved the row
+    @StateObject private var tv = TenFoot(native: true)   // laid out at the TV's own size: text drawn sharp at 4K
+    @Environment(\.pregameMirror) private var mirror   // the TV's copy in handheld mode: shows, takes no input
 
     var body: some View {
         GeometryReader { g in
-            let side = min(g.size.height * 0.36, g.size.width / 4.4, 300)
+            let k = tv.on ? TenFootStage.scale(g.size) : 1   // the TV's size over 1920 x 1080 (the stage gives the same k to the views inside)
+            let side = tv.on ? min(g.size.height * 0.42, g.size.width / 3.6) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot: fewer, larger tiles
             let gap = side * 0.14
             let current = m.game(m.focus)
             ZStack {
                 VStack(spacing: 0) {
-                    header.padding(.horizontal, 32).padding(.top, 22)
+                    header(k).padding(.horizontal, 32 * k).padding(.top, 22 * k)
                     Spacer(minLength: 0)
                     row(width: g.size.width, side: side, gap: gap)
-                    details(current).padding(.top, 22)
+                    details(current, k).padding(.top, 22 * k)
                     Spacer(minLength: 0)
-                    footer.padding(.horizontal, 32).padding(.bottom, 22)
+                    footer(k).padding(.horizontal, 32 * k).padding(.bottom, 22 * k)
                 }
                 if m.padsOpen {
                     Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.padsOpen = false }
                         .transition(.opacity)
-                    PadsCard(m: m, pads: pads, players: players).padding(32)
+                    PadsCard(m: m, pads: pads, players: players).padding(32 * k)
+                        .dynamicTypeSize(tv.on ? .xLarge ... .xLarge : .xSmall ... .accessibility5)   // its places have fixed sizes: a little larger on a TV, not the whole step
                         .transition(DS.cardIn)
                 }
             }
@@ -405,12 +651,16 @@ private struct PickerView: View {
             .frame(width: g.size.width, height: g.size.height)
             .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down
         }
+        .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // every text style grows together on a TV
+        .environment(\.tenFoot, tv.on)
         .preferredColorScheme(.dark)
         .statusBarHidden()
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { input($0.userInfo) }
-        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { input($0.userInfo) } }
+        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear { held?.task.cancel() }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
+        .tenFoot(tv)
+        .settleOnArrival()   // one plain fade in
     }
 
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
@@ -455,11 +705,11 @@ private struct PickerView: View {
     private func backdrop(_ game: PickerGame?) -> some View {
         ZStack {
             Color.black
-            if let icon = game?.icon {
-                Image(uiImage: icon).resizable().scaledToFill()
+            if let game, let icon = game.icon, let soft = blurredIcon(icon, key: game.id) {
+                Image(uiImage: soft).resizable().interpolation(.medium).scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .blur(radius: 60).scaleEffect(1.4).opacity(0.55)
-                    .id(game?.id).transition(.opacity)
+                    .scaleEffect(1.4).opacity(0.55)
+                    .id(game.id).transition(.opacity)
             }
             LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
         }
@@ -469,51 +719,52 @@ private struct PickerView: View {
 
     private var appIcon: UIImage? { UIImage(named: "AppIcon60x60") }   // the package's own icon (nxn_merge.py)
     private var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "SwitchPad" }
-    private var header: some View {
-        HStack(alignment: .center, spacing: 14) {
+    private func header(_ k: CGFloat) -> some View {
+        HStack(alignment: .center, spacing: 14 * k) {
             if let icon = appIcon {
-                Image(uiImage: icon).resizable().interpolation(.high).frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Image(uiImage: icon).resizable().interpolation(.high).frame(width: 44 * k, height: 44 * k)
+                    .clipShape(RoundedRectangle(cornerRadius: 10 * k, style: .continuous))
             }
             VStack(alignment: .leading, spacing: 0) {
-                Text(appName).font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.55))
-                Text(tr("選擇遊戲", "Choose a game")).font(.largeTitle.weight(.bold))
+                Text(appName).font(.ds(.subheadline, .semibold, k: k)).foregroundStyle(.white.opacity(0.55))
+                Text(tr("選擇遊戲", "Choose a game")).font(.ds(.largeTitle, .bold, k: k))
             }
             Spacer()
+            BackToTVButton()
             StatusBar()
         }
         .foregroundStyle(.white)
     }
 
-    @ViewBuilder private func details(_ game: PickerGame?) -> some View {
+    @ViewBuilder private func details(_ game: PickerGame?, _ k: CGFloat) -> some View {
         if m.focus == 0 {
-            VStack(spacing: 6) {
-                Text(tr("加入玩家", "Add players")).font(.title.weight(.bold)).foregroundStyle(.white)
+            VStack(spacing: 6 * k) {
+                Text(tr("加入玩家", "Add players")).font(.ds(.title, .bold, k: k)).foregroundStyle(.white)
                 Chip(text: tr("用手機相機掃描", "Scan with a phone camera"))
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 32 * k)
         } else if let game {
-            VStack(spacing: 6) {
-                Text(game.name).font(.title.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+            VStack(spacing: 6 * k) {
+                Text(game.name).font(.ds(.title, .bold, k: k)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
                     .contentTransition(.opacity)
-                HStack(spacing: 8) {
+                HStack(spacing: 8 * k) {
                     if !game.version.isEmpty { Chip(text: "v" + game.version) }
                     if let p = game.played { Chip(text: tr("上次遊玩 ", "Last played ") + p.formatted(.relative(presentation: .named).locale(Locale(identifier: zhHant ? "zh-Hant" : "en")))) }
                 }
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 32 * k)
             .animation(.easeInOut(duration: 0.25), value: game.id)   // the name and version cross-fade as the row slides
         }
     }
 
-    private var footer: some View {
-        HStack(spacing: 22) {
+    private func footer(_ k: CGFloat) -> some View {
+        HStack(spacing: 22 * k) {
             Spacer()
             KeyHint(key: "◀ ▶", text: tr("選擇", "Choose"))
             KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
             KeyHint(key: "Y", text: tr("玩家", "Players"))
         }
-        .font(.callout).foregroundStyle(.white.opacity(0.6))
+        .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
         .opacity(m.starting ? 0 : 1)
     }
 
@@ -560,13 +811,24 @@ private struct PickerView: View {
 @_cdecl("dm_show_picker")
 public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) {
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = PickerModel()
+    let fresh = PickerModel.kept == nil
+    let model = PickerModel.kept ?? PickerModel()
+    PickerModel.kept = model
+    model.starting = false; model.padsOpen = false
     let h = UIHostingController(rootView: PickerView(m: model))
+    PregameStage.shared.showPicker({ AnyView(PickerView(m: model)) }, fresh: fresh)   // the TV's copy in handheld mode
+    // The blurred backdrops and, with a TV, the enlarged icons made ahead, off the main thread: the TV's copy (built again on the way back from the
+    // launcher) had to make them all as it appeared, and came in well after the iPad
+    let games = model.games, tvToo = UIApplication.shared.connectedScenes.contains { $0.session.role == .windowExternalDisplayNonInteractive }
+    DispatchQueue.global(qos: .userInitiated).async {
+        for g in games { if let i = g.icon { _ = blurredIcon(i, key: g.id); if tvToo { _ = tvIcon(i, key: g.id) } } }
+    }
     controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
     model.start = { [weak h] game in
         UserDefaults.standard.set(Date(), forKey: "picker.played." + game.id)
+        PickerModel.lastPicked = game.id
         fputs("picker: \(game.id) (\(game.name))\n", stderr)
         NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
         DispatchQueue.main.async {   // let the loading veil draw before main.m reads the game's files
