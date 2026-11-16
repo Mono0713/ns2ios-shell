@@ -244,13 +244,15 @@ static void on_hello(client *c, const char *json) {
     c->player = p; c->last_seq = -1; c->last_ns = now_ns(); c->released = 1; c->motion.init = 0;
     send_assign(c, p);
     haptics_follow(c);
-    LOG("phone pads: '%s' connected%s: player %d", name, c->kind == SESSION ? " (HTTPS requests)" : c->tls ? " (HTTPS)" : "", p + 1);
+    char why[16] = ""; json_str(json, "why", why, sizeof why);   // load / ping / closed / front (phone_pad.html hello)
+    LOG("phone pads: '%s' connected%s: player %d%s%s", name, c->kind == SESSION ? " (HTTPS requests)" : c->tls ? " (HTTPS)" : "", p + 1, why[0] ? ", after " : "", why);
 }
 // The page's own layout switch: the same as the launcher's (shell_players.m keeps it for this phone); the assign that follows redraws the page
 static void on_text(client *c, const char *json) {
     char t[16] = ""; json_str(json, "t", t, sizeof t);
     if (!strcmp(t, "home")) { int p = c->player < 0 ? -1 : shell_slot_of(c); if (p >= 0) { LOG("phone pads: '%s' (player %d) pressed Home", c->name, p + 1); shell_slot_home(p); } return; }
-    if (!strcmp(t, "ping")) { say(c, "{\"t\":\"pong\"}"); return; }   // the page's check that the iPad is still there (phone_pad.html)
+    if (!strcmp(t, "ping")) { say(c, "{\"t\":\"pong\"}"); return; }
+    if (!strcmp(t, "note")) { char w[48] = ""; json_str(json, "w", w, sizeof w); LOG("phone pads: '%s': the page %s", c->name, w); return; }   // phone_pad.html note()   // the page's check that the iPad is still there (phone_pad.html)
     if (strcmp(t, "layout")) { on_hello(c, json); return; }
     int p = c->player < 0 ? -1 : shell_slot_of(c); if (p < 0) return;
     int xbox = strstr(json, "\"xbox\":1") != NULL;

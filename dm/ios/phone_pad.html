@@ -11,7 +11,7 @@
   /* SwitchPad's look (docs/DESIGN.zh-TW.md): graphite, the system blue, rounded rectangles, frosted bars, each player's own colour (--pc) */
   :root { --bg:#000; --btn:#1c1c1e; --btn-on:#0a84ff; --fg:#f5f5f7; --dim:#8e8e93; --line:rgba(255,255,255,.1); --glass:rgba(28,28,30,.72); --pc:#0a84ff; }
   * { box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px -apple-system,system-ui,sans-serif; overflow:hidden; touch-action:none; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px -apple-system,system-ui,sans-serif; overflow:hidden; touch-action:none; overscroll-behavior:none; }
   #pad { position:fixed; inset:0; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   .piece { position:absolute; inset:0; pointer-events:none; }
   .piece > * { pointer-events:auto; }
@@ -190,10 +190,14 @@
   let lastRx = 0;
   setInterval(() => {
     if (!ws || ws.readyState !== 1 || document.hidden) return;
-    if (performance.now() - lastRx > 3500) { const old = ws; ws = null; old.onclose = null; try { old.close(); } catch (e) {} conn('wait'); backoff = 500; connect(); return; }
+    if (performance.now() - lastRx > 3500) { why = 'ping'; const old = ws; ws = null; old.onclose = null; try { old.close(); } catch (e) {} conn('wait'); backoff = 500; connect(); return; }
     try { ws.send('{"t":"ping"}'); } catch (e) {}
   }, 1000);
-  function hello() { put(JSON.stringify(join ? { t: 'hello', v: 1, id, name, join: 1 } : { t: 'hello', v: 1, id, name })); join = false; }
+  // why: what this (re)connection follows, for the iPad's log (load: the page just loaded; ping: the iPad went quiet; closed: the link dropped; front: back from the background)
+  let why = 'load';
+  function hello() { put(JSON.stringify(join ? { t: 'hello', v: 1, id, name, why, join: 1 } : { t: 'hello', v: 1, id, name, why })); join = false; why = 'closed'; }
+  // What took the page out of full screen (an edge swipe is Android's Back, which leaves full screen first and cancels every touch): told to the iPad's log
+  function note(w) { if (up()) put(JSON.stringify({ t: 'note', w })); }
   // The link to the iPad: a WebSocket, or over HTTPS where one cannot open (iPhone Safari refuses WebSockets to a certificate the user trusted by hand), POST requests to
   // /p, one at a time, each carrying what waits (only the newest state and motion) and bringing back the iPad's messages
   let usePost = params.get('t') === 'post', postUp = false, inflight = false, postFails = 0, opened = false;
@@ -405,6 +409,7 @@
       .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {})).catch(() => {});
   }
   if (standalone) $('#fs').style.display = 'none';
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && triedFull) note('left full screen'); });
   $('#fs').addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else goFull(); });
 
   // ---- Button layout: where A, B, X and Y sit (each button keeps its own letter and sends that button) ----
@@ -593,7 +598,7 @@
   // Release everything when the page goes to the background, so nothing stays pressed
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { release(); send(); rumble(0); }
-    else connect();   // back in front: reconnect now if the connection went while in the background
+    else { why = 'front'; connect(); }   // back in front: reconnect now if the connection went while in the background
   });
 
   // Keep the screen on where the browser allows it
