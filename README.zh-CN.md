@@ -280,7 +280,8 @@ NVN-on-Metal 层和 iOS app 外壳——两个项目之间的修复是**双向**
 
 `nx_extract` 使用 **[LibHac](https://github.com/Thealexbarney/LibHac)**；着色器翻译器内嵌了 Ryujinx 的着色器库；着色器由  
 **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** 翻译；工具包里的 `zstd.exe` 是 Meta 的
-**[zstd](https://github.com/facebook/zstd)** CLI v1.5.7，按它的 BSD 许可原样再分发。
+**[zstd](https://github.com/facebook/zstd)** CLI v1.5.7，按它的 BSD 许可原样再分发。工具包里的 `oodle_serve.exe` 由 Powzix 的
+**[ooz](https://github.com/powzix/ooz)** Oodle 解码器编译，和 ooz 一样是 GPL-3.0（[dm/tools/oodle_serve](dm/tools/oodle_serve/README.md)）；打包器只把它当独立程序调用。
 
 **许可：MIT**，与上游一致。[LICENSE](LICENSE) 是上游自己的文件，其中保留的是原始版权声明（© 2026 jhaizhou——nxnative 从  
 d2r-mobile 的通用部分起步，因此沿用了它的署名）。转载本分支或其构建产物时，请保留该声明与本许可。MIT 只覆盖代码：游戏文件、  

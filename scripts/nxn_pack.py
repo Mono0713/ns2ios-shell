@@ -1025,6 +1025,10 @@ def shader_split_hint(text):
     point of this route is that the user has no Mac -- and repeating it makes a known limitation of the route look like a
     setup mistake on their side. So the packer says it plainly and points at the two documents that answer the next question.
     """
+    if 'oodle_serve' in text:
+        return ('this game keeps its shaders in compressed archives that ooz (oodle_serve.exe) could not decode: LZ5 (an older\n'
+                "    Unreal engine's own format) or an Oodle stream ooz does not know. Those are only decoded by the game's own code,\n"
+                '    inside the Mac host, so this title needs one run on a Mac (docs/CAPTURE.md).')
     if 'DM_OODLE_HOST' in text or 'DM_OODLE_MODULES' in text:
         return ('this game keeps its shaders in Oodle-compressed archives (Trinity packs, PlatinumGames PKZ, or an older\n'
                 "    Unreal pak). Oodle is only decoded by the game's own code, running inside the Mac host, so this title\n"
@@ -1101,7 +1105,59 @@ def used_only(work):
     except OSError: return False
 
 
-def step_shaders(game, prof_dir, tables, work, tid, force=False):
+def ue_stamp(game):
+    """what an extraction's decoded Unreal shader archives were made from: its paks and IoStore TOCs (paths and sizes), as the NSP script's"""
+    rom = game / 'RomFS'
+    return ''.join('%s\t%d\n' % (p.relative_to(rom).as_posix(), p.stat().st_size) for p in sorted([*rom.rglob('*.pak'), *rom.rglob('*.utoc')]))
+
+
+def step_ue_decode(game, work, tools_dir, force=False):
+    """An Unreal game: its shaders are in the shader code archives of its paks or IoStore containers, every shader compressed (Oodle, LZ4), and
+    shader_split.py reads them decoded from <version dir>/ue_shaders. Upstream decodes them with the game's own Oodle in the Mac host
+    (build_ipa_from_nsp.py decode_ue_shaders); here ooz does it (oodle_serve.exe in the tools, dm/tools/oodle_serve): uepak.py takes the archives
+    out (the index AES key from main, through Windows' own bcrypt), decodes the IoStore libraries and the pak blocks on the way, and writes one job of
+    the compressed shaders, which oodle_serve --job decodes. A folder whose stamp matches the paks is reused. Returns True when it decoded anew."""
+    rom = game / 'RomFS'
+    if not any(rom.rglob('*.pak')) and not any(rom.rglob('*.utoc')): return False
+    sys.path.insert(0, str(GFX))
+    import uepak
+    out, stamp = game / 'ue_shaders', ue_stamp(game)
+    try: same = (out / 'stamp').read_text(encoding='utf-8') == stamp
+    except OSError: same = False
+    if same and not force:
+        say('Unreal shader archives already decoded: %s' % out); return False
+    main = str(game / 'ExeFS' / 'main')
+    try: arch, io = uepak.unreal_paks(str(rom), inline=False, mains=[main]), uepak.io_shader_tocs(str(rom))
+    except Exception as x: warn('Unreal paks: not read (%s)' % x); return False
+    if not arch and not io: return False   # no Unreal paks, or ones whose shaders are inline in the packages (shader_split.py reads those itself)
+    exe = find_tool('oodle_serve', tools_dir)
+    if not exe:
+        die('this is an Unreal game whose shaders are compressed in its paks, and the tools have no oodle_serve.exe to decode them.\n'
+            '    Update the tools (Switch Pad does it at start), or put oodle_serve.exe in the --tools folder.')
+    jd, log = work / 'tmp' / 'ue_job', work / 'logs' / 'ue_decode.log'
+    shutil.rmtree(jd, ignore_errors=True); jd.mkdir(parents=True)
+    say('taking the shader code archives out of the Unreal paks%s' % (' and IoStore containers' if io else ''))
+    t0, dec = time.time(), uepak.Ooz(exe)
+    try:
+        try: listing, n = uepak.job(str(rom), main, str(jd), decode=dec)
+        finally: dec.close()
+    except Exception as x:
+        import traceback
+        log.parent.mkdir(parents=True, exist_ok=True); log.write_text(traceback.format_exc(), encoding='utf-8')
+        die('the Unreal shader archives could not be taken out: %s\n    (details: %s; uepak.py probe <RomFS> <main> says what the paks hold)' % (x, log))
+    if not listing: die('the RomFS has Unreal paks, but none holds a shader code archive: where the shaders are has to be found first (uepak.py probe)')
+    say('    ' + '; '.join('%s %s shaders%s' % (x['name'], format(x['shaders'], ','), ' (%s)' % x['compression'] if x.get('compression') else '') for x in listing))
+    if n:
+        run([exe, '--job', jd / 'oodle.job'], log=log, what='decoding %s Oodle-compressed shaders with ooz' % format(n, ','))
+    part = game / 'ue_shaders.partial'
+    shutil.rmtree(part, ignore_errors=True)
+    uepak.finish(str(jd), str(part)); (part / 'stamp').write_text(stamp, encoding='utf-8')
+    shutil.rmtree(out, ignore_errors=True); part.rename(out); shutil.rmtree(jd, ignore_errors=True)
+    say('    Unreal shaders decoded in %.1fs -> %s' % (time.time() - t0, out))
+    return True
+
+
+def step_shaders(game, prof_dir, tables, work, tid, force=False, tools_dir=None):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
     need_shaders(prof_dir, 'this game')
@@ -1117,8 +1173,14 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
     # the last is what the pipeline prebuild takes of agl's BAHS program variations, as upstream's build_ipa_from_nsp.py
     # asks for it (split_shaders, names + ('pso_pairs.tsv',))
     names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
+    env = {'DM_GAME': tid, 'DM_SHADER_USED': str(used)}
+    ooz = find_tool('oodle_serve', tools_dir)
+    if ooz and not os.environ.get('DM_OODLE_HOST'):
+        # Oodle-compressed game files the split reads itself (Trinity packs, PlatinumGames PKZ, Unreal paks with the shaders inline): ooz in
+        # place of the game's own decoder in the Mac host, which answers the same requests. LZ5 (DRAGON QUEST XI S) still needs the Mac.
+        env.update(DM_OODLE_HOST=str(ooz), DM_OODLE_MODULES='-')
     run([PY, GFX / 'shader_split.py', game / 'RomFS', game / 'ExeFS' / 'main', pkg] + [tb / n for n in names],
-        env={'DM_GAME': tid, 'DM_SHADER_USED': str(used)}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
+        env=env, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
         hint=shader_split_hint)
     mark.write_text(used_digest(used) + '\n', encoding='utf-8')
     for n in names:
@@ -1800,7 +1862,8 @@ def main():
     if route == 'nvn':
         glslc_n = take_glslc_capture(a.glslc_capture, game)
         used_n = take_used_shaders(a.used_shaders, game)
-        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n))
+        ue_new = step_ue_decode(game, work, tools_dir, a.force)
+        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n) or ue_new, tools_dir)
         shader_record = used_only(work)
         if shader_record:
             say('too many Unity shader variants to translate them all: packed the ones this game draws with (%s); the phone '

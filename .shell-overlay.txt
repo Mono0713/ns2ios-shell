@@ -97,3 +97,12 @@
 ~ dm/tools/tests/test_launcher_settings.py # the DM_APP_POOL row
 ~ dm/games/settings.tsv         # DM_PAD_BY_LABEL: the launcher's Xbox button layout
 ~ dm/games/settings.py          # the memory kind: a GB slider (DM_APP_POOL)
++ dm/tools/oodle_serve/oodle_serve.cpp   # Oodle without the game (ooz, GPL-3.0): the Windows packer decodes Unreal shader archives with it
++ dm/tools/oodle_serve/CMakeLists.txt
++ dm/tools/oodle_serve/README.md
++ dm/tools/oodle_serve/ooz/kraken.cpp
++ dm/tools/oodle_serve/ooz/lzna.cpp
++ dm/tools/oodle_serve/ooz/bitknit.cpp
++ dm/tools/oodle_serve/ooz/stdafx.h
++ dm/tools/oodle_serve/ooz/COPYING
+~ dm/gfx/tools/uepak.py                  # pak versions 5-9, zstd blocks, AES on Windows (bcrypt) and Linux, ooz (Ooz), probe
