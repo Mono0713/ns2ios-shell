@@ -123,9 +123,10 @@ extension View {
 struct BackToTVButton: View {
     @State private var waiting = frontIosTvWaiting() != 0
     @Environment(\.uiK) private var k
+    @Environment(\.tenFoot) private var tenFoot   // on the iPad only: the TV looks the same in both modes, its footer's Home hint switches
     var body: some View {
         Group {
-            if waiting {
+            if waiting && !tenFoot {
                 Button { frontIosBackToTv() } label: {
                     HStack(spacing: 10) {
                         Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.ds(.headline, k: k))
@@ -802,6 +803,7 @@ private struct PickerView: View {
             KeyHint(key: "◀ ▶", text: tr("選擇", "Choose"))
             KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
             KeyHint(key: "Y", text: tr("玩家", "Players"))
+            if tv.on { KeyHint(key: "Home", text: tr("切換模式", "Switch mode")) }   // on the TV, the same in console and handheld mode
         }
         .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
         .opacity(m.starting ? 0 : 1)
