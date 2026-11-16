@@ -68,7 +68,35 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      return unzs_dict(d, did, path)
  
  def frame_size(f):
-@@ -1606,8 +1626,16 @@
+@@ -1600,20 +1620,53 @@
+         return []
+     return out
+ 
+-def unity_shaders(d, label, out, trees):
+-    """Shaders and compute shaders in a UnityFS bundle or serialized file → out; raises NoTree when no type tree is available"""
++UNITY_PROGS = ('progVertex', 'progFragment', 'progGeometry', 'progHull', 'progDomain')
++
++def unity_blob_info(o):
++    """Shader object → {subprogram index: ((subshader, pass, program field), hardware tier, keyword names)} from m_ParsedForm, for the used-only selection (select_used).
++    Keyword indices are named through the shader's m_KeywordNames (Unity 2021.2 on) or the pass's m_NameIndices (before); an index neither names stays '#<index>'"""
++    pf = o.get('m_ParsedForm') or {}
++    names = pf.get('m_KeywordNames')
++    info = {}
++    for i, sub in enumerate(pf.get('m_SubShaders', [])):
++        for j, p in enumerate(sub.get('m_Passes', [])):
++            inv = {e['second']: e['first'] for e in (p.get('m_NameIndices') or []) if isinstance(e, dict) and 'first' in e and 'second' in e}
++            for f in UNITY_PROGS:
++                prog = p.get(f) or {}
++                for sp in list(prog.get('m_SubPrograms', [])) + [x for tier in prog.get('m_PlayerSubPrograms', []) for x in tier]:
++                    idx = [x for fld in ('m_KeywordIndices', 'm_GlobalKeywordIndices', 'm_LocalKeywordIndices') for x in (sp.get(fld) or [])]
++                    kw = frozenset((names[x] if names and x < len(names) else inv.get(x, f'#{x}')) for x in idx)
++                    info.setdefault(sp.get('m_BlobIndex'), ((i, j, f), sp.get('m_ShaderHardwareTier', -1), kw))
++    return info
++
++def unity_shaders(d, label, out, trees, meta=None):
++    """Shaders and compute shaders in a UnityFS bundle or serialized file → out; raises NoTree when no type tree is available.
++    meta (a dict): each Shader program's where → (variant group, hardware tier, keyword names), for the used-only selection (select_used)"""
+     import unityfs
      if COMMON is None: red(f'{label}: a Unity asset, but main has no Unity common string table')
      sers = unityfs.bundle_files(d) if d[:8] == b'UnityFS\0' else [('', d)]
      for node, x in sers:
@@ -86,23 +114,96 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
 +        for cid, pid, o in objs:
              name = o['m_ParsedForm']['m_Name'] if 'm_ParsedForm' in o else o.get('m_Name', '?')
              stages = unity_stages(o)
++            info = unity_blob_info(o) if meta is not None else {}
              for plat, k, sp in unityfs.shader_programs(o, unity_code_blobs(o)):
-@@ -1776,10 +1804,12 @@
+                 where = f'{label}{":" + node if node else ""}#{name}#var{plat}.{k}'
+-                code = unityfs.subprogram(sp)[4]
++                _, _, kw, lkw, code, _ = unityfs.subprogram(sp)
+                 out.extend((where, st, ctl, cd) for st, ctl, cd in unity_program(code, where, stages.get(k)))
++                if meta is not None:
++                    pas, tier, ikw = info.get(k, (None, -1, frozenset()))
++                    # the subprogram's own keyword names (before Unity 2021.2) are the surest; a shader without m_ParsedForm puts all its programs in one group
++                    meta[where] = ((f'{label}{":" + node if node else ""}#{name}', plat, pas), tier, frozenset(kw) | frozenset(lkw) if kw or lkw else ikw)
+         out.extend(unity_compute(x, f'{label}{":" + node if node else ""}', trees))
+         out.extend(unity_text_glslc(x, f'{label}{":" + node if node else ""}'))
+ 
+@@ -1776,10 +1829,14 @@
              d = head_d if len(head_d) >= struct.unpack_from('<I', d, 10)[0] else xnb_decompress(d)
          else:
              d = xnb_decompress(d)
 -    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and __import__('unityfs').is_serialized(d)):
 +    if d[:8] == b'UnityFS\0' or (d[8:11] == b'\0\0\0' and (__import__('unityfs').is_serialized(d) or __import__('unityfs').newer_format(d))):
          import unityfs
-         try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
+-        try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
 -        except unityfs.NoTree: return rel, {}, set(), 'defer'
++        meta = {}
++        try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES), meta)
 +        except unityfs.NoTree as e:
 +            if TREES: print(f'/{rel}: {e}', flush=True)   # the second pass: say which class and type hash had no tree, so the layout can be added to unityfs.py
 +            return rel, {}, set(), 'defer'
++        return rel, with_meta(uniq_keys(found), found, meta), var_pairs(found), trees
      elif b'BNSH\0\0\0\0' not in d and b'BAHS' not in d and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and b'Yaz0' in d) and b'\x91\x68\x86\x19' not in d and MGFX not in d and NEEDLE not in d: return rel, {}, set(), {}   # a SARC may hold Yaz0 members
      else:
          scan_blob(d, '/' + rel, found)
-@@ -1806,18 +1836,30 @@
+@@ -1795,6 +1852,57 @@
+         if key in uniq and not same_shader(uniq[key][2:4], (ctl, code)): red(f'key {key} is the same but the control section or code area differs ({where})')
+         uniq.setdefault(key, (where, st, ctl, code))
+     return uniq
++
++def with_meta(uniq, found, meta):
++    """uniq's Unity Shader programs get a fifth field: [(variant group, stage, hardware tier, keyword names)] of every program that has that key (variants of one shader often compile to the same code)"""
++    if not meta: return uniq
++    km = collections.defaultdict(list)
++    for where, st, ctl, code in found:
++        m = meta.get(where)
++        if m: km[skey(ctl, code)].append((m[0], st, m[1], m[2]))
++    return {k: v + (km[k],) if k in km else v for k, v in uniq.items()}
++
++# Used-only packing. A Unity game ships every keyword variant of its shaders as a program of its own: Overcooked! All You Can Eat has 520,394, Pummel Party 276,367, and translating them all
++# takes hours (then the phone compiles them for hours and the push carries hundreds of thousands of files), while the game draws with a few thousand. Past USED_ONLY_ABOVE Unity
++# programs (DM_SHADER_ALL=1: all of them anyway) only these are packed:
++#   · the keys the phone recorded (DM_SHADER_USED: a folder of *.keys files, one key a line, which the host writes for every shader the map lacks: nvn_mtl.m shader_record_miss);
++#   · in every variant group (one stage of one pass of one Shader), the variant(s) with the fewest keywords, so every shader draws from the first run, if not in the right variant;
++#   · predicted: in every group, the variants whose keywords equal a recorded variant's keywords that this group knows. Unity picks a variant from the keywords enabled at the time
++#     (the global ones, the same for every shader drawn then, and the material's), so a keyword set seen in one shader tells which variant the others draw with.
++# The rest the phone records as the game reaches them, and the next pack adds them (only those are translated: the shader cache keeps the others).
++USED_ONLY_ABOVE = 40000
++SEED_PER_GROUP = 4
++
++def recorded_keys(folder):
++    """the shader keys the phone recorded (*.keys files in folder)"""
++    out = set()
++    if folder and os.path.isdir(folder):
++        for n in sorted(os.listdir(folder)):
++            if n.endswith('.keys'):
++                with open(os.path.join(folder, n), encoding='utf-8', errors='replace') as f:
++                    out.update(ln for ln in (x.strip().lower() for x in f) if re.fullmatch(r'[0-9a-f]{16}', ln))
++    return out
++
++def select_used(metas, recorded):
++    """metas: {key: [(group, stage, tier, keywords)]} of the Unity Shader programs → (keys to pack, {'recorded': n, 'seed': n, 'predicted': n})"""
++    groups = collections.defaultdict(list)
++    for k, ms in metas.items():
++        for g, st, tier, kw in ms: groups[(g, st)].append((k, tier, kw))
++    rec = recorded & metas.keys()
++    seen = {kw for k in rec for _, _, _, kw in metas[k]}
++    keep, why = set(rec), collections.Counter(recorded=len(rec))
++    targets = {}   # keyword space → the recorded keyword sets as this space sees them (many groups share a space)
++    for vs in groups.values():
++        fewest = min(len(kw) for _, _, kw in vs)
++        for k, _, _ in sorted((v for v in vs if len(v[2]) == fewest), key=lambda v: (sorted(v[2]), v[1], v[0]))[:SEED_PER_GROUP]:
++            if k not in keep: keep.add(k); why['seed'] += 1
++        if not seen: continue
++        space = frozenset().union(*(kw for _, _, kw in vs))
++        if space not in targets: targets[space] = {o & space for o in seen}
++        t = targets[space]
++        for k, _, kw in vs:
++            if kw in t and k not in keep: keep.add(k); why['predicted'] += 1
++    return keep, why
+ 
+ def nso_image(path):
+     import lz4.block
+@@ -1806,18 +1914,30 @@
          img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
      return bytes(img)
  
@@ -135,7 +236,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          img = nso_image(mainnso)
          if not i:
              import unityfs
-@@ -1831,9 +1873,24 @@
+@@ -1831,9 +1951,24 @@
          # calls glslcCompile in a module it loads (Fire Emblem: Three Houses; profile_guess.py shader_sources). Captain Toad: Treasure Tracker imports it with agl's GLSL sources, but no module defines it
          cap = os.environ.get('DM_GLSLC_CAPTURE') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'glslc_capture')
          names = sorted(f for f in os.listdir(cap) if f.endswith('.glslc')) if os.path.isdir(cap) else []
@@ -162,7 +263,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          # Unreal Engine shader code archives decoded on the Mac (uepak.py): <version dir>/ue_shaders, or DM_UE_SHADERS; needed when the RomFS has Unreal paks
          ued = os.environ.get('DM_UE_SHADERS') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'ue_shaders')
          names = sorted(f for f in os.listdir(ued) if f.endswith('.ushaderbytecode')) if os.path.isdir(ued) else []
-@@ -1865,10 +1922,14 @@
+@@ -1865,10 +2000,14 @@
          # a hash no bundle supplied takes the layout unityfs.py has for it (KNOWN_TREES); only here, so files a bundle lends a tree to keep their place in the tables (Ace Attorney's built-ins)
          import unityfs
          for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
@@ -178,3 +279,33 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          results = [r for r in results if r[3] != 'defer'] + again
      per_src = collections.Counter(); pairs = set()
      for rel, uniq, pr, _ in results:
+@@ -1876,8 +2015,20 @@
+         for key, v in uniq.items():
+             if key in keys:
+                 if not same_shader(keys[key][2:4], v[2:4]): red(f'key {key} is the same but the control section or code area differs ({v[0]} / {keys[key][0]})')
++                if len(v) > 4: keys[key] = keys[key][:4] + ((keys[key][4] if len(keys[key]) > 4 else []) + v[4],)   # a Unity variant in several files: every group it belongs to
+                 continue
+             keys[key] = v; per_src[group(v[0])] += 1
++    metas = {k: v[4] for k, v in keys.items() if len(v) > 4}
++    if len(metas) > USED_ONLY_ABOVE and os.environ.get('DM_SHADER_ALL') != '1':
++        used = os.environ.get('DM_SHADER_USED', '')
++        recorded = recorded_keys(used)
++        keep, why = select_used(metas, recorded)
++        keys = {k: v for k, v in keys.items() if k not in metas or k in keep}
++        pairs = {x for x in pairs if x[0] in keys and x[1] in keys}
++        per_src = collections.Counter(group(v[0]) for v in keys.values())
++        print(f'used-only: {len(metas):,} Unity shader programs, {len(metas) - len(keep & metas.keys()):,} left out: {why["recorded"]:,} the phone recorded'
++              f' (of {len(recorded):,} in {used or "-"}), {why["seed"]:,} with the fewest keywords of their pass, {why["predicted"]:,} predicted from the recorded keywords;'
++              f' the phone records the rest the game draws with (DM_SHADER_RECORD) for the next pack', flush=True)
+     prog = {(a, b) for a, b, *t in pairs if t} - pairs; pairs = {x for x in pairs if len(x) == 2}
+     sp, cover = separable_pairs(keys); pairs |= sp
+     if cover: print(f'single-stage programs: {len({v for v, _ in sp}):,} vertex shaders are paired with a cover of {len(cover)} pixel shader(s) ({" ".join(cover)})')
+@@ -1886,7 +2037,7 @@
+         if f.endswith('.bin'): os.unlink(os.path.join(pkg, f))
+     recs = collections.defaultdict(list); rows = []; facts = {}; stat = collections.Counter()
+     for key in sorted(keys, key=lambda k: (group(keys[k][0]), keys[k][0], k)):   # the same input gives byte-identical output
+-        where, st, ctl, code = keys[key]
++        where, st, ctl, code = keys[key][:4]
+         name = f'{st}_{group(where)}.bin'
+         rec = bytearray(b'BTCDBTCD' + bytes(0x30)); struct.pack_into('<2I', rec, 0x28, len(ctl), len(code)); rec += code + ctl
+         if rec.find(CTL_MAGIC) != 0x38 + len(code): red(f'key {key}: the control magic appears in the code area, dmsh_build would split the record wrongly')
