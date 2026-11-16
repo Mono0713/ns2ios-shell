@@ -9,7 +9,8 @@
 //                                               | launcher (on 0/1: the settings screen is shown)
 //   DMLauncherInput (posted here, main thread)   while the launcher is shown, each player's controller or phone: userInfo p (player from 1), key: a | b | plus | up |
 //                                               down | left | right (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can
-//                                               repeat them). Player 1 drives the whole screen, the others only their own row
+//                                               repeat them). Player 1 drives the whole screen, the others only their own row (all of them have player 1's say while nobody holds it in
+//                                               console mode: acting())
 //   DMHomePressed (posted here, main thread)    a player pressed Home: a controller's Home (Xbox) button, − and + together, or a phone page's Home button
 //                                               (shell_slot_home): userInfo p (player from 1). front_ios.m opens or closes its menu over the game
 //   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
@@ -51,9 +52,17 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 static atomic_int g_launcher;
 static _Atomic uint64_t g_last_nav[DM_PLAYERS];   // each player's buttons, the left stick folded into the D-pad
 static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
+// While no controller or phone holds player 1 in console mode (the picture on the TV, so the iPad's touch controls are not player 1 either), every player
+// has player 1's say: the launcher, the picker, the Players card and the Home menu take anyone's input as player 1's, so a game whose player 1 left is never
+// stuck with nobody able to run the menus or move someone to P1. The numbers stay as they are; handheld mode keeps the iPad as player 1
+int front_ios_console_mode(void);
+static int acting(int p) { return p > 0 && !shell_slot_held(0) && front_ios_console_mode() ? 0 : p; }   // main thread (the TV's window is UIKit's)
 static void home_press(int p) {   // any thread
-    NSDictionary *u = @{@"p": @(p + 1)};
-    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:u]; });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        int a = acting(p);
+        if (a != p) LOG("player %d's Home counts as player 1's: nobody holds player 1", p + 1);
+        [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1)}];
+    });
 }
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
@@ -79,8 +88,10 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         int on = (pressed >> keys[i].bit & 1) != 0;
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
-        NSDictionary *u = @{@"key": @(keys[i].key), @"on": @(on), @"p": @(p + 1)};
-        dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:u]; });
+        NSString *key = @(keys[i].key);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:@{@"key": key, @"on": @(on), @"p": @(acting(p) + 1)}];
+        });
     }
 }
 
