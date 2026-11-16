@@ -526,6 +526,9 @@ private struct PadsCard: View {
     @State private var dragOffset: CGSize = .zero
     @State private var dropOn: Int?
     private func place(at p: CGPoint) -> Int? { frames.first { $0.value.contains(p) }?.key }
+    // Only player 1 moves players, as with a controller: by touch only while the iPad is player 1 (handheld mode, its touch controls, with no
+    // controller or phone holding P1); otherwise the card shows the numbers and player 1's controller or phone moves them
+    private var touchMoves: Bool { !tenFoot && !players.players.contains { $0.player == 1 } }
     var body: some View {
         VStack(alignment: .leading, spacing: 22 * k) {
             HStack {
@@ -627,10 +630,13 @@ private struct PadsCard: View {
         .contentShape(Rectangle())
         .onTapGesture {   // tap a player: picked up (it buzzes), tap a place: it moves there (the two swap); a removed one is added back
             m.sel = i
-            if let p = m.picked {
+            if let p = m.picked, touchMoves {
                 if p != i { players.send(["op": "swap", "a": p + 1, "b": n]) }
                 m.picked = nil
-            } else if row != nil { m.picked = i; players.send(["op": "identify", "p": n]) }
+            } else if row != nil {
+                if touchMoves { m.picked = i }
+                players.send(["op": "identify", "p": n])
+            }
             else if let r = back { players.send(["op": "add", "index": r.index]) }
         }
         .gesture(DragGesture(minimumDistance: 10, coordinateSpace: .named("pads"))   // or drag a player onto another place
@@ -642,7 +648,7 @@ private struct PadsCard: View {
             .onEnded { v in
                 if let to = place(at: v.location), to != i { players.send(["op": "swap", "a": n, "b": to + 1]); m.sel = to }
                 withAnimation(DS.spring) { dragging = nil; dragOffset = .zero; dropOn = nil }
-            }, including: row == nil ? .subviews : .all)   // only a player can be dragged
+            }, including: row == nil || !touchMoves ? .subviews : .all)   // only a player can be dragged, and only while the iPad is player 1
     }
 }
 
