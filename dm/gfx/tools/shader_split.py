@@ -1720,6 +1720,28 @@ def ps_inputs(code):
     """Generic attributes a pixel shader reads: SPH words 6–13 are the input map, 8 bits for each of the 32 attributes (Ryujinx ShaderHeader.ImapTypes), non-zero = read; the translated MSL inputs are exactly user(locn<attribute>)"""
     return {i for i in range(32) if struct.unpack_from('<I', code, 0x30 + 4 * (6 + (i >> 2)))[0] >> ((i & 3) * 8) & 0xff}
 
+def ps_targets(code):
+    """Colour targets a pixel shader writes: SPH word 18 is the output map, 4 bits (RGBA) for each of the 8 targets (Ryujinx ShaderHeader.OmapTargets) → {target index}"""
+    w = struct.unpack_from('<I', code, 0x30 + 4 * 18)[0]
+    return {t for t in range(8) if w >> (4 * t) & 0xf}
+
+def fout_rule(keys):
+    """The profile's shader_fout key, '<target>=<uint|sint> ...': a game whose G-buffer has an integer colour target in a fixed slot. With no PC version the translator declares every
+    output float, and Metal refuses a pipeline whose float output meets an integer attachment ('output of type float4 is not compatible with a MTLPixelFormatR8Uint color attachment').
+    Kirby and the Forgotten Land writes colour 5 into an R8Uint target beside float ones in its scene shaders (upstream issue #2760): 145 refused pipelines and a black scene on the iPad
+    at Point of Arrival, which one shader_facts_manual.tsv row per shader followed only as far as the route went. Every pixel shader whose output map has the target gets the type
+    (fout facts, as a manual row would give: the output's bits go to the target, as on the GPU). → {key: {target: type}}"""
+    rule = {t: ty for t, ty in GAME.pairs('shader_fout')} if GAME.values('shader_fout') else {}
+    for t, ty in rule.items():
+        if not t.isdigit() or int(t) > 7 or ty not in ('uint', 'sint'): red(f'shader_fout {t}={ty}: want <target 0-7>=<uint|sint>')
+    if not rule: return {}
+    out = {}
+    for key, v in keys.items():
+        if v[1] != 'ps' or len(v[3]) < 0x30 + 0x50: continue
+        hit = {t: ty for t, ty in rule.items() if int(t) in ps_targets(v[3])}
+        if hit: out[key] = hit
+    return out
+
 SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
 # MonoGame's effects, whose passes may name no vertex shader and keep the one bound (Celeste: 10 of its 13 effects draw through SpriteBatch's vertex shader, which is in main); Next Level Games'
 # archives (Luigi's Mansion 3 makes 5,317 programs of one stage each at boot); PlatinumGames' shader objects (Bayonetta 3: one stage each, pg_shader); control sections loose in main
@@ -2067,6 +2089,10 @@ def main():
         f.write('# column 5 records where each key first appears; this game has no PC version to pair with\n')
         f.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
         for r in rows: f.write('\t'.join(map(str, r)) + '\n')
+    # Integer colour targets by the profile (shader_fout): every pixel shader that writes the target gets that output type (fout_rule)
+    fr = fout_rule(keys)
+    for key, f in fr.items(): facts[key] = {**facts.get(key, {}), 'fout': {**facts.get(key, {}).get('fout', {}), **f}}
+    if fr: print(f'shader_fout: {len(fr):,} pixel shaders write an integer colour target ({GAME.get("shader_fout")})')
     # Hand-written facts the machine code cannot give (the profile's shader_facts_manual.tsv, same row format) are merged over the generated ones, so the table stays reproducible
     manual = GAME.table('shader_facts_manual.tsv')
     if os.path.exists(manual):
