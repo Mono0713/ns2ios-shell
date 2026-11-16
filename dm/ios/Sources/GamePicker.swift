@@ -53,7 +53,7 @@ final class TenFoot: ObservableObject {
     private var token: NSObjectProtocol?
     deinit { if let token { NotificationCenter.default.removeObserver(token) } }
     private func refresh() {
-        let now = onTV || frontIosTvWaiting() != 0
+        let now = onTV   // the TV's window only: in handheld mode the TV shows its own copy at the TV's size, the iPad keeps the iPad's layout
         if now != on { on = now }   // at once: animated, every text and box of the screen moved to its new size on its own when the launcher opened
     }
 }
@@ -327,6 +327,7 @@ private final class PickerModel: ObservableObject {
     @Published var starting = false
     @Published var padsOpen = false
     @Published var sel = 0   // the highlighted place on the players card (player sel + 1)
+    @Published var picked: Int?   // a player picked up to move to another number (A or a tap, then A or a tap on the place; or dragged there)
     var count: Int { games.count + 1 }
     func game(_ i: Int) -> PickerGame? { games.indices.contains(i - 1) ? games[i - 1] : nil }
     var start: (PickerGame) -> Void = { _ in }
@@ -505,6 +506,11 @@ private func removedAt(_ i: Int, _ players: PlayersModel) -> RemovedPad? {
     return players.removed[k]
 }
 
+private struct PlaceFrames: PreferenceKey {
+    static let defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) { value.merge(nextValue()) { $1 } }
+}
+
 // The players card: the QR code and address on the left, the eight places on the right (two columns of four, so it keeps its size)
 private struct PadsCard: View {
     @ObservedObject var m: PickerModel
@@ -515,6 +521,11 @@ private struct PadsCard: View {
     @Environment(\.tenFoot) private var tenFoot
     // its places have fixed sizes: its text a size smaller than the rest of the TV layout (Dynamic Type's xLarge, as before), the boxes k times
     private var t: CGFloat { tenFoot ? k * 0.68 : 1 }
+    @State private var frames: [Int: CGRect] = [:]   // each place, in the grid's space: where a dragged player lands
+    @State private var dragging: Int?
+    @State private var dragOffset: CGSize = .zero
+    @State private var dropOn: Int?
+    private func place(at p: CGPoint) -> Int? { frames.first { $0.value.contains(p) }?.key }
     var body: some View {
         VStack(alignment: .leading, spacing: 22 * k) {
             HStack {
@@ -543,10 +554,12 @@ private struct PadsCard: View {
                         GridRow { place(r); place(r + 4) }
                     }
                 }
+                .coordinateSpace(name: "pads")
+                .onPreferenceChange(PlaceFrames.self) { frames = $0 }
             }
             HStack(spacing: 22 * k) {
                 Spacer()
-                KeyHint(key: "A", text: tr("震動", "Identify")); KeyHint(key: "−", text: tr("切換配置", "Layout")); KeyHint(key: "X", text: tr("移除", "Remove")); KeyHint(key: "B", text: tr("關閉", "Close"))
+                KeyHint(key: "A", text: m.picked == nil ? tr("換位置", "Move") : tr("放這裡", "Put here")); KeyHint(key: "−", text: tr("切換配置", "Layout")); KeyHint(key: "X", text: tr("移除", "Remove")); KeyHint(key: "B", text: tr("關閉", "Close"))
             }
             .font(.ds(.callout, k: t)).foregroundStyle(.white.opacity(0.6))
         }
@@ -561,6 +574,7 @@ private struct PadsCard: View {
         let row = players.players.first { $0.player == n }
         let back = removedAt(i, players)   // a controller removed here, offered in a free place so it can be added back
         let lit = activity.lit.contains(n), sel = m.sel == i
+        let picked = m.picked == i || dragging == i, target = (m.picked != nil && sel && m.picked != i) || (dragging != nil && dropOn == i && dragging != i)
         HStack(spacing: 8 * k) {
             Text("P\(n)").font(.ds(.headline, .heavy, k: t)).frame(width: 40 * k, height: 32 * k)
                 .foregroundStyle(row == nil ? Color.white.opacity(0.35) : Color.black.opacity(0.85))
@@ -599,17 +613,36 @@ private struct PadsCard: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: DS.rowRadius * k, style: .continuous)
-                .strokeBorder(sel ? systemBlue : row == nil ? Color.white.opacity(0.12) : lit ? color : .clear,
-                              style: StrokeStyle(lineWidth: (sel ? 2 : row == nil ? 1.5 : 1) * k, dash: row == nil && !sel ? [5 * k, 4 * k] : []))
+                .strokeBorder(picked || sel ? systemBlue : row == nil ? Color.white.opacity(0.12) : lit ? color : .clear,
+                              style: StrokeStyle(lineWidth: (picked ? 3 : sel ? 2 : row == nil ? 1.5 : 1) * k, dash: (row == nil && !sel) || target ? [5 * k, 4 * k] : []))
         }
-        .scaleEffect(lit ? 1.02 : 1)
+        .background(GeometryReader { g in Color.clear.preference(key: PlaceFrames.self, value: [i: g.frame(in: .named("pads"))]) })
+        .scaleEffect(picked ? 1.04 : lit ? 1.02 : 1)
+        .shadow(color: .black.opacity(picked ? 0.5 : 0), radius: 16 * k, y: 8 * k)
+        .offset(dragging == i ? dragOffset : .zero)
+        .zIndex(dragging == i ? 1 : 0)
         .animation(.easeOut(duration: 0.12), value: lit)
         .animation(DS.spring, value: sel)
+        .animation(DS.spring, value: picked)
         .contentShape(Rectangle())
-        .onTapGesture {   // tap: that controller or phone buzzes; a removed one is added back
+        .onTapGesture {   // tap a player: picked up (it buzzes), tap a place: it moves there (the two swap); a removed one is added back
             m.sel = i
-            if row != nil { players.send(["op": "identify", "p": n]) } else if let r = back { players.send(["op": "add", "index": r.index]) }
+            if let p = m.picked {
+                if p != i { players.send(["op": "swap", "a": p + 1, "b": n]) }
+                m.picked = nil
+            } else if row != nil { m.picked = i; players.send(["op": "identify", "p": n]) }
+            else if let r = back { players.send(["op": "add", "index": r.index]) }
         }
+        .gesture(DragGesture(minimumDistance: 10, coordinateSpace: .named("pads"))   // or drag a player onto another place
+            .onChanged { v in
+                dragging = i; m.picked = nil
+                dragOffset = v.translation
+                dropOn = place(at: v.location)
+            }
+            .onEnded { v in
+                if let to = place(at: v.location), to != i { players.send(["op": "swap", "a": n, "b": to + 1]); m.sel = to }
+                withAnimation(DS.spring) { dragging = nil; dragOffset = .zero; dropOn = nil }
+            }, including: row == nil ? .subviews : .all)   // only a player can be dragged
     }
 }
 
@@ -639,7 +672,7 @@ private struct PickerView: View {
                     footer(k).padding(.horizontal, 32 * k).padding(.bottom, 22 * k)
                 }
                 if m.padsOpen {
-                    Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.padsOpen = false }
+                    Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.picked = nil; m.padsOpen = false }
                         .transition(.opacity)
                     PadsCard(m: m, pads: pads, players: players).padding(32 * k)
                         .dynamicTypeSize(tv.on ? .xLarge ... .xLarge : .xSmall ... .accessibility5)   // its places have fixed sizes: a little larger on a TV, not the whole step
@@ -776,12 +809,16 @@ private struct PickerView: View {
         case "down": if m.sel % 4 < 3 { m.sel += 1 }
         case "left": if m.sel >= 4 { m.sel -= 4 }
         case "right": if m.sel < 4 { m.sel += 4 }
-        case "a":
-            if let r = row { players.send(["op": "identify", "p": r.player]) }
+        case "a":   // as the in-game menu's Players page: A picks a player up (its controller buzzes), the arrows choose the number, A puts it there
+            if let p = m.picked {
+                if p != m.sel { players.send(["op": "swap", "a": p + 1, "b": m.sel + 1]) }
+                m.picked = nil
+            } else if let r = row { m.picked = m.sel; players.send(["op": "identify", "p": r.player]) }
             else if let r = removedAt(m.sel, players) { players.send(["op": "add", "index": r.index]) }
-        case "minus": if let r = row { players.send(["op": "layout", "p": r.player, "xbox": r.xbox ? 0 : 1]) }
-        case "x": if let r = row { players.send(["op": "kick", "p": r.player]) }
-        case "b", "y": m.padsOpen = false
+        case "minus": if let r = row, m.picked == nil { players.send(["op": "layout", "p": r.player, "xbox": r.xbox ? 0 : 1]) }
+        case "x": if let r = row, m.picked == nil { players.send(["op": "kick", "p": r.player]) }
+        case "b" where m.picked != nil: m.picked = nil
+        case "b", "y": m.picked = nil; m.padsOpen = false
         default: break
         }
     }
