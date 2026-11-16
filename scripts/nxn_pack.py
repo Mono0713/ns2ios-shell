@@ -33,7 +33,7 @@ nxnative-windows-tools.zip holds all five, so nothing has to be installed by han
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, concurrent.futures as cf, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile
+import argparse, concurrent.futures as cf, hashlib, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile
 from pathlib import Path
 
 PY = sys.executable
@@ -1040,12 +1040,45 @@ def shader_rows(tb):
     return max(0, len(rows) - 1)
 
 
+def used_digest(folder):
+    """what the phone recorded (see take_used_shaders), as one value: a split made from other recordings is redone"""
+    h = hashlib.sha256()
+    for f in sorted(Path(folder).glob('*.keys')) if folder and Path(folder).is_dir() else []:
+        h.update(f.name.encode() + b'\0' + f.read_bytes() + b'\0')
+    return h.hexdigest()
+
+
+def take_used_shaders(folder, game):
+    """Copy the shader keys recorded on the phone (*.keys) to <version dir>/shader_used, which shader_split.py reads through
+    DM_SHADER_USED. Returns how many distinct keys there are."""
+    dst = game / 'shader_used'
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    keys = set()
+    for f in sorted(Path(folder).resolve().glob('*.keys')) if folder and Path(folder).is_dir() else []:
+        t = f.read_text(encoding='utf-8', errors='replace')
+        (dst / f.name).write_text(t, encoding='utf-8')
+        keys.update(l.strip().lower() for l in t.splitlines() if len(l.strip()) == 16)
+    return len(keys)
+
+
+def used_only(work):
+    """shader_split.py packed only the shaders the game uses (a Unity game with too many keyword variants): the package records the rest"""
+    log = work / 'logs' / 'shader_split.log'
+    try: return '\nused-only: ' in '\n' + log.read_text(encoding='utf-8', errors='replace')
+    except OSError: return False
+
+
 def step_shaders(game, prof_dir, tables, work, tid, force=False):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
     need_shaders(prof_dir, 'this game')
     pkg, tb = work / 'shader' / 'pkg', work / 'shader' / 'tables'
-    if not force and (pkg / 'index.tsv').is_file() and all((tb / n).is_file() for n in tables):
+    used = game / 'shader_used'
+    mark = tb / 'shader_used.digest'   # the recordings the split was made from
+    try: same_used = mark.read_text(encoding='utf-8').strip() == used_digest(used)
+    except OSError: same_used = not any(used.glob('*.keys')) if used.is_dir() else True
+    if not force and same_used and (pkg / 'index.tsv').is_file() and all((tb / n).is_file() for n in tables):
         say('shader split already done'); return pkg, tb
     tb.mkdir(parents=True, exist_ok=True)
     # argv of shader_split.py: romfs, main, package, shader_map.tsv, shader_facts.tsv, shader_pairs.tsv, pso_pairs.tsv --
@@ -1053,8 +1086,9 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
     # asks for it (split_shaders, names + ('pso_pairs.tsv',))
     names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
     run([PY, GFX / 'shader_split.py', game / 'RomFS', game / 'ExeFS' / 'main', pkg] + [tb / n for n in names],
-        env={'DM_GAME': tid}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
+        env={'DM_GAME': tid, 'DM_SHADER_USED': str(used)}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
         hint=shader_split_hint)
+    mark.write_text(used_digest(used) + '\n', encoding='utf-8')
     for n in names:
         a, b = tb / n, prof_dir / n
         if b.is_file():
@@ -1124,7 +1158,10 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         if not res or any(r.get('st') != 'ok' for r in res): return False
         d = iosout / marks[-1].parent.name
         have = {x.name for x in d.glob('*_b.metallib')} if d.is_dir() else set()
-        return all(r['key'] + '_b.metallib' in have for r in res)
+        # and every shader of the map now: a used-only split redone with new recordings names shaders the last build did not have
+        try: want = {l.split('\t')[3] for l in (work / 'shader' / 'tables' / 'shader_map.tsv').read_text(encoding='utf-8').splitlines()[3:] if l.count('\t') >= 3}
+        except OSError: want = set()
+        return all(r['key'] + '_b.metallib' in have for r in res) and all(k + '_b.metallib' in have for k in want)
     if not force and done():
         say('shader libraries already there'); return
     need_tool('spirv-cross', 'translate SPIR-V to Metal Shading Language',
@@ -1454,6 +1491,10 @@ def main():
                     help="the GLSLC outputs an NVN game compiled at run time on the phone (<hash>.glslc, which DM_GLSLC_CAPTURE "
                          'writes; Unrailed 2, Godot): split and translated like the shaders the game files hold. Without it '
                          'such a game is packed with what its files hold and records the rest on the phone.')
+    ap.add_argument('--used-shaders', default='', metavar='FOLDER',
+                    help="the shader keys a game packed with only the shaders it uses recorded on the phone (*.keys, which "
+                         'DM_SHADER_RECORD writes: a Unity game with more than 40,000 keyword variants, Overcooked! All You '
+                         'Can Eat, Pummel Party): those are translated and packed too.')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
                          'modules and the shaders (it is several times the size of the game)')
@@ -1705,10 +1746,17 @@ def main():
     # the four tables shader_split.py writes (upstream tuple, pso_pairs.tsv included since it is what the pipeline prebuild
     # reads; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
+    shader_record = False   # the package records the shaders it lacks, on the phone (Documents/shader_used/<title ID>): a Unity game packed with only the shaders it uses
     glslc_record = False   # the package records the GLSLC outputs the game compiles, on the phone (Documents/glslc_capture/<title ID>)
     if route == 'nvn':
         glslc_n = take_glslc_capture(a.glslc_capture, game)
+        used_n = take_used_shaders(a.used_shaders, game)
         pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n))
+        shader_record = used_only(work)
+        if shader_record:
+            say('too many Unity shader variants to translate them all: packed the ones this game draws with (%s); the phone '
+                'records the others it reaches (Documents/shader_used/%s) and the next pack adds them with --used-shaders'
+                % ('%d recorded on the phone' % used_n if used_n else 'none recorded yet: the first play may miss some objects', tid))
         glslc_record = bool(a.glslc_capture) or glslc_needed(work)
         if glslc_record:
             say('this game compiles shaders at run time with GLSLC: %s; the phone keeps recording the ones it compiles '
@@ -1782,6 +1830,12 @@ def main():
         lines = [l for l in lines if not l.startswith('DM_GL_CAPTURE=')] + ['DM_GL_CAPTURE=gl_capture/%s' % tid]
         env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         say('dm/env.txt: DM_GL_CAPTURE=gl_capture/%s (the phone records the GLSL the game compiles there)' % tid)
+    if shader_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_SHADER_RECORD=')] + ['DM_SHADER_RECORD=shader_used/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_SHADER_RECORD=shader_used/%s (the phone records the shaders the package lacks there)' % tid)
     if glslc_record:
         env = A / 'dm' / 'env.txt'
         lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []

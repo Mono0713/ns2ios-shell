@@ -3798,6 +3798,36 @@ static NvShader *builtin_get(const char *ctl) {
     }
     return nil;
 }
+// DM_SHADER_RECORD=<dir> (relative to Documents on the phone: shader_used/<title ID>, written into dm/env.txt by nxn_pack.py for a game packed with only the shaders it uses):
+// each shader key the game asks for that the shader map does not hold is written once, one per line, to <dir>/<16 hex digits of this run>.keys. Switch Pad takes the files back and the next
+// pack translates those shaders too (shader_split.py DM_SHADER_USED). Overcooked! All You Can Eat ships 520,394 Unity keyword variants and Pummel Party 276,367: translating all of them
+// takes hours and ships hundreds of thousands of files, while a game draws with a few thousand. The keys already recorded by earlier runs are read first, so each is written once.
+// The line is flushed at once: the game may be closed at any time. Called only on the submit thread (prog_get)
+static void shader_record_miss(const char *key) {
+    static const char *dir; static int init; static FILE *f; static NSMutableSet<NSString *> *seen;
+    if (!init) {
+        init = 1; dir = getenv("DM_SHADER_RECORD");
+        if (!dir || !*dir) { dir = NULL; return; }
+        char p[1024]; snprintf(p, sizeof p, "%s", dir); for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; } mkdir(p, 0755);
+        seen = [NSMutableSet set];
+        for (NSString *n in [NSFileManager.defaultManager contentsOfDirectoryAtPath:@(dir) error:nil]) {
+            if (![n hasSuffix:@".keys"]) continue;
+            NSString *t = [NSString stringWithContentsOfFile:[@(dir) stringByAppendingPathComponent:n] encoding:NSUTF8StringEncoding error:nil];
+            for (NSString *ln in [t componentsSeparatedByString:@"\n"]) if (ln.length == 16) [seen addObject:ln];
+        }
+        MLOG("shader record: shaders this package lacks are recorded in %s (%lu by earlier runs)", dir, (unsigned long)seen.count);
+    }
+    if (!dir) return;
+    NSString *k = @(key);
+    if ([seen containsObject:k]) return;
+    [seen addObject:k];
+    if (!f) {   // made at the first new key, so a run that lacks nothing leaves no empty file
+        char path[1100]; snprintf(path, sizeof path, "%s/%08lx%08x.keys", dir, (unsigned long)time(NULL), (unsigned)getpid());
+        if (!(f = fopen(path, "a"))) { MLOG("[RED] shader record: cannot write %s", path); dir = NULL; return; }
+    }
+    fprintf(f, "%s\n", key); fflush(f);
+    static unsigned n; if (n++ < 8 || !(n % 100)) MLOG("shader record: %u new shader(s) this run, the next pack adds them", n);
+}
 static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only on the submit thread
     prog_t *p = (prog_t *)cp;
     static const prog_t *lp; static uint64_t lser, lgen; static NvProg *lpr;   // Last result: same object, same serial and unchanged serial table means it is used directly
@@ -3815,7 +3845,8 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
         if (!stage) {   // Not in the package: look up the compute kernels embedded in the main body (nvn_builtin.h)
             NvShader *b = builtin_get(k.UTF8String);
             if (b) { o->sh[5] = b; continue; }
-            MLOG("[RED] shader %s is not in the shader map (DM_NVN_SHDUMP=directory saves its control section and code area)", k.UTF8String);
+            shader_record_miss(k.UTF8String);
+            if (!getenv("DM_SHADER_RECORD")) MLOG("[RED] shader %s is not in the shader map (DM_NVN_SHDUMP=directory saves its control section and code area)", k.UTF8String);
             // DM_NVN_SHDUMP=directory: shaders missing from the map are saved as <key>.ctl (0x880-byte control section) and <key>.code (code area, length from control +0x704), to trace their source / add them to the map offline
             static const char *shd; static int shd_init; if (!shd_init) { shd = getenv("DM_NVN_SHDUMP"); shd_init = 1; }
             if (shd) { char path[1024]; FILE *f; uint32_t ncode; memcpy(&ncode, (const uint8_t *)p->sd[i].control + 0x704, 4);   // with SHDUMP set the control section is the host's copy
