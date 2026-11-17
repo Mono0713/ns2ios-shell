@@ -110,7 +110,7 @@ def check(where, st, ctl, code):
 def bnsh_shaders(d, base, label):
     if d[base + 0x60:base + 0x64] != b'grsc': red(f'{label} BNSH @{base:#x} has no grsc block')
     nvar, pvar = struct.unpack_from('<IQ', d, base + 0x7c)
-    out = []
+    out, ns2 = [], 0
     for v in range(nvar):
         prog = struct.unpack_from('<Q', d, base + pvar + 0x40 * v + 0x10)[0]
         if not prog: continue
@@ -119,10 +119,20 @@ def bnsh_shaders(d, base, label):
             if not sc: continue
             pctl, pcode, ncode, nctl = struct.unpack_from('<QQII', d, base + sc + 8)
             ctl, code = d[base + pctl:base + pctl + nctl], d[base + pcode:base + pcode + ncode]
+            if switch2_stage(ctl, code): ns2 += 1; continue
             why = check(label, st, ctl, code)
             if why: red(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
             out.append((f'{label}#BNSH@{base:#x}#var{v}', st, ctl, code))
+    if ns2 and out: red(f'{label} BNSH @{base:#x}: {ns2} Switch 2 stage shaders mixed with {len(out)} Switch ones')
+    if ns2: print(f'{label} BNSH @{base:#x}: {ns2} Switch 2 stage shaders, skipped', flush=True)
     return out
+
+def switch2_stage(ctl, code):
+    """A stage shader built for the Switch 2's GPU, which no Switch game runs: Clubhouse Games: 51 Worldwide Classics 2.0.1 keeps its Bezel Engine system resources twice,
+    System.nx.bea for the Switch (control sections of 0x880 bytes, +0x20 their length, code areas with the 0x12345678 header) and System.ounce.bea ('Ounce', the Switch 2) whose 64 BNSH
+    (28,483 stage shaders) all have 0xd8-byte control sections (+4 = 0xc9 where the Switch's hold 1, +0x20 a hash) and code areas with no header. Such a control section is far shorter
+    than any Switch one (0x760 at least, see ctl_len), so that, with no code area header, tells the two apart"""
+    return ctl[:4] == CTL_MAGIC and len(ctl) < 0x760 and code[:4] not in (GFX_MAGIC, CS_MAGIC)
 
 def bahs_shaders(d, label):
     region, rsz = struct.unpack_from('<I', d, 0x1c)[0], struct.unpack_from('<I', d, 0x18)[0]
