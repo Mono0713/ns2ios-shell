@@ -1603,7 +1603,6 @@ def strip_romfs(ipa, folder, keys, tools_dir, allow_damaged=False):
         apps = scan_nsps(folder)
         fam = apps.get(tid) if tid else (next(iter(apps.values())) if len(apps) == 1 else None)
         if not fam or not fam['base']: die('no base game for %s in %s' % (tid or ipa.name, folder))
-        if fam['base'].suffix.lower() != '.nsp': die('%s is a cartridge dump: its package keeps the RomFS' % fam['base'].name)
         upds = sorted(fam['updates'], key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
         pkg = upds[-1] if upds else 'v0'
         nx = None
@@ -2184,7 +2183,7 @@ def main():
 
     stage = work / 'stage'
     romfs_rec = None
-    if romfs_source_wanted(a) and not is_dump and (game / 'RomFS').is_dir() and any((game / 'RomFS').iterdir()):
+    if romfs_source_wanted(a) and (game / 'RomFS').is_dir() and any((game / 'RomFS').iterdir()):
         listing = romfs_listing(game / 'RomFS')
         if listing:
             romfs_rec = romfs_record(listing, tid, pkg, picks[pkg][0], picks[pkg][1], nx, keys, a.allow_damaged)
