@@ -33,7 +33,7 @@ nxnative-windows-tools.zip holds all five, so nothing has to be installed by han
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, concurrent.futures as cf, hashlib, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile
+import argparse, concurrent.futures as cf, hashlib, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile, zlib
 from pathlib import Path
 
 PY = sys.executable
@@ -1530,7 +1530,108 @@ def env_for(rows):
     return lines
 
 
-def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work):
+# ---------------------------------------------------------------- RomFS left in the NSP (--romfs-source)
+#
+# A game package for Switch Pad's library carried the game's whole RomFS (most of its size), next to the NSP it was
+# extracted from, so every game sat on the disk twice (about 40 GB for a library of 33 games). The library never installs
+# the RomFS from the package anyway: romfs_data.py push copies it into the app's Documents on the iPad, and only when the
+# iPad does not have that RomFS yet (its id). With --romfs-source the package holds, instead of romfs/, a record of where
+# the RomFS comes from and what it holds: <App>/romfs.source.json (outside romfs/, dm/ and the other folders nxn_merge.py
+# copies, so it never reaches the iPad). Push extracts the RomFS from the NSP again with the same nx_extract (a minute or
+# two), checks every file against the list (name, size and the CRC-32 the zip entry used to carry, so the id is the same
+# and a game already on the iPad is not sent again) and removes the extraction afterwards.
+ROMFS_RECORD = 'romfs.source.json'
+
+
+def crc_file(path):
+    c = 0
+    with open(path, 'rb') as f:
+        while True:
+            b = f.read(8 << 20)
+            if not b: return c
+            c = zlib.crc32(b, c)
+
+
+def romfs_listing(romfs):
+    """[[path under RomFS with /, size, CRC-32]] of every file, sorted; CRCs over several threads (zlib releases the GIL)"""
+    files = []
+    for root, dirs, fs in os.walk(romfs):
+        dirs.sort()
+        for f in fs:
+            p = os.path.join(root, f)
+            files.append((os.path.relpath(p, romfs).replace(os.sep, '/'), p))
+    files.sort()
+    with cf.ThreadPoolExecutor(min(8, os.cpu_count() or 4)) as ex:
+        crcs = list(ex.map(lambda x: crc_file(x[1]), files))
+    return [[r, os.path.getsize(p), c] for (r, p), c in zip(files, crcs)]
+
+
+def nsp_ref(p):
+    p = Path(p).resolve()
+    return {'path': str(p), 'name': p.name, 'size': p.stat().st_size}
+
+
+def romfs_record(listing, tid, version, base, upd, nx, keys, allow_damaged):
+    return {'v': 1, 'tid': tid, 'version': version, 'base': nsp_ref(base), 'update': nsp_ref(upd) if upd else None,
+            'allow_damaged': bool(allow_damaged), 'nx': str(Path(nx).resolve()), 'keys': str(Path(keys).resolve()),
+            'files': len(listing), 'bytes': sum(x[1] for x in listing), 'list': listing}
+
+
+def romfs_source_wanted(a):
+    return a.romfs_source or os.environ.get('NXN_ROMFS_SOURCE', '') not in ('', '0')
+
+
+def strip_romfs(ipa, folder, keys, tools_dir, allow_damaged=False):
+    """--strip-romfs: turn a game package made before --romfs-source into one: the same package without romfs/, plus the
+    record, written from the zip's own entries (their names, sizes and CRCs), so nothing is extracted or packed again.
+    The NSP files are the ones a pack of this folder picks (the base game and the newest update)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from nxn_merge import Out
+    ipa = Path(ipa).resolve()
+    with zipfile.ZipFile(ipa) as z:
+        names = z.namelist()
+        A = next((n[:-len('Info.plist')] for n in names if re.fullmatch(r'Payload/[^/]+\.app/Info\.plist', n)), None)
+        if not A: die('%s is not an app package' % ipa)
+        if A + ROMFS_RECORD in names: say('%s already keeps its RomFS in the NSP' % ipa.name); return
+        if any(n.startswith(A + 'games/') for n in names): die('%s holds several games: only a single game\'s package can be stripped' % ipa.name)
+        pre = A + 'romfs/'
+        rom = [i for i in z.infolist() if i.filename.startswith(pre) and not i.is_dir()]
+        if not rom: say('%s has no RomFS to leave out' % ipa.name); return
+        pl = plistlib.loads(z.read(A + 'Info.plist'))
+        m = re.fullmatch(r'org\.nxnative\.([0-9a-f]{16})', pl.get('CFBundleIdentifier', ''))
+        tid = m.group(1).upper() if m else ''
+        apps = scan_nsps(folder)
+        fam = apps.get(tid) if tid else (next(iter(apps.values())) if len(apps) == 1 else None)
+        if not fam or not fam['base']: die('no base game for %s in %s' % (tid or ipa.name, folder))
+        if fam['base'].suffix.lower() != '.nsp': die('%s is a cartridge dump: its package keeps the RomFS' % fam['base'].name)
+        upds = sorted(fam['updates'], key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
+        pkg = upds[-1] if upds else 'v0'
+        nx = None
+        for n in ('nx_extract.exe', 'nx_extract'):
+            if tools_dir and (tools_dir / n).is_file(): nx = tools_dir / n
+        if not nx: die('--strip-romfs needs --tools with nx_extract in it (push extracts the RomFS with it)')
+        listing = sorted([i.filename[len(pre):], i.file_size, i.CRC] for i in rom)
+        rec = romfs_record(listing, tid, pkg, fam['base'], fam['updates'].get(pkg) if pkg != 'v0' else None, nx, keys, allow_damaged)
+        part = ipa.with_name(ipa.name + '.partial')
+        o = Out(str(part))
+        try:
+            for i in z.infolist():
+                if i.filename.startswith(pre): continue
+                o.copy(z, i, i.filename)
+            o.add(A + ROMFS_RECORD, json.dumps(rec, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+            o.close()
+        except BaseException:
+            try: o.f.close(); part.unlink()
+            except OSError: pass
+            raise
+    before = ipa.stat().st_size
+    os.replace(part, ipa)
+    say('%s: RomFS left out (%d files, %.2f GB stay in %s%s), package %.2f -> %.2f GB'
+        % (ipa.name, rec['files'], rec['bytes'] / 2**30, fam['base'].name, ' + ' + rec['update']['name'] if rec['update'] else '',
+           before / 2**30, ipa.stat().st_size / 2**30))
+
+
+def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work, romfs_rec=None):
     """Unpack the shell and put the game into it: guest library, MSL source, RomFS, tables, icon, identity."""
     # Move a previous stage aside instead of deleting it: this environment counts file deletions and refuses to go past a
     # threshold, which a 5000-file app tree trips instantly. Renaming keeps the build going; the old tree is reported so it
@@ -1565,8 +1666,14 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
         n = len(list(dst.glob('*_b.metallib')))
         if n: say('shader source for %d shaders -> msl/%s' % (n, msl_dir.name))   # empty for a GL package, whose shaders go to msl/gl instead
 
-    shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True, copy_function=link_or_copy)
-    say('RomFS in place')
+    if romfs_rec is not None:
+        (A / ROMFS_RECORD).write_text(json.dumps(romfs_rec, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+        say('RomFS stays in %s%s: %d files, %.2f GB (--romfs-source; push extracts it again)'
+            % (romfs_rec['base']['name'], ' + ' + romfs_rec['update']['name'] if romfs_rec['update'] else '',
+               romfs_rec['files'], romfs_rec['bytes'] / 2**30))
+    else:
+        shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True, copy_function=link_or_copy)
+        say('RomFS in place')
 
     # tables the game profile carries (shader map, c1 list, warm-up list, uniform extents)
     for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv'):
@@ -1732,7 +1839,18 @@ def main():
                     help='folder holding the nx_extract, dmsh_xlate, spirv-cross, glslangValidator and zstd executables '
                          '(the windows-tools CI artifact, packed as nxnative-windows-tools.zip). They are put on PATH and '
                          'used instead of building anything.')
+    ap.add_argument('--romfs-source', action='store_true',
+                    help='leave the RomFS out of the package and record where it comes from instead (Switch Pad\'s library: '
+                         'romfs_data.py push extracts it from the NSP again when the iPad needs it). Also NXN_ROMFS_SOURCE=1')
+    ap.add_argument('--strip-romfs', default='', metavar='IPA',
+                    help='turn a game package packed without --romfs-source into one (nsp_dir: its game folder; needs -k and '
+                         '--tools), and exit')
     a = ap.parse_args()
+    if a.strip_romfs:
+        if not a.nsp_dir: a.nsp_dir = a.shell   # the only positional is the game folder
+        if not a.nsp_dir or not a.keys or not a.tools: die('--strip-romfs IPA needs the game folder, -k prod.keys and --tools')
+        strip_romfs(a.strip_romfs, Path(a.nsp_dir).resolve(), Path(a.keys).resolve(), Path(a.tools).resolve(), a.allow_damaged)
+        return
     if a.capture_gl and a.shell and not a.nsp_dir:      # capture mode's only positional is the game folder
         a.shell, a.nsp_dir = '', a.shell
 
@@ -2065,8 +2183,13 @@ def main():
     if a.stop_after == 'guest': return say('stopped before assembly')
 
     stage = work / 'stage'
+    romfs_rec = None
+    if romfs_source_wanted(a) and not is_dump and (game / 'RomFS').is_dir() and any((game / 'RomFS').iterdir()):
+        listing = romfs_listing(game / 'RomFS')
+        if listing:
+            romfs_rec = romfs_record(listing, tid, pkg, picks[pkg][0], picks[pkg][1], nx, keys, a.allow_damaged)
     A = step_assemble(shell, stage, game, patched, mods, gdir, rows,
-                      one(rows, 'name', tid), builds[pkg], tid, msl_out, work)
+                      one(rows, 'name', tid), builds[pkg], tid, msl_out, work, romfs_rec)
     if vk_out is not None:
         dst = A / 'msl' / 'vk'
         shutil.rmtree(dst, ignore_errors=True)
