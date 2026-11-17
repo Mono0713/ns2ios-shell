@@ -98,6 +98,73 @@ def tidy(work, keep_logs=True):
     return total
 
 
+TRASH = '_nxn_removing'   # <NSP folder>/_nxn_removing: a finished pack's temporary files, being removed in the background
+
+# The remover runs as its own process so the next game in a queue starts at once: removing the working tree of a big game
+# (the extraction, the shader outputs, the stage tree -- a few hundred thousand files) took 3 to 5 minutes on Windows, most
+# of it the file system and the virus scanner answering one delete at a time. Several threads keep several deletes in
+# flight. It removes only a folder directly inside a folder named TRASH, never follows a link out of it, and a run cut
+# short (the computer shut down) is picked up by the next pack in the same folder.
+PURGE = r'''
+import os, sys, shutil, concurrent.futures as cf
+root = os.path.abspath(sys.argv[1])
+if os.path.basename(os.path.dirname(root)) != sys.argv[2]: sys.exit(2)
+def rm(p):
+    try: os.unlink(p)
+    except OSError:
+        try: os.chmod(p, 0o666); os.unlink(p)
+        except OSError: pass
+files = []
+for r, ds, fs in os.walk(root, followlinks=False):
+    files += [os.path.join(r, f) for f in fs]
+with cf.ThreadPoolExecutor(16) as ex: list(ex.map(rm, files, chunksize=256))
+shutil.rmtree(root, ignore_errors=True)
+try: os.rmdir(os.path.dirname(root))
+except OSError: pass
+'''
+
+
+def purge_later(d):
+    """Start removing d (a folder inside a TRASH folder) in a process of its own that outlives this one."""
+    kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    if os.name == 'nt':
+        base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        # out of the job object the caller may run this in (closing it would take the remover along); not every job allows that
+        for flags in (base | 0x01000000, base):   # 0x01000000 = CREATE_BREAKAWAY_FROM_JOB
+            try: subprocess.Popen([PY, '-I', '-c', PURGE, str(d), TRASH], creationflags=flags, **kw); return True
+            except OSError: continue
+        return False
+    try: subprocess.Popen([PY, '-I', '-c', PURGE, str(d), TRASH], start_new_session=True, **kw); return True
+    except OSError: return False
+
+
+def resume_purge(folder):
+    """A removal an earlier pack started and did not finish (the computer was shut down): start it again."""
+    t = folder / TRASH
+    if not t.is_dir(): return
+    for d in t.iterdir():
+        if d.is_dir() and not d.is_symlink(): purge_later(d)
+
+
+def tidy_later(work):
+    """tidy() without the wait: everything but logs/ is renamed into <NSP folder>/TRASH/<work>-<time> (the same disk, so
+    instant) and removed by a background process. Falls back to tidy() where a rename or the process cannot be had."""
+    if os.environ.get('NXN_TIDY_BG', '1') == '0': return None
+    t = work.parent / TRASH / ('%s-%d' % (work.name, int(time.time() * 1000)))
+    try: t.mkdir(parents=True)
+    except OSError: return None
+    root, moved = work.resolve(), 0
+    for d in sorted(work.iterdir()):
+        if d.name == 'logs' or d.parent.resolve() != root: continue
+        try: d.rename(t / d.name); moved += 1
+        except OSError as e: warn('could not move %s aside (%s): removing it now' % (d.name, e))
+    if not purge_later(t):
+        warn('could not start the background removal: removing the temporary files now')
+        shutil.rmtree(t, ignore_errors=True)
+    rest = tidy(work)   # whatever could not be moved
+    return moved, rest
+
+
 def clean_folders(folder):
     """--clean: everything a previous run left in this folder, logs included."""
     if not folder.is_dir(): die('no such folder: %s' % folder)
@@ -708,6 +775,13 @@ def check_free_space(folder, factor=3.5):
               if p.is_file() and p.suffix.lower() in ('.nsp', '.xci', '.nsz'))
     if not src: return                       # nothing recognised yet: scan_nsps says so with a better message
     need, free = int(src * factor), shutil.disk_usage(folder).free
+    pending = [t for t in [folder / TRASH] + sorted(folder.parent.glob('*/' + TRASH)) if t.is_dir()]
+    if free < need and pending:
+        # the previous pack's temporary files (this game's, or the game before it in the queue) are still being removed
+        # in the background: finish that here first
+        say('waiting for the previous pack\'s temporary files to be removed')
+        for t in pending: shutil.rmtree(t, ignore_errors=True)
+        free = shutil.disk_usage(folder).free
     if free >= need:
         say('disk: %.1f GiB free, about %.1f GiB needed' % (free / 2**30, need / 2**30)); return
     die('not enough space on the disk holding %s: %.1f GiB free, about %.1f GiB needed.\n'
@@ -1253,6 +1327,27 @@ def prune_shader_cache(cas):
     if freed: say('shader cache: removed %.1f MB of libraries no shader uses any more' % (freed / 1048576))
 
 
+def shader_jobs():
+    """How many shaders dmsh_build.py works on at once (J): every logical processor, where it used to be a fixed 8 that left
+    half of a 16-thread desktop idle through the longest step of a pack. Each job is a translator or Metal compiler
+    process of a few hundred MB, so it stays within the memory too (about 0.5 GB a job), and at most 32."""
+    n = max(8, os.cpu_count() or 8)   # never fewer than the old 8: a job also waits on its files and processes
+    mem = 0
+    try:
+        if os.name == 'nt':
+            import ctypes
+            class MS(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong)] + [(f, ctypes.c_ulonglong) for f in
+                            ('total', 'avail', 'tpf', 'apf', 'tv', 'av', 'aev')]
+            m = MS(); m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)): mem = m.total
+        else:
+            mem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    except Exception: mem = 0
+    if mem: n = min(n, max(4, int(mem / 2**29)))
+    return max(4, min(32, n))
+
+
 def step_translate(pkg, work, xlate, iosout, tid, force=False):
     """dmsh_build.py, with no metal compiler: nometal_run.py turns `xcrun metal` into a copy, so the "libraries" hold MSL
     source and the phone compiles them once on first launch. dmsh_build.py creates <iosout>/b-<chain version> itself."""
@@ -1276,6 +1371,7 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
             'about %.0f hours; set DM_METAL_TOOLS to a Metal Developer Tools folder to compile them anyway)' % (n, n * 2 * 0.8 / 3600 / max(1, os.cpu_count() or 1)))
     mode = subprocess.run([PY, nometal, '--mode'], capture_output=True, text=True).stdout.strip() if nometal.is_file() else ''
     if mode.startswith('windows-metal'): say('compiling shaders on this computer with Apple\'s Metal Developer Tools for Windows')
+    say('shader jobs at once: %s (%d logical processors)' % (os.environ.get('J') or shader_jobs(), os.cpu_count() or 0))   # J: set in main
     def done():
         try: same = mfile.read_text(encoding='utf-8').strip() == mode
         except OSError: same = mode == 'source' or not mode
@@ -1321,7 +1417,7 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # of every shader on every repack (Super Mario Odyssey: 75 of its 82 minutes).
     cas = shader_cache(work, tid)
     run([PY, nometal, GFX / 'dmsh_build.py', pkg, work / 'shader' / 'cache'],
-        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8'), 'DM_GAME': tid,
+        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J') or str(shader_jobs()), 'DM_GAME': tid,
              'DMSH_CAS': os.environ.get('DMSH_CAS', str(cas))},
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
     n = len(list(iosout.glob('b-*/*_b.metallib'))) if iosout.is_dir() else 0
@@ -1658,7 +1754,10 @@ def main():
     folder = Path(a.nsp_dir).resolve()
     if not a.capture_gl and not shell.is_file(): die('no shell file: %s' % shell)
     if not folder.is_dir(): die('no such folder: %s' % folder)
+    resume_purge(folder)
     check_free_space(folder)
+    # shader_split.py's and dmsh_build.py's workers: every logical processor, as upstream's build_ipa_from_nsp.py does (their default is 8)
+    os.environ.setdefault('J', str(shader_jobs()))
     if not a.keys: die('give prod.keys with -k')
     keys = Path(a.keys).resolve()
     stamp = shell_stamp(shell)
@@ -2037,9 +2136,14 @@ def main():
     if a.keep_work:
         say('working folder kept: %s (remove it with --clean "%s")' % (work, folder))
     else:
-        say('removing the temporary files (--keep-work keeps them for a faster rerun)')
-        freed = tidy(work)
-        say('removed %.1f MB; the logs stay in %s' % (freed / 1048576, work / 'logs'))
+        bg = tidy_later(work)
+        if bg is not None:
+            say('temporary files: being removed in the background (%s), so the next game can start now; the logs stay in %s'
+                % (work.parent / TRASH, work / 'logs'))
+        else:
+            say('removing the temporary files (--keep-work keeps them for a faster rerun)')
+            freed = tidy(work)
+            say('removed %.1f MB; the logs stay in %s' % (freed / 1048576, work / 'logs'))
 
 
 if __name__ == '__main__':
