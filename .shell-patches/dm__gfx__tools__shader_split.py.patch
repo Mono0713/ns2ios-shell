@@ -24,7 +24,38 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      return zstd
  
  def ctl_len(ctl):
-@@ -631,13 +638,20 @@
+@@ -103,7 +110,7 @@
+ def bnsh_shaders(d, base, label):
+     if d[base + 0x60:base + 0x64] != b'grsc': red(f'{label} BNSH @{base:#x} has no grsc block')
+     nvar, pvar = struct.unpack_from('<IQ', d, base + 0x7c)
+-    out = []
++    out, ns2 = [], 0
+     for v in range(nvar):
+         prog = struct.unpack_from('<Q', d, base + pvar + 0x40 * v + 0x10)[0]
+         if not prog: continue
+@@ -112,10 +119,20 @@
+             if not sc: continue
+             pctl, pcode, ncode, nctl = struct.unpack_from('<QQII', d, base + sc + 8)
+             ctl, code = d[base + pctl:base + pctl + nctl], d[base + pcode:base + pcode + ncode]
++            if switch2_stage(ctl, code): ns2 += 1; continue
+             why = check(label, st, ctl, code)
+             if why: red(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
+             out.append((f'{label}#BNSH@{base:#x}#var{v}', st, ctl, code))
+-    return out
++    if ns2 and out: red(f'{label} BNSH @{base:#x}: {ns2} Switch 2 stage shaders mixed with {len(out)} Switch ones')
++    if ns2: print(f'{label} BNSH @{base:#x}: {ns2} Switch 2 stage shaders, skipped', flush=True)
++    return out
++
++def switch2_stage(ctl, code):
++    """A stage shader built for the Switch 2's GPU, which no Switch game runs: Clubhouse Games: 51 Worldwide Classics 2.0.1 keeps its Bezel Engine system resources twice,
++    System.nx.bea for the Switch (control sections of 0x880 bytes, +0x20 their length, code areas with the 0x12345678 header) and System.ounce.bea ('Ounce', the Switch 2) whose 64 BNSH
++    (28,483 stage shaders) all have 0xd8-byte control sections (+4 = 0xc9 where the Switch's hold 1, +0x20 a hash) and code areas with no header. Such a control section is far shorter
++    than any Switch one (0x760 at least, see ctl_len), so that, with no code area header, tells the two apart"""
++    return ctl[:4] == CTL_MAGIC and len(ctl) < 0x760 and code[:4] not in (GFX_MAGIC, CS_MAGIC)
+ 
+ def bahs_shaders(d, label):
+     region, rsz = struct.unpack_from('<I', d, 0x1c)[0], struct.unpack_from('<I', d, 0x18)[0]
+@@ -631,13 +648,20 @@
      """NintendoWare Bezel Engine archive ('.bea', magic 'SCNE', a NintendoWare binary file of version 0x10100; Big Brain Academy: Brain vs. Brain keeps nearly all of RomFS in 603 of them):
      +0x20 u64 entry count, +0x28 u64 offset of the entry pointer array (u64 each), each pointing at a 0x30-byte 'ASST' entry {+0x10 u16 kind, u16 alignment shift, u32 stored length,
      u32 length, +0x20 u64 data offset, +0x28 u64 name offset (u16 length + the path)}. Every entry of the game's 7,665 is one zstd frame (kind 2, and 258 for the one sound project),
@@ -49,7 +80,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          path = d[nm + 2:nm + 2 + struct.unpack_from('<H', d, nm)[0]].decode('utf-8', 'replace')
          data = d[off:off + csz]
          if data[:4] == ZSTD_MAGIC:
-@@ -1373,31 +1387,39 @@
+@@ -1373,31 +1397,39 @@
                  scan_blob(data, f'/{rel}#{name}#{struct.unpack_from("<Q", d, hs[0] + 8 * k)[0]:016x}', out)
  
  UE_LEGACY = 'UE legacy pak'
@@ -97,7 +128,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      for name in names:
          d = pk.read(name, decode=oodle)
          label = re.sub(r"^(\.\./)+", "", os.path.normpath(pk.mount + name))
-@@ -1501,10 +1523,16 @@
+@@ -1501,10 +1533,16 @@
      return zstd.decompress(d, zstd_dict=_ZD[did])
  
  def unzs(path):
@@ -116,7 +147,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      return unzs_dict(d, did, path)
  
  def frame_size(f):
-@@ -1600,20 +1628,53 @@
+@@ -1600,20 +1638,53 @@
          return []
      return out
  
@@ -175,7 +206,36 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          out.extend(unity_compute(x, f'{label}{":" + node if node else ""}', trees))
          out.extend(unity_text_glslc(x, f'{label}{":" + node if node else ""}'))
  
-@@ -1734,7 +1795,7 @@
+@@ -1658,6 +1729,28 @@
+ def ps_inputs(code):
+     """Generic attributes a pixel shader reads: SPH words 6–13 are the input map, 8 bits for each of the 32 attributes (Ryujinx ShaderHeader.ImapTypes), non-zero = read; the translated MSL inputs are exactly user(locn<attribute>)"""
+     return {i for i in range(32) if struct.unpack_from('<I', code, 0x30 + 4 * (6 + (i >> 2)))[0] >> ((i & 3) * 8) & 0xff}
++
++def ps_targets(code):
++    """Colour targets a pixel shader writes: SPH word 18 is the output map, 4 bits (RGBA) for each of the 8 targets (Ryujinx ShaderHeader.OmapTargets) → {target index}"""
++    w = struct.unpack_from('<I', code, 0x30 + 4 * 18)[0]
++    return {t for t in range(8) if w >> (4 * t) & 0xf}
++
++def fout_rule(keys):
++    """The profile's shader_fout key, '<target>=<uint|sint> ...': a game whose G-buffer has an integer colour target in a fixed slot. With no PC version the translator declares every
++    output float, and Metal refuses a pipeline whose float output meets an integer attachment ('output of type float4 is not compatible with a MTLPixelFormatR8Uint color attachment').
++    Kirby and the Forgotten Land writes colour 5 into an R8Uint target beside float ones in its scene shaders (upstream issue #2760): 145 refused pipelines and a black scene on the iPad
++    at Point of Arrival, which one shader_facts_manual.tsv row per shader followed only as far as the route went. Every pixel shader whose output map has the target gets the type
++    (fout facts, as a manual row would give: the output's bits go to the target, as on the GPU). → {key: {target: type}}"""
++    rule = {t: ty for t, ty in GAME.pairs('shader_fout')} if GAME.values('shader_fout') else {}
++    for t, ty in rule.items():
++        if not t.isdigit() or int(t) > 7 or ty not in ('uint', 'sint'): red(f'shader_fout {t}={ty}: want <target 0-7>=<uint|sint>')
++    if not rule: return {}
++    out = {}
++    for key, v in keys.items():
++        if v[1] != 'ps' or len(v[3]) < 0x30 + 0x50: continue
++        hit = {t: ty for t, ty in rule.items() if int(t) in ps_targets(v[3])}
++        if hit: out[key] = hit
++    return out
+ 
+ SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
+ # MonoGame's effects, whose passes may name no vertex shader and keep the one bound (Celeste: 10 of its 13 effects draw through SpriteBatch's vertex shader, which is in main); Next Level Games'
+@@ -1734,7 +1827,7 @@
          zip_shaders(path, rel, args[2][1], found)
          return rel, uniq_keys(found), var_pairs(found), trees
      if len(args) > 2 and args[2][0] == UE_LEGACY:   # files of a legacy Unreal pak (ue_legacy_jobs)
@@ -184,7 +244,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          return rel, uniq_keys(found), var_pairs(found), trees
      if len(args) > 2 and head[:4] == PKZL:   # entries of a PlatinumGames PKZ (pkz_jobs)
          pkz_shaders(path, rel, args[2], found)
-@@ -1776,10 +1837,14 @@
+@@ -1776,10 +1869,14 @@
              d = head_d if len(head_d) >= struct.unpack_from('<I', d, 10)[0] else xnb_decompress(d)
          else:
              d = xnb_decompress(d)
@@ -202,7 +262,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      elif b'BNSH\0\0\0\0' not in d and b'BAHS' not in d and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and b'Yaz0' in d) and b'\x91\x68\x86\x19' not in d and MGFX not in d and NEEDLE not in d: return rel, {}, set(), {}   # a SARC may hold Yaz0 members
      else:
          scan_blob(d, '/' + rel, found)
-@@ -1795,6 +1860,57 @@
+@@ -1795,6 +1892,57 @@
          if key in uniq and not same_shader(uniq[key][2:4], (ctl, code)): red(f'key {key} is the same but the control section or code area differs ({where})')
          uniq.setdefault(key, (where, st, ctl, code))
      return uniq
@@ -260,7 +320,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
  
  def nso_image(path):
      import lz4.block
-@@ -1806,18 +1922,30 @@
+@@ -1806,18 +1954,30 @@
          img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
      return bytes(img)
  
@@ -293,7 +353,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          img = nso_image(mainnso)
          if not i:
              import unityfs
-@@ -1831,13 +1959,28 @@
+@@ -1831,13 +1991,28 @@
          # calls glslcCompile in a module it loads (Fire Emblem: Three Houses; profile_guess.py shader_sources). Captain Toad: Treasure Tracker imports it with agl's GLSL sources, but no module defines it
          cap = os.environ.get('DM_GLSLC_CAPTURE') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'glslc_capture')
          names = sorted(f for f in os.listdir(cap) if f.endswith('.glslc')) if os.path.isdir(cap) else []
@@ -325,7 +385,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          for nm in names: found += ue_shaders(open(os.path.join(ued, nm), 'rb').read(), f'/ue_shaders/{nm}')
          results.append(('main', {skey(c, k): (w, s, c, k) for w, s, c, k in found}, var_pairs(found), {}))
      zdicts = {k: v for r in romfs_v for k, v in zs_dicts(r).items()}   # Tears of the Kingdom's zstd dictionaries (zs_dicts)
-@@ -1847,7 +1990,7 @@
+@@ -1847,7 +2022,7 @@
      big = [j for p, r in files for j in (linkdata_jobs(p, r) or [])]   # Three Houses' 6.9 GB DATA1.bin: one job per range of entries, not one read of the whole file
      pak_jobs, paks = kpka_jobs(files)   # Monster Hunter Rise's PAKs: the newest copy of each path, in ranges of entries
      tr_jobs, trp = trpfs_jobs(files)   # Pokémon Legends: Z-A's Trinity packs (data.trpfs and its index data.trpfd), decoded by the game's own Oodle in the Mac host
@@ -334,7 +394,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      bd_jobs, bdts = bdt_jobs(files)   # Dark Souls Remastered's dvdbnd archives: the entries of each .bdt by its .bhd5 index, in ranges
      arc_jobs, arcs = smash_arc_jobs(files)   # Super Smash Bros. Ultimate's data.arc: its current files, in ranges
      pz_jobs, pkzs = pkz_jobs(files)   # Bayonetta 3's PKZ archives, Oodle Kraken decoded by the game's own decoder in the Mac host
-@@ -1865,10 +2008,14 @@
+@@ -1865,10 +2040,14 @@
          # a hash no bundle supplied takes the layout unityfs.py has for it (KNOWN_TREES); only here, so files a bundle lends a tree to keep their place in the tables (Ace Attorney's built-ins)
          import unityfs
          for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
@@ -350,7 +410,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          results = [r for r in results if r[3] != 'defer'] + again
      per_src = collections.Counter(); pairs = set()
      for rel, uniq, pr, _ in results:
-@@ -1876,8 +2023,20 @@
+@@ -1876,8 +2055,20 @@
          for key, v in uniq.items():
              if key in keys:
                  if not same_shader(keys[key][2:4], v[2:4]): red(f'key {key} is the same but the control section or code area differs ({v[0]} / {keys[key][0]})')
@@ -371,7 +431,7 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
      prog = {(a, b) for a, b, *t in pairs if t} - pairs; pairs = {x for x in pairs if len(x) == 2}
      sp, cover = separable_pairs(keys); pairs |= sp
      if cover: print(f'single-stage programs: {len({v for v, _ in sp}):,} vertex shaders are paired with a cover of {len(cover)} pixel shader(s) ({" ".join(cover)})')
-@@ -1886,7 +2045,7 @@
+@@ -1886,7 +2077,7 @@
          if f.endswith('.bin'): os.unlink(os.path.join(pkg, f))
      recs = collections.defaultdict(list); rows = []; facts = {}; stat = collections.Counter()
      for key in sorted(keys, key=lambda k: (group(keys[k][0]), keys[k][0], k)):   # the same input gives byte-identical output
@@ -380,3 +440,14 @@ diff --git a/dm/gfx/tools/shader_split.py b/dm/gfx/tools/shader_split.py
          name = f'{st}_{group(where)}.bin'
          rec = bytearray(b'BTCDBTCD' + bytes(0x30)); struct.pack_into('<2I', rec, 0x28, len(ctl), len(code)); rec += code + ctl
          if rec.find(CTL_MAGIC) != 0x38 + len(code): red(f'key {key}: the control magic appears in the code area, dmsh_build would split the record wrongly')
+@@ -1908,6 +2099,10 @@
+         f.write('# column 5 records where each key first appears; this game has no PC version to pair with\n')
+         f.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
+         for r in rows: f.write('\t'.join(map(str, r)) + '\n')
++    # Integer colour targets by the profile (shader_fout): every pixel shader that writes the target gets that output type (fout_rule)
++    fr = fout_rule(keys)
++    for key, f in fr.items(): facts[key] = {**facts.get(key, {}), 'fout': {**facts.get(key, {}).get('fout', {}), **f}}
++    if fr: print(f'shader_fout: {len(fr):,} pixel shaders write an integer colour target ({GAME.get("shader_fout")})')
+     # Hand-written facts the machine code cannot give (the profile's shader_facts_manual.tsv, same row format) are merged over the generated ones, so the table stays reproducible
+     manual = GAME.table('shader_facts_manual.tsv')
+     if os.path.exists(manual):
