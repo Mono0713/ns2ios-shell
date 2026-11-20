@@ -754,6 +754,40 @@ def derive_profile(gdir, tid, ver, game, mods, dest, disp):
     return dest
 
 
+PROVISIONAL_OVERRIDES = DM / 'games' / 'provisional_overrides.tsv'
+
+
+def apply_provisional_overrides(gdir, tid):
+    """Lay dm/games/provisional_overrides.tsv's rows for this title over a provisional profile (switchpad/make_provisional.py).
+
+    A guess cannot know what a game finds out only when it runs: Clubhouse Games 51 needs the whole pool for its heap, Rabbids
+    Party of Legends a 12 GB address region. A full profile would end the survey that follows the game's updates, and the
+    profile folder is made again by make_provisional (Switch Pad's own copy), so the settled rows live here, apart from it,
+    and are written into game.tsv on every pack. A profile that is not provisional is never touched. Returns the keys set."""
+    gt = gdir / 'game.tsv'
+    if not PROVISIONAL_OVERRIDES.is_file() or not gt.is_file(): return []
+    text = gt.read_text(encoding='utf-8')
+    if not text.startswith('# Provisional game profile'): return []
+    want = []
+    for line in PROVISIONAL_OVERRIDES.read_text(encoding='utf-8').splitlines():
+        if not line.strip() or line.startswith('#'): continue
+        f = line.split('\t')
+        if len(f) >= 3 and f[0].strip().upper() == tid.upper(): want.append((f[1].strip(), '\t'.join(f[2:]).strip()))
+    if not want: return []
+    lines = text.splitlines()
+    for k, v in want:
+        hit = [i for i, l in enumerate(lines) if not l.startswith('#') and l.partition('\t')[0].strip() == k]
+        row = '%s\t%s' % (k, v)
+        if hit:
+            lines[hit[0]] = row
+            for i in reversed(hit[1:]): del lines[i]
+        else:
+            lines.append(row)
+    new = '\n'.join(lines) + '\n'
+    if new != text: gt.write_text(new, encoding='utf-8')
+    return [k for k, _ in want]
+
+
 def load_rows(d):
     rows = {}
     for line in (d / 'game.tsv').read_text(encoding='utf-8').splitlines():
@@ -1910,6 +1944,10 @@ def main():
         die('no base game for %s in %s -- the folder only holds updates or DLC: %s'
             % (tid, folder, ', '.join(p.name for _, _, p in fam['all'])))
     gdir, rows = load_profile(tid)
+    ov = apply_provisional_overrides(gdir, tid)
+    if ov:
+        rows = load_rows(gdir)
+        say('provisional profile: %s settled by dm/games/provisional_overrides.tsv' % ', '.join('%s %s' % (k, one(rows, k)) for k in ov))
     mods = one(rows, 'modules', 'main sdk').split()
     need = one(rows, 'shader_versions', 'v0').split()
     builds = {}
