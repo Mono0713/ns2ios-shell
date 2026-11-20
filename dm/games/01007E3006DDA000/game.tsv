@@ -13,6 +13,8 @@ program_id	01007E3006DDA000
 name	Kirby Star Allies
 ipa	KirbyStarAllies.ipa
 app_category	public.app-category.games
+# inline uniform updates end the render pass (no deferral), as for Super Mario Odyssey: on an iPad the textures flickered and shook (2026-11-20 report); DM_NVN_UB_DEFER=0 is what fixed the same look in Odyssey
+ub_defer	off
 
 # ---- Versions ----
 build	v393216	4.0.0a	main=d55608916fa56c184f2a8fe80da0427c	subsdk0=a4604a0a8b8af7ae0eac1add42a8b978	sdk=af7348498c7759b0f3f0396a8a36014c
