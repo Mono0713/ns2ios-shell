@@ -342,7 +342,10 @@ class PhoneJoyconPostTests(PhonePadsServer):
         self.assertEqual(host['joyright'], 1)
         self.assertEqual(host['players'][0], [1 << 27, 0, 0, -60 * 258, 0])
         p.reconnect()
-        p.post('{"t":"padtype","mode":"pro"}')
+        self.assertEqual(p.post('{"t":"padtype","mode":"pro"}')[0]['player'], 1)
+        for _ in range(10):
+            if not self.host()['joyright']:
+                break
         self.assertEqual(self.host()['joyright'], 0)
 
 

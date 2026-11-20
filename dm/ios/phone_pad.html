@@ -95,7 +95,7 @@
     body.joyright .piece[data-k="abxy"] [data-bit="3"] { left:calc(50% - 1.5 * var(--joy-button)); top:calc(47dvh + var(--joy-button)) !important; }
     body.joyright .piece[data-k="abxy"] [data-bit="0"] { left:calc(50% + var(--joy-button) / 2); top:calc(47dvh + var(--joy-button)) !important; }
     body.joyright .piece[data-k="abxy"] [data-bit="1"] { left:calc(50% - var(--joy-button) / 2); top:calc(47dvh + 2 * var(--joy-button)) !important; }
-    body.joyright .piece[data-k="plus"] .b { left:5dvw; top:17dvh !important; width:48px !important; height:48px !important; }
+    body.joyright .piece[data-k="plus"] .b { left:5dvw; top:calc(20dvh + 8px) !important; width:48px !important; height:48px !important; }
     body.joyright .piece[data-k="r"] .b { left:5dvw; top:9dvh !important; }
     body.joyright .piece[data-k="zr"] .b { top:9dvh !important; }
     body.joyright .piece[data-k="rs-click"] .b { top:calc(20dvh + 8px); }
@@ -677,7 +677,7 @@
     if (up()) put(JSON.stringify({ t: 'padtype', mode: controllerMode }));
     if (controllerMode === 'joyright') {
       screen.orientation?.unlock?.();
-      setMode('gyro');
+      if (motionMode === 'tilt') setMode('off');
     }
   }
   $('#type').addEventListener('click', changeControllerMode);
