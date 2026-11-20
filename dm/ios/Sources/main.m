@@ -50,12 +50,264 @@ static NSDictionary *game_info(void) {   // the chosen game's game.json
     return [j isKindOfClass:NSDictionary.class] ? j : nil;
 }
 
+// ---- Documents as a person reads it in the Files app (a package of several games: the game library) ----
+// Before, everything was named by title ID (games/0100…/romfs, save/0100….slots/2/save, vk_capture/0100…), which nobody could find their way
+// around. Now (系統/layout.txt = 2):
+//   遊戲資料/<game>/            the game's big data the computer sends (romfs/, msl/): delete a folder to free its space, the computer sends it again
+//   存檔/<game>/<save>/         one folder per save; which one is in use is in 存檔/<game>/.存檔.json; a folder dropped here is a save of its own
+//   存檔/<game>/.裝置存檔/<save>/  the device save of a game that has one (Mario Kart 8 Deluxe), hidden
+//   著色器紀錄/<game>/           the shaders this iPad recorded for the computer's next pack (OpenGL / Vulkan / GLSLC / Unity's used variants)
+//   記錄/                      log.txt, log.prev.txt and each game's last runs and crashes (<game>.txt, .prev.txt, .crash.txt)
+//   系統/                      what nobody needs to touch: temp/, pso/, the computer's transfer records, env.txt, folders.json
+// <game> is the game's name (game.json) made a valid folder name the same way as Switch Pad's ipad_layout.py does (folder_name below),
+// kept per title ID in 系統/folders.json so a later rename of the game does not move its folders; each such folder also holds a hidden
+// .titleid, so a folder renamed by hand in the Files app is found again. The old layout is moved over once, at launch: every move is a
+// rename on one volume, nothing is copied, so tens of GB of game data take a moment.
+static BOOL g_layout2;   // this package uses the layout above (a package of several games)
+static NSMutableDictionary<NSString *, NSString *> *g_folder_of;   // title ID → folder name
+static NSMutableArray<NSString *> *g_layout_notes;   // what the move did, printed once the log is open
+static NSString *docs(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]; }
+static NSString *docs_in(NSString *sub) { return [docs() stringByAppendingPathComponent:sub]; }
+#define DIR_DATA @"遊戲資料"
+#define DIR_SAVE @"存檔"
+#define DIR_SHADERS @"著色器紀錄"
+#define DIR_LOGS @"記錄"
+#define DIR_SYS @"系統"
+#define DEVICE_SAVES @".裝置存檔"
+#define SAVE_STATE @".存檔.json"
+// A name made a folder name, the same on Windows: ™ ® © dropped, a colon and any character Windows refuses become a space, runs of spaces
+// one, no space or dot at either end (Unrailed 2: Back on Track → Unrailed 2 Back on Track). ipad_layout.py folder_name is the same rule.
+NSString *shell_folder_name(NSString *raw, NSString *fallback) {
+    NSMutableString *s = [NSMutableString string];
+    for (NSUInteger i = 0; i < raw.length; i++) {
+        unichar c = [raw characterAtIndex:i];
+        if (c == 0x2122 || c == 0x00AE || c == 0x00A9) continue;
+        if (c < 0x20 || c == ':' || c == '\\' || c == '/' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') c = ' ';
+        [s appendFormat:@"%C", c];
+    }
+    NSArray *w = [s componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *out = [[w filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]] componentsJoinedByString:@" "];
+    while ([out hasSuffix:@"."] || [out hasPrefix:@"."]) out = [out hasSuffix:@"."] ? [out substringToIndex:out.length - 1] : [out substringFromIndex:1];
+    out = [out stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    return out.length ? out : fallback;
+}
+static NSString *bundle_game_name(NSString *tid) {
+    NSString *f = [[[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"] stringByAppendingPathComponent:tid] stringByAppendingPathComponent:@"game.json"];
+    NSData *d = [NSData dataWithContentsOfFile:f];
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    id n = [j isKindOfClass:NSDictionary.class] ? j[@"name"] : nil;
+    return [n isKindOfClass:NSString.class] ? n : tid;
+}
+static void folders_save(void) {
+    NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"layout": @2, @"games": g_folder_of} options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
+    [d writeToFile:[docs_in(DIR_SYS) stringByAppendingPathComponent:@"folders.json"] atomically:YES];
+}
+static NSString *titleid_in(NSString *dir) {
+    NSString *t = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@".titleid"] encoding:NSUTF8StringEncoding error:nil];
+    return [[t stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] uppercaseString];
+}
+// The folder name of a title ID: the one it has, else a new one from its name (another game's name taken: " 2", " 3", …)
+NSString *shell_game_folder(NSString *tid) {
+    tid = tid.uppercaseString;
+    NSString *have = g_folder_of[tid];
+    if (have) return have;
+    NSString *base = shell_folder_name(bundle_game_name(tid), tid), *name = base;
+    NSSet *taken = [NSSet setWithArray:[g_folder_of.allValues valueForKey:@"lowercaseString"]];
+    for (int k = 2; [taken containsObject:name.lowercaseString]; k++) name = [NSString stringWithFormat:@"%@ %d", base, k];
+    g_folder_of[tid] = name;
+    folders_save();
+    return name;
+}
+// A game's folder under one of the top folders, made when missing (with its .titleid). A folder of that title ID renamed by hand is taken back
+// under its name in folders.json; nothing is ever merged into or over a folder that exists
+static NSString *game_dir(NSString *top, NSString *tid, BOOL make) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *root = docs_in(top), *d = [root stringByAppendingPathComponent:shell_game_folder(tid)];
+    if (![fm fileExistsAtPath:d])
+        for (NSString *n in [fm contentsOfDirectoryAtPath:root error:nil] ?: @[]) {
+            NSString *o = [root stringByAppendingPathComponent:n];
+            if (![n isEqualToString:d.lastPathComponent] && [titleid_in(o) isEqualToString:tid.uppercaseString] && [fm moveItemAtPath:o toPath:d error:nil]) {
+                fprintf(stderr, "layout: %s/%s renamed by hand: back to %s\n", top.UTF8String, n.UTF8String, d.lastPathComponent.UTF8String); break;
+            }
+        }
+    if (make && ![fm fileExistsAtPath:d]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
+    if ([fm fileExistsAtPath:d] && !titleid_in(d).length) [tid.uppercaseString writeToFile:[d stringByAppendingPathComponent:@".titleid"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    return d;
+}
+static void note(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
+static void note(NSString *fmt, ...) { va_list a; va_start(a, fmt); [g_layout_notes addObject:[[NSString alloc] initWithFormat:fmt arguments:a]]; va_end(a); }
+static BOOL move_one(NSString *from, NSString *to) {   // a rename; never over something that exists
+    NSFileManager *fm = NSFileManager.defaultManager; NSError *e = nil;
+    if (![fm fileExistsAtPath:from]) return NO;
+    if ([fm fileExistsAtPath:to]) { note(@"layout: [RED] %@ left where it is: %@ exists", from.lastPathComponent, to); return NO; }
+    [fm createDirectoryAtPath:to.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    if (![fm moveItemAtPath:from toPath:to error:&e]) { note(@"layout: [RED] could not move %@: %@", from, e.localizedDescription); return NO; }
+    return YES;
+}
+static void move_files_into(NSString *from, NSString *to) {   // every file of from into to (the shader recordings of several kinds share one folder)
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtPath:to withIntermediateDirectories:YES attributes:nil error:nil];
+    for (NSString *n in [fm contentsOfDirectoryAtPath:from error:nil] ?: @[]) move_one([from stringByAppendingPathComponent:n], [to stringByAppendingPathComponent:n]);
+    if (![fm contentsOfDirectoryAtPath:from error:nil].count) [fm removeItemAtPath:from error:nil];
+}
+static BOOL is_tid(NSString *n) {
+    static NSRegularExpression *re; if (!re) re = [NSRegularExpression regularExpressionWithPattern:@"^[0-9A-Fa-f]{16}$" options:0 error:nil];
+    return [re numberOfMatchesInString:n options:0 range:NSMakeRange(0, n.length)] == 1;
+}
+// One game's saves of the old layout (save/<tid> in use, save/<tid>.slots/<n>/save|device named in slots.json) → 存檔/<game>/<save name>/
+static void move_old_saves(NSString *old, NSString *tid) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *live = [old stringByAppendingPathComponent:tid], *sd = [live stringByAppendingString:@".slots"];
+    NSData *jd = [NSData dataWithContentsOfFile:[sd stringByAppendingPathComponent:@"slots.json"]];
+    NSDictionary *js = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+    if (![js isKindOfClass:NSDictionary.class]) js = @{};
+    long active = [js[@"active"] respondsToSelector:@selector(longValue)] ? [js[@"active"] longValue] : 1;
+    NSMutableDictionary<NSNumber *, NSString *> *names = [NSMutableDictionary dictionary];
+    for (NSDictionary *s in [js[@"slots"] isKindOfClass:NSArray.class] ? js[@"slots"] : @[])
+        if ([s isKindOfClass:NSDictionary.class] && [s[@"id"] respondsToSelector:@selector(longValue)] && [s[@"name"] isKindOfClass:NSString.class]) names[@([s[@"id"] longValue])] = s[@"name"];
+    NSString *g = game_dir(DIR_SAVE, tid, YES);
+    NSMutableArray<NSString *> *order = [NSMutableArray array]; NSString *activeName = nil;
+    NSString *(^place)(long) = ^NSString *(long k) {
+        NSString *base = shell_folder_name(names[@(k)] ?: [NSString stringWithFormat:@"存檔 %ld", k], [NSString stringWithFormat:@"存檔 %ld", k]), *n = base;
+        for (int i = 2; [fm fileExistsAtPath:[g stringByAppendingPathComponent:n]] || [order containsObject:n]; i++) n = [NSString stringWithFormat:@"%@ (%d)", base, i];
+        return n;
+    };
+    if ([fm fileExistsAtPath:live] || [fm fileExistsAtPath:[live stringByAppendingString:@"_device"]]) {
+        NSString *n = place(active);
+        if ([fm fileExistsAtPath:live]) move_one(live, [g stringByAppendingPathComponent:n]); else [fm createDirectoryAtPath:[g stringByAppendingPathComponent:n] withIntermediateDirectories:YES attributes:nil error:nil];
+        move_one([live stringByAppendingString:@"_device"], [[g stringByAppendingPathComponent:DEVICE_SAVES] stringByAppendingPathComponent:n]);
+        [order addObject:n]; activeName = n;
+    }
+    for (NSString *k in [[fm contentsOfDirectoryAtPath:sd error:nil] ?: @[] sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
+        if (k.intValue <= 0 || ![k isEqualToString:@(k.intValue).stringValue]) continue;
+        NSString *p = [sd stringByAppendingPathComponent:k];
+        if (![fm fileExistsAtPath:[p stringByAppendingPathComponent:@"save"]] && ![fm fileExistsAtPath:[p stringByAppendingPathComponent:@"device"]]) continue;
+        NSString *n = place(k.intValue);
+        if (!move_one([p stringByAppendingPathComponent:@"save"], [g stringByAppendingPathComponent:n])) [fm createDirectoryAtPath:[g stringByAppendingPathComponent:n] withIntermediateDirectories:YES attributes:nil error:nil];
+        move_one([p stringByAppendingPathComponent:@"device"], [[g stringByAppendingPathComponent:DEVICE_SAVES] stringByAppendingPathComponent:n]);
+        [order addObject:n];
+    }
+    if (order.count) {
+        NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"active": activeName ?: order[0], @"order": order} options:NSJSONWritingPrettyPrinted error:nil];
+        if (![fm fileExistsAtPath:[g stringByAppendingPathComponent:SAVE_STATE]]) [d writeToFile:[g stringByAppendingPathComponent:SAVE_STATE] atomically:YES];
+        note(@"layout: saves of %@ → %@/%@: %@ (in use: %@)", tid, DIR_SAVE, g.lastPathComponent, [order componentsJoinedByString:@", "], activeName ?: order[0]);
+    }
+    // what is left: a session's uncommitted .work / .new (the next start would have discarded them), an emptied .slots
+    for (NSString *x in @[@".work", @".new", @"_device.work", @"_device.new"]) [fm removeItemAtPath:[live stringByAppendingString:x] error:nil];
+    BOOL left = NO;
+    for (NSString *k in [fm contentsOfDirectoryAtPath:sd error:nil] ?: @[]) {
+        NSString *p = [sd stringByAppendingPathComponent:k];
+        for (NSString *x in @[@"save.work", @"save.new", @"device.work", @"device.new"]) [fm removeItemAtPath:[p stringByAppendingPathComponent:x] error:nil];
+        if ([k isEqualToString:@"slots.json"]) continue;
+        if ([fm contentsOfDirectoryAtPath:p error:nil].count) left = YES; else [fm removeItemAtPath:p error:nil];
+    }
+    if (!left) [fm removeItemAtPath:sd error:nil];
+}
+static void remove_if_empty(NSString *d) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray *c = [fm contentsOfDirectoryAtPath:d error:nil];
+    if (c && ![c filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF IN %@)", @[@".DS_Store"]]].count) [fm removeItemAtPath:d error:nil];
+}
+// Once per launch, before the log opens: load folders.json, and move whatever is still in the old layout (a first start of this shell, or the
+// computer's transfer made for an older shell) over. Only for a package of several games; a package of one game keeps the old places.
+static void layout_prepare(NSArray<NSString *> *ids) {
+    g_layout_notes = [NSMutableArray array];
+    g_layout2 = [NSFileManager.defaultManager fileExistsAtPath:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games"]];
+    if (!g_layout2) return;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *doc = docs(), *sys = docs_in(DIR_SYS);
+    [fm createDirectoryAtPath:sys withIntermediateDirectories:YES attributes:nil error:nil];
+    NSData *d = [NSData dataWithContentsOfFile:[sys stringByAppendingPathComponent:@"folders.json"]];
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    g_folder_of = [NSMutableDictionary dictionary];
+    if ([j isKindOfClass:NSDictionary.class] && [j[@"games"] isKindOfClass:NSDictionary.class])
+        for (NSString *k in j[@"games"]) if ([j[@"games"][k] isKindOfClass:NSString.class]) g_folder_of[k.uppercaseString] = j[@"games"][k];
+    // the package's games first, in title ID order, so two games of the same name always get the same folders
+    for (NSString *t in ids) shell_game_folder(t);
+    // the old layout: game data, saves, recorded shaders (each game's), logs, the rest into 系統/
+    NSString *games = [doc stringByAppendingPathComponent:@"games"];
+    for (NSString *t in [fm contentsOfDirectoryAtPath:games error:nil] ?: @[]) if (is_tid(t)) {
+        NSString *to = [docs_in(DIR_DATA) stringByAppendingPathComponent:shell_game_folder(t)];
+        if (move_one([games stringByAppendingPathComponent:t], to)) { game_dir(DIR_DATA, t, NO); note(@"layout: games/%@ → %@/%@", t, DIR_DATA, to.lastPathComponent); }
+    }
+    NSString *save = [doc stringByAppendingPathComponent:@"save"];
+    NSMutableSet *st = [NSMutableSet set];
+    for (NSString *n in [fm contentsOfDirectoryAtPath:save error:nil] ?: @[]) if (n.length >= 16 && is_tid([n substringToIndex:16])) [st addObject:[n substringToIndex:16].uppercaseString];
+    for (NSString *t in st) {
+        NSString *real = nil;   // the folder names as they are on disk (title IDs are upper case, but keep whatever case they have)
+        for (NSString *n in [fm contentsOfDirectoryAtPath:save error:nil]) if (n.length >= 16 && [[n substringToIndex:16].uppercaseString isEqualToString:t]) { real = [n substringToIndex:16]; break; }
+        move_old_saves(save, real ?: t);
+    }
+    for (NSString *kind in @[@"gl_capture", @"vk_capture", @"glslc_capture", @"shader_used"]) {
+        NSString *k = [doc stringByAppendingPathComponent:kind];
+        for (NSString *t in [fm contentsOfDirectoryAtPath:k error:nil] ?: @[]) if (is_tid(t)) {
+            move_files_into([k stringByAppendingPathComponent:t], game_dir(DIR_SHADERS, t, YES));
+            note(@"layout: %@/%@ → %@/%@", kind, t, DIR_SHADERS, shell_game_folder(t));
+        }
+        remove_if_empty(k);
+    }
+    NSString *logs = [doc stringByAppendingPathComponent:@"logs"], *nl = docs_in(DIR_LOGS);
+    [fm createDirectoryAtPath:nl withIntermediateDirectories:YES attributes:nil error:nil];
+    for (NSString *n in [fm contentsOfDirectoryAtPath:logs error:nil] ?: @[]) {
+        NSString *to = n.length >= 16 && is_tid([n substringToIndex:16]) ? [shell_game_folder([n substringToIndex:16]) stringByAppendingString:[n substringFromIndex:16]] : n;
+        move_one([logs stringByAppendingPathComponent:n], [nl stringByAppendingPathComponent:to]);
+    }
+    remove_if_empty(logs);
+    for (NSString *n in @[@"log.txt", @"log.prev.txt"]) move_one([doc stringByAppendingPathComponent:n], [nl stringByAppendingPathComponent:n]);
+    for (NSString *n in @[@"temp", @"pso", @".romfs-id", @".romfs-files", @"env.txt", @"game-order.json"]) move_one([doc stringByAppendingPathComponent:n], [sys stringByAppendingPathComponent:n]);
+    remove_if_empty(games); remove_if_empty(save);
+    for (NSString *top in @[DIR_DATA, DIR_SAVE, DIR_SHADERS]) [fm createDirectoryAtPath:docs_in(top) withIntermediateDirectories:YES attributes:nil error:nil];
+    [@"2\n" writeToFile:[sys stringByAppendingPathComponent:@"layout.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+// The saves of one game (存檔/<game>/): every folder in it is a save, except hidden ones and the host's .work / .new of a save in use
+NSArray<NSString *> *shell_save_names(NSString *g) {
+    NSFileManager *fm = NSFileManager.defaultManager; NSMutableArray *out = [NSMutableArray array]; BOOL dir;
+    for (NSString *n in [fm contentsOfDirectoryAtPath:g error:nil] ?: @[])
+        if (![n hasPrefix:@"."] && ![n hasSuffix:@".work"] && ![n hasSuffix:@".new"] && [fm fileExistsAtPath:[g stringByAppendingPathComponent:n] isDirectory:&dir] && dir) [out addObject:n];
+    NSData *d = [NSData dataWithContentsOfFile:[g stringByAppendingPathComponent:SAVE_STATE]];
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    NSArray *order = [j isKindOfClass:NSDictionary.class] && [j[@"order"] isKindOfClass:NSArray.class] ? j[@"order"] : @[];
+    [out sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {   // the order the launcher showed, then new ones by name
+        NSUInteger ia = [order indexOfObject:a], ib = [order indexOfObject:b];
+        if (ia != ib) return ia < ib ? NSOrderedAscending : NSOrderedDescending;
+        return [a localizedStandardCompare:b];
+    }];
+    return out;
+}
+// The save in use: 存檔/<game>/.存檔.json's "active" while that folder exists, else the first save, else a new 存檔 1
+NSString *shell_save_in_use(NSString *g) {
+    NSData *d = [NSData dataWithContentsOfFile:[g stringByAppendingPathComponent:SAVE_STATE]];
+    id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    NSString *a = [j isKindOfClass:NSDictionary.class] && [j[@"active"] isKindOfClass:NSString.class] ? j[@"active"] : nil;
+    NSArray *names = shell_save_names(g);
+    if (a && [names containsObject:a]) return a;
+    NSString *pick = names.firstObject ?: @"存檔 1";
+    [NSFileManager.defaultManager createDirectoryAtPath:[g stringByAppendingPathComponent:pick] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSMutableDictionary *nj = [j isKindOfClass:NSDictionary.class] ? [j mutableCopy] : [NSMutableDictionary dictionary];
+    nj[@"active"] = pick;
+    [[NSJSONSerialization dataWithJSONObject:nj options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[g stringByAppendingPathComponent:SAVE_STATE] atomically:YES];
+    if (a) fprintf(stderr, "saves: %s (in use) is gone: %s is in use now\n", a.UTF8String, pick.UTF8String);
+    return pick;
+}
+// The packer writes a recording folder relative to Documents into the game's dm/env.txt (vk_capture/<title ID>, gl_capture/…, glslc_capture/…,
+// shader_used/…): every kind now goes into 著色器紀錄/<game>/, made here (the host only writes into a folder that exists)
+static void shader_record_dirs(void) {
+    for (NSString *k in @[@"DM_GL_CAPTURE", @"DM_VK_CAPTURE", @"DM_GLSLC_CAPTURE", @"DM_SHADER_RECORD"]) {
+        const char *v = getenv(k.UTF8String);
+        if (!v || !*v || v[0] == '/') continue;
+        NSString *d = game_dir(DIR_SHADERS, g_game_id, YES);
+        setenv(k.UTF8String, d.fileSystemRepresentation, 1);
+        fprintf(stderr, "boot: %s → %s/%s\n", k.UTF8String, DIR_SHADERS.UTF8String, d.lastPathComponent.UTF8String);
+    }
+}
 // Where the game's big data lives when the installer keeps it out of the bundle (re-signing then does not resend it): Documents/<name>
 // for a package of one game, Documents/games/<title ID>/<name> for a package of several. Copied there once over house_arrest; the shell
 // says it reads them with DMDataInDocuments in Info.plist and DOCDATA=1 in dm/shell_info.txt.
 static NSString *doc_data(NSString *name) {
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-    if (g_game_id) doc = [[doc stringByAppendingPathComponent:@"games"] stringByAppendingPathComponent:g_game_id];
+    if (g_game_id && g_layout2) doc = game_dir(DIR_DATA, g_game_id, NO);   // 遊戲資料/<game>/
+    else if (g_game_id) doc = [[doc stringByAppendingPathComponent:@"games"] stringByAppendingPathComponent:g_game_id];
     return [doc stringByAppendingPathComponent:name];
 }
 static BOOL nonempty_dir(NSString *d) { return ([NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil] ?: @[]).count > 0; }
@@ -87,6 +339,7 @@ static NSString *romfs_locate(void) {
 static void game_log_keep(NSString *doc) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *dir = [doc stringByAppendingPathComponent:@"logs"];
+    if (g_layout2) { dir = docs_in(DIR_LOGS); log = [dir stringByAppendingPathComponent:@"log.txt"]; }   // 記錄/log.txt, 記錄/<game>.txt
     // names a shell build that hard-linked them left behind (st_nlink 2) keep log.txt / log.prev.txt unreadable: remove every such name first
     // (also in Documents/.Trash, where the Files app puts a name deleted by hand: the link stays until the trash is emptied)
     for (NSString *dd in @[dir, [doc stringByAppendingPathComponent:@".Trash"]])
@@ -102,6 +355,7 @@ static void game_log_keep(NSString *doc) {
     NSTextCheckingResult *m = [re matchesInString:txt options:0 range:NSMakeRange(0, txt.length)].lastObject;
     if (!m) return;
     NSString *gid = [txt substringWithRange:[m rangeAtIndex:1]];
+    if (g_layout2) gid = shell_game_folder(gid);   // 記錄/<game>.txt: the game's name, as its other folders
     NSString *cur = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".txt"]], *prev = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".prev.txt"]];
     [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
@@ -127,9 +381,12 @@ static void boot_log(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *log = [doc stringByAppendingPathComponent:@"log.txt"], *prev = [doc stringByAppendingPathComponent:@"log.prev.txt"];
+    if (g_layout2) { log = [docs_in(DIR_LOGS) stringByAppendingPathComponent:@"log.txt"]; prev = [docs_in(DIR_LOGS) stringByAppendingPathComponent:@"log.prev.txt"]; }
     game_log_keep(doc);
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:log toPath:prev error:nil];
     if (freopen(log.fileSystemRepresentation, "w", stderr)) setvbuf(stderr, NULL, _IOLBF, 0);
+    for (NSString *n in g_layout_notes) fprintf(stderr, "%s\n", n.UTF8String);
+    g_layout_notes = nil;
 }
 
 // Boot prerequisites (before UIApplicationMain, or once the picker has chosen a game): directories / environment variables -- the host's early load reads these
@@ -138,24 +395,31 @@ static int boot_env(void) {
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *res = g_game_root;   // the game's own files; dm/font is the shell's and stays at the top of the bundle
     // Saves and scratch data: a package of several games keeps each game's apart, in save/<title ID> and temp/<title ID>
-    NSString *save = [doc stringByAppendingPathComponent:@"save"], *temp = [doc stringByAppendingPathComponent:@"temp"];
+    NSString *save = [doc stringByAppendingPathComponent:@"save"], *temp = [doc stringByAppendingPathComponent:@"temp"], *device = nil;
     if (g_game_id) { save = [save stringByAppendingPathComponent:g_game_id]; temp = [temp stringByAppendingPathComponent:g_game_id]; }
-    for (NSString *d in @[save, temp]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
+    if (g_game_id && g_layout2) {   // 存檔/<game>/<save in use>/ (SaveSlots.swift switches it), 系統/temp/<title ID>
+        NSString *g = game_dir(DIR_SAVE, g_game_id, YES);
+        save = [g stringByAppendingPathComponent:shell_save_in_use(g)];
+        device = [[g stringByAppendingPathComponent:DEVICE_SAVES] stringByAppendingPathComponent:save.lastPathComponent];
+        temp = [[docs_in(DIR_SYS) stringByAppendingPathComponent:@"temp"] stringByAppendingPathComponent:g_game_id];
+        env_default(@"DM_SAVE_GAME", g.fileSystemRepresentation);
+    }
+    for (NSString *d in @[save, temp, device.stringByDeletingLastPathComponent ?: temp]) [fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];   // the host makes the save folder itself, not its parent
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
-    for (NSString *d in @[@"romfs", @"msl", @"games", @"temp"]) {
+    for (NSString *d in @[@"romfs", @"msl", @"games", @"temp", DIR_DATA, [DIR_SYS stringByAppendingPathComponent:@"temp"]]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d] isDirectory:YES]; NSError *e = nil;
         if ([fm fileExistsAtPath:u.path] && ![u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e]) fprintf(stderr, "boot: %s could not be excluded from backup: %s\n", d.UTF8String, e.localizedDescription.UTF8String);
     }
     if (g_game_id) fprintf(stderr, "boot: game %s (%s) of the games in this package\n", g_game_id.UTF8String, [game_info()[@"name"] description].UTF8String ?: "?");
     // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
     NSMutableArray<NSString *> *from_file = [NSMutableArray array];
-    for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
+    for (NSString *ef in @[[(g_layout2 ? docs_in(DIR_SYS) : doc) stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
         NSString *txt = [NSString stringWithContentsOfFile:ef encoding:NSUTF8StringEncoding error:nil];
         for (NSString *raw in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
             NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
             if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
             NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
-            if (!getenv(k.UTF8String)) { env_default(k, v.UTF8String); if ([ef hasPrefix:doc]) [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
+            if (!getenv(k.UTF8String)) { env_default(k, v.UTF8String); if ([ef hasPrefix:docs()]) [from_file addObject:k]; fprintf(stderr, "boot: env %s=%s (%s)\n", k.UTF8String, v.UTF8String, ef.lastPathComponent.UTF8String); }
         }
     }
     setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what Documents/env.txt set (Launcher.swift); the bundle's dm/env.txt only gives the package's defaults (its memory layout), which a launcher choice replaces
@@ -177,9 +441,11 @@ static int boot_env(void) {
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
     env_default(@"DM_ROMFS", romfs.fileSystemRepresentation);
     env_default(@"DM_SAVE", save.fileSystemRepresentation);
+    if (device) env_default(@"DM_SAVE_DEVICE", device.fileSystemRepresentation);   // hle_fs.c: else <DM_SAVE>_device
+    if (g_game_id && g_layout2) shader_record_dirs();
     env_default(@"DM_TEMP", temp.fileSystemRepresentation);
     if (g_game_id) {   // the pipelines this device has built (nvn_mtl.m: pso_user.tsv and pso_archive/ beside it), else next to save/ and shared by every game
-        NSString *pso = [[doc stringByAppendingPathComponent:@"pso"] stringByAppendingPathComponent:g_game_id];
+        NSString *pso = [[(g_layout2 ? docs_in(DIR_SYS) : doc) stringByAppendingPathComponent:@"pso"] stringByAppendingPathComponent:g_game_id];
         [fm createDirectoryAtPath:pso withIntermediateDirectories:YES attributes:nil error:nil];
         env_default(@"DM_PSO_USER", [pso stringByAppendingPathComponent:@"pso_user.tsv"].fileSystemRepresentation);
     }
@@ -302,6 +568,7 @@ int shell_relaunch_requested(void) { return g_relaunch; }
 
 int main(int argc, char **argv) {
     @autoreleasepool {
+        layout_prepare(shell_game_ids());
         boot_log();
         { NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];   // the Home menu's Change games flag (front_ios.m): this launch is the relaunch it asked for
           if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) { g_relaunch = 1; fprintf(stderr, "boot: relaunched after Change games\n"); } }

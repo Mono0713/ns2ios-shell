@@ -480,6 +480,8 @@ HLE_FORCE("_ZN2nn2fs19MountDeviceSaveDataEPKc", "fsp-srv; device save data → t
     if (!d) die("DM_SAVE is not set: point it at a writable copy of a save directory");
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
     strlcat(dd, "_device", sizeof dd);
+    const char *dv = getenv("DM_SAVE_DEVICE");   // the iOS shell's game library keeps it apart from the save folders a person sees (存檔/<game>/.裝置存檔/<save>)
+    if (dv && *dv) { strlcpy(dd, dv, sizeof dd); L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0; }
     return mount_ex(name, dd, 0, 1);
 }
 HLE_FORCE("_ZN2nn2fs21GetDeviceSaveDataSizeEPlS1_", "fsp-srv; device save data size: 256 MB data + 256 MB journal", Result, h_fs_DeviceSaveSize, int64_t *size, int64_t *journal) { return h_fs_SaveSize(size, journal, NULL); }

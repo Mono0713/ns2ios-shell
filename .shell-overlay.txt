@@ -68,6 +68,7 @@
 ~ dm/host/hle_friends.c         # friends overloads without a Uid (Unity's plugin: SUPER BOMBERMAN R 2)
 ~ dm/host/hle_offline.c         # ngc filter options and China-region checks (Unity's plugin)
 ~ dm/host/main.c                # profile game_args overridable at run time (DM_GAME_ARGS): the shell compiles the placeholder's empty string
+~ dm/host/hle_fs.c              # DM_SAVE_DEVICE: the device save in a folder of its own (the game library keeps it hidden beside the save folders)
 ~ dm/gfx/nvn/nvn_mtl.m          # compile MSL source on the device; chain version read from the msl directory name (DM_MSL_DIR first); render_cond / tex_dyn_slots / tex_dirty_upload read from the environment
 ~ dm/gfx/nvn/hle_nvn.c          # profile tex_flush_upload / tex_dirty_upload / render_cond overridable at run time: the shell compiles the placeholder's 0
 ~ dm/gfx/gl/hle_gl.m            # a shader library the packing computer could not compile is compiled on the device instead

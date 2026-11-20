@@ -1,0 +1,23 @@
+diff --git a/dm/host/hle_fs.c b/dm/host/hle_fs.c
+--- a/dm/host/hle_fs.c
++++ b/dm/host/hle_fs.c
+@@ -480,6 +480,8 @@
+     if (!d) die("DM_SAVE is not set: point it at a writable copy of a save directory");
+     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
+     strlcat(dd, "_device", sizeof dd);
++    const char *dv = getenv("DM_SAVE_DEVICE");   // the iOS shell's game library keeps it apart from the save folders a person sees (存檔/<game>/.裝置存檔/<save>)
++    if (dv && *dv) { strlcpy(dd, dv, sizeof dd); L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0; }
+     return mount_ex(name, dd, 0, 1);
+ }
+ HLE_FORCE("_ZN2nn2fs21GetDeviceSaveDataSizeEPlS1_", "fsp-srv; device save data size: 256 MB data + 256 MB journal", Result, h_fs_DeviceSaveSize, int64_t *size, int64_t *journal) { return h_fs_SaveSize(size, journal, NULL); }
+@@ -819,6 +821,10 @@
+ }
+ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE", "fsp-srv → pread(2) (overload with read options, which the host ignores)", Result, h_fs_ReadFileOpt,
+           size_t *out, uint64_t h, int64_t off, void *buf, size_t sz, const void *opt) { (void)opt; return h_fs_ReadFile(out, h, off, buf, sz); }
++// ReadFile with read options and without the bytes-read output (Toasterball, Unity 2022.2 on SDK 15.3, reading its save): like the overload without options, the read must be complete.
++// Left to the SDK's own code, it takes the host fd in the FileHandle for a FileAccessor * and faults at once (FileAccessor::Read with this = 0x13)
++HLE_FORCE("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvmRKNS0_10ReadOptionE", "fsp-srv → pread(2), must read in full (overload with read options, which the host ignores)", Result, h_fs_ReadFileExactOpt,
++          uint64_t h, int64_t off, void *buf, size_t sz, const void *opt) { (void)opt; return h_fs_ReadFileExact(h, off, buf, sz); }
+ HLE_FORCE("_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE", "fsp-srv; directory entry count (filtered by the mode given at open, read position untouched)", Result, h_fs_DirCount, int64_t *out, uint64_t hh) {
+     PATH_LOCK(); dirh_t *h = (dirh_t *)hh; int64_t n = 0;
+     if (h->snap) { for (int64_t i = 0; i < h->nsnap; i++) if (h->mode & (h->snap[i].type == ENT_DIR ? DIRMODE_DIR : DIRMODE_FILE)) n++; *out = n; return RES_OK; }

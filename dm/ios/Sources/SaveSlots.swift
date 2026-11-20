@@ -1,72 +1,95 @@
 // Save slots: several saves of one game, picked on the launcher (Launcher.swift) before the game starts, so a second player, a fresh
 // run or a save brought from elsewhere does not replace the one in use.
 //
-// The save in use stays where the host reads it ($DM_SAVE, and <DM_SAVE>_device for a game that also mounts a device save; main.m,
-// hle_fs.c), so the host and the PC tools (Switch Pad's saves_data.py) see it as before. The others wait in <DM_SAVE>.slots/<n>/ as
-// save/ and device/ (with any .work / .new beside them), and <DM_SAVE>.slots/slots.json names every slot and the one in use:
-//   {"active": 1, "slots": [{"id": 1, "name": "Save 1"}, {"id": 2, "name": "Save 2"}]}
-// In a package of several games (the game library) that is Documents/save/<title ID>.slots, inside save/, so a backup of save/ takes
-// every slot along; a one-game app's is Documents/save.slots. Switching moves folders (renames on one volume, nothing is copied) and is
-// only offered before the game starts, while nothing has the save open. saves_data.py put --slot adds a slot from the PC the same way.
+// In the game library every save is a folder a person can see in the Files app (main.m, "Documents as a person reads it"):
+//   存檔/<game>/<save name>/              the save itself: the files the game wrote, as an emulator, JKSV or Checkpoint exports them
+//   存檔/<game>/.裝置存檔/<save name>/     the device save of a game that also has one (Mario Kart 8 Deluxe), hidden
+//   存檔/<game>/.存檔.json                {"active": "<save name>", "order": ["<save name>", …]}: the one in use and the launcher's order
+// The folder name is the save's name: renaming a save renames its folder, a folder copied in (the Files app, or the computer's
+// saves_data.py) is a save of its own, and deleting the folder deletes the save. Switching changes which folder $DM_SAVE names (main.m set
+// it for the save in use when the game was chosen; hle_fs.c reads it when the game mounts its save), so nothing moves; it is only offered
+// before the game starts, while nothing has the save open. A package of one game (no $DM_SAVE_GAME) has no save slots.
 import Foundation
 import Combine
 
 struct SaveSlot: Identifiable, Codable, Equatable { var id: Int; var name: String }
 struct SaveSlotProblem { let what, detail: String }   // what in English, which the launcher translates
-private struct SlotsFile: Codable { var active: Int; var slots: [SaveSlot] }
 
 final class SaveSlotsModel: ObservableObject {
     @Published private(set) var slots: [SaveSlot] = []
     @Published private(set) var active = 1
-    @Published var problem: SaveSlotProblem?   // the last switch, copy or delete that failed, shown under the section
-    let live: URL?                    // $DM_SAVE: the save in use
+    @Published var problem: SaveSlotProblem?   // the last switch, copy, rename or delete that failed, shown under the section
+    let game: URL?                    // $DM_SAVE_GAME: 存檔/<game>/
     private let defaultName: (Int) -> String
     private let fm = FileManager.default
+    private static let state = ".存檔.json", device = ".裝置存檔"
 
     init(defaultName: @escaping (Int) -> String) {
         self.defaultName = defaultName
-        live = ProcessInfo.processInfo.environment["DM_SAVE"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+        game = ProcessInfo.processInfo.environment["DM_SAVE_GAME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
         load()
     }
 
-    var available: Bool { live != nil }
+    var available: Bool { game != nil }
     var activeName: String { slots.first { $0.id == active }?.name ?? defaultName(active) }
-    private var dir: URL? { live.map { URL(fileURLWithPath: $0.path + ".slots", isDirectory: true) } }
-    private var file: URL? { dir?.appendingPathComponent("slots.json") }
-    private func parked(_ id: Int) -> URL? { dir?.appendingPathComponent(String(id), isDirectory: true) }
-
-    // Each folder of a save as it is in use and as it waits in its slot: the save, the device save, and the host's .work / .new of each
-    private func pairs(_ id: Int) -> [(URL, URL)] {
-        guard let live, let p = parked(id) else { return [] }
-        return [("", "save"), ("_device", "device")].flatMap { suffix, name in
-            ["", ".work", ".new"].map { x in (URL(fileURLWithPath: live.path + suffix + x, isDirectory: true), p.appendingPathComponent(name + x, isDirectory: true)) }
-        }
+    /// The save in use ($DM_SAVE)
+    var live: URL? { folder(active) }
+    private func folder(_ id: Int) -> URL? {
+        guard let game, let s = slots.first(where: { $0.id == id }) else { return nil }
+        return game.appendingPathComponent(s.name, isDirectory: true)
+    }
+    private func deviceFolder(_ name: String) -> URL? {
+        game?.appendingPathComponent(Self.device, isDirectory: true).appendingPathComponent(name, isDirectory: true)
     }
     private func exists(_ u: URL) -> Bool { fm.fileExists(atPath: u.path) }
 
+    // Every folder of 存檔/<game>/ is a save, except hidden ones and the host's .work / .new beside the save in use (main.m shell_save_names)
+    private func folderNames() -> [String] {
+        guard let game, let names = try? fm.contentsOfDirectory(atPath: game.path) else { return [] }
+        return names.filter { n in
+            var dir: ObjCBool = false
+            return !n.hasPrefix(".") && !n.hasSuffix(".work") && !n.hasSuffix(".new")
+                && fm.fileExists(atPath: game.appendingPathComponent(n).path, isDirectory: &dir) && dir.boolValue
+        }
+    }
+    private func readState() -> [String: Any] {
+        guard let game, let d = try? Data(contentsOf: game.appendingPathComponent(Self.state)),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [:] }
+        return j
+    }
+
     private func load() {
-        guard let file else { return }
-        if let d = try? Data(contentsOf: file), let f = try? JSONDecoder().decode(SlotsFile.self, from: d), !f.slots.isEmpty {
-            slots = f.slots; active = f.active
-        } else {
-            slots = [SaveSlot(id: 1, name: defaultName(1))]; active = 1
+        guard game != nil else { return }
+        let st = readState()
+        let order = st["order"] as? [String] ?? []
+        let names = folderNames().sorted { a, b in   // the order shown last time, then new folders by name
+            let ia = order.firstIndex(of: a) ?? Int.max, ib = order.firstIndex(of: b) ?? Int.max
+            return ia != ib ? ia < ib : a.localizedStandardCompare(b) == .orderedAscending
         }
-        // a slot folder slots.json does not list (it was lost, or the PC copied one in) is listed again rather than left unseen
-        if let dir, let names = try? fm.contentsOfDirectory(atPath: dir.path) {
-            for n in names { if let id = Int(n), !slots.contains(where: { $0.id == id }) { slots.append(SaveSlot(id: id, name: defaultName(id))) } }
-        }
-        if !slots.contains(where: { $0.id == active }) { slots.insert(SaveSlot(id: active, name: defaultName(active)), at: 0) }
-        // a switch cut short (the app killed between moves): the slot in use whose save is still parked gets it back
-        for (l, p) in pairs(active) where exists(p) && !exists(l) { try? fm.moveItem(at: p, to: l) }
-        if let p = parked(active), (try? fm.contentsOfDirectory(atPath: p.path))?.isEmpty == true { try? fm.removeItem(at: p) }
-        slots.sort { $0.id < $1.id }
+        slots = names.enumerated().map { SaveSlot(id: $0.offset + 1, name: $0.element) }
+        let want = st["active"] as? String
+        active = slots.first { $0.name == want }?.id ?? slots.first?.id ?? 1
+        if slots.isEmpty { addFolder(defaultName(1)).map { slots = [SaveSlot(id: 1, name: $0)] }; active = 1 }
+        apply()
     }
 
     private func persist() throws {
-        guard let dir, let file else { return }
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try e.encode(SlotsFile(active: active, slots: slots)).write(to: file, options: .atomic)
+        guard let game else { return }
+        var st = readState()
+        st["active"] = activeName
+        st["order"] = slots.map(\.name)
+        let d = try JSONSerialization.data(withJSONObject: st, options: [.prettyPrinted, .sortedKeys])
+        try d.write(to: game.appendingPathComponent(Self.state), options: .atomic)
+    }
+
+    // The host reads the save in use from the environment when the game mounts it
+    private func apply() {
+        guard let live else { return }
+        setenv("DM_SAVE", live.path, 1)
+        if let dv = deviceFolder(live.lastPathComponent) {
+            try? fm.createDirectory(at: dv.deletingLastPathComponent(), withIntermediateDirectories: true)
+            setenv("DM_SAVE_DEVICE", dv.path, 1)
+        }
     }
 
     private func fail(_ what: String, _ e: Error) {
@@ -74,27 +97,39 @@ final class SaveSlotsModel: ObservableObject {
         fputs("[RED] save slots: \(what): \(e.localizedDescription)\n", stderr)
     }
 
-    // Moves the save in use into its slot and the chosen slot's save in its place. Each move is a rename; one that fails puts back the ones done
+    // A save's name as a folder name: what Windows also accepts (the computer keeps the same folders), never empty, never one that exists
+    private func freeName(_ want: String, except: String? = nil) -> String {
+        var base = want.unicodeScalars.map { c -> String in
+            if "\\/:*?\"<>|".unicodeScalars.contains(c) || c.value < 0x20 { return " " }
+            return String(c)
+        }.joined().split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+        base = base.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        if base.isEmpty { base = defaultName(slots.count + 1) }
+        base = String(base.prefix(60))
+        let taken = Set(folderNames().map { $0.lowercased() }).subtracting(except.map { [$0.lowercased()] } ?? [])
+        var n = base, k = 2
+        while taken.contains(n.lowercased()) { n = "\(base) (\(k))"; k += 1 }
+        return n
+    }
+    @discardableResult private func addFolder(_ want: String) -> String? {
+        guard let game else { return nil }
+        let n = freeName(want)
+        do { try fm.createDirectory(at: game.appendingPathComponent(n, isDirectory: true), withIntermediateDirectories: true); return n }
+        catch { fail("Could not add a save", error); return nil }
+    }
+    private var nextId: Int { (slots.map(\.id).max() ?? 0) + 1 }
+
     func switchTo(_ id: Int) {
-        guard let live, id != active, slots.contains(where: { $0.id == id }), let from = parked(active), let to = parked(id) else { return }
-        var done: [(URL, URL)] = []
+        guard id != active, slots.contains(where: { $0.id == id }) else { return }
+        let old = activeName
+        active = id
         do {
-            try fm.createDirectory(at: from, withIntermediateDirectories: true)
-            for (l, p) in pairs(active) where exists(l) {
-                if exists(p) { try fm.removeItem(at: p) }   // a leftover of an older switch: what is in use is the newer
-                try fm.moveItem(at: l, to: p); done.append((l, p))
-            }
-            for (l, p) in pairs(id) where exists(p) { try fm.moveItem(at: p, to: l); done.append((p, l)) }
-            if !exists(live) { try fm.createDirectory(at: live, withIntermediateDirectories: true) }   // a new slot starts empty, as a first start does
-            try? fm.removeItem(at: to)
-            let old = activeName
-            active = id
-            try persist()
-            problem = nil
-            fputs("save slots: \(old) put away, \(activeName) in use (\(live.path))\n", stderr)
+            if let live, !exists(live) { try fm.createDirectory(at: live, withIntermediateDirectories: true) }   // deleted by hand meanwhile: starts empty
+            try persist(); apply(); problem = nil
+            fputs("save slots: \(old) put away, \(activeName) in use (\(live?.path ?? "?"))\n", stderr)
         } catch {
-            for (a, b) in done.reversed() { try? fm.moveItem(at: b, to: a) }
-            if let f = file, let d = try? Data(contentsOf: f), let s = try? JSONDecoder().decode(SlotsFile.self, from: d) { active = s.active }
+            active = slots.first { $0.name == old }?.id ?? active
+            apply()
             fail("Could not switch saves", error)
         }
     }
@@ -105,52 +140,61 @@ final class SaveSlotsModel: ObservableObject {
         switchTo(slots[((i + d) % slots.count + slots.count) % slots.count].id)
     }
 
-    private var nextId: Int { (slots.map(\.id).max() ?? 0) + 1 }
-
-    // A new, empty save, at once in use: the game starts as on its first run, and the save that was in use waits in its slot
+    // A new, empty save, at once in use: the game starts as on its first run, and the save that was in use stays as it is
     func addEmpty() {
         let id = nextId
-        slots.append(SaveSlot(id: id, name: defaultName(id)))
-        do { try persist() } catch { slots.removeAll { $0.id == id }; fail("Could not add a save", error); return }
+        guard let n = addFolder(defaultName(id)) else { return }
+        slots.append(SaveSlot(id: id, name: n))
         switchTo(id)
-        if active != id { slots.removeAll { $0.id == id }; try? persist() }
+        if active != id { slots.removeAll { $0.id == id } }
     }
 
-    // A copy of the save in use as a slot of its own (not in use): a point to go back to
+    // A copy of the save in use as a save of its own (not in use): a point to go back to
     func duplicate(name: String) {
-        guard let p = parked(nextId) else { return }
-        let id = nextId
+        guard let game, let live else { return }
+        let n = freeName(name), id = nextId
+        let to = game.appendingPathComponent(n, isDirectory: true)
         do {
-            try fm.createDirectory(at: p, withIntermediateDirectories: true)
-            for (l, q) in pairs(active) where exists(l) && !l.lastPathComponent.hasSuffix(".work") && !l.lastPathComponent.hasSuffix(".new") {
-                try fm.copyItem(at: l, to: q)   // APFS clones the files
-            }
-            slots.append(SaveSlot(id: id, name: name))
+            if exists(live) { try fm.copyItem(at: live, to: to) } else { try fm.createDirectory(at: to, withIntermediateDirectories: true) }   // APFS clones the files
+            if let a = deviceFolder(live.lastPathComponent), let b = deviceFolder(n), exists(a) { try fm.copyItem(at: a, to: b) }
+            slots.append(SaveSlot(id: id, name: n))
             try persist()
             problem = nil
-            fputs("save slots: \(activeName) copied as \(name)\n", stderr)
+            fputs("save slots: \(activeName) copied as \(n)\n", stderr)
         } catch {
-            try? fm.removeItem(at: p); slots.removeAll { $0.id == id }
+            try? fm.removeItem(at: to); deviceFolder(n).map { try? fm.removeItem(at: $0) }
+            slots.removeAll { $0.id == id }
             fail("Could not copy the save", error)
         }
     }
 
+    // Renames the save's folder (and its device save's)
     func rename(_ id: Int, _ name: String) {
-        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !n.isEmpty, let i = slots.firstIndex(where: { $0.id == id }) else { return }
-        slots[i].name = String(n.prefix(40))
-        do { try persist() } catch { fail("Could not rename the save", error) }
+        guard let game, let i = slots.firstIndex(where: { $0.id == id }) else { return }
+        let old = slots[i].name, want = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !want.isEmpty, want != old else { return }
+        let n = freeName(want, except: old)
+        do {
+            let from = game.appendingPathComponent(old, isDirectory: true)
+            if exists(from) { try fm.moveItem(at: from, to: game.appendingPathComponent(n, isDirectory: true)) }
+            if let a = deviceFolder(old), let b = deviceFolder(n), exists(a) { try fm.moveItem(at: a, to: b) }
+            slots[i].name = n
+            try persist()
+            if id == active { apply() }
+            problem = nil
+        } catch { fail("Could not rename the save", error) }
     }
 
-    // A slot not in use, with its files
+    // A save not in use, with its files
     func delete(_ id: Int) {
-        guard id != active, let p = parked(id) else { return }
+        guard id != active, let p = folder(id), let s = slots.first(where: { $0.id == id }) else { return }
         do {
             if exists(p) { try fm.removeItem(at: p) }
+            if let dv = deviceFolder(s.name), exists(dv) { try fm.removeItem(at: dv) }
             slots.removeAll { $0.id == id }
             try persist()
             problem = nil
-            fputs("save slots: slot \(id) deleted\n", stderr)
+            fputs("save slots: \(s.name) deleted\n", stderr)
         } catch { fail("Could not delete the save", error) }
     }
 }
