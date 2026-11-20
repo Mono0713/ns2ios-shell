@@ -94,7 +94,7 @@
 
 | 遊戲 | Title ID | 狀況 |
 |---|---|---|
-| New Super Mario Bros. U Deluxe | `0100EA80032EA000` | 1.0.0 本體是 32 位元（殼只能跑 64 位元）。之前只用本體測過，**沒帶 1.0.2 更新檔測過**；重新評估中。 |
+| New Super Mario Bros. U Deluxe | `0100EA80032EA000` | 32 位元（殼只能跑 64 位元的 Switch 遊戲）。2026-11-20 帶 1.0.2 更新檔重驗：更新檔沒有換掉主程式（main／sdk 跟 1.0.0 完全相同），main.npdm 仍標 32 位元。iPad 不可行，替代方案是電腦 Ryujinx＋串流。 |
 | Moving Out 2 | `010065D018172000` | 打包失敗已修（11/17），還沒勾進遊戲庫。 |
 | The Legend of Zelda: Breath of the Wild | `01007EF00011E000` | 有設定檔，還沒勾進遊戲庫。 |
 | Nintendo Switch Sports Resort | `04008E001F098000` | Switch 2 遊戲，要先完整同步上游 nxnative。 |
