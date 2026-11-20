@@ -141,6 +141,9 @@ static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
     }
 }
 
+// The app's own volume (the shell's menu and TV panel, front_ios.m), on top of the game's and the device's: a gain on what goes to the device, 1 by default
+static _Atomic uint32_t g_master = 0x3f800000u;
+void dm_audio_master(float v) { if (!(v >= 0.f)) v = 0.f; if (v > 1.f) v = 1.f; uint32_t b; memcpy(&b, &v, 4); atomic_store_explicit(&g_master, b, memory_order_relaxed); }
 static _Atomic uint64_t g_render_calls;   // Cumulative sound card callbacks (lifecycle verification: must keep growing after resume)
 uint64_t dm_audio_render_calls(void) { return atomic_load_explicit(&g_render_calls, memory_order_relaxed); }
 static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
@@ -156,6 +159,10 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
             LOG("audio #%d device callbacks %llu: %u–%u frames each, %.1f blocks queued on average at callback; in these 2000, %llu underruns, %.1f ms zero-padded", a->id, (unsigned long long)a->st_calls, a->st_fmin, a->st_fmax, a->st_qsum / 2000.0,
                 (unsigned long long)(un - a->st_u0), (ubb - a->st_ub0) / (2.0 * a->ch) / (RATE / 1000.0)); a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = 0; a->st_u0 = un; a->st_ub0 = ubb; } }
     pull_device(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
+    { uint32_t mb = atomic_load_explicit(&g_master, memory_order_relaxed);
+      if (mb != 0x3f800000u) { float m; memcpy(&m, &mb, 4); int16_t *s = bl->mBuffers[0].mData; UInt32 n = bl->mBuffers[0].mDataByteSize / sizeof *s;
+          int32_t g = (int32_t)(m * m * 32768.f);   // squared: the slider's steps sound even
+          for (UInt32 i = 0; i < n; i++) s[i] = (int16_t)(((int32_t)s[i] * g) >> 15); } }
     { static int mute = -1; if (mute < 0) { const char *e = getenv("DM_AUDIO_MUTE"); mute = e && atoi(e); }   // diagnostic: the whole real-output path (AudioUnit callback pacing, background take-over) but with the output silenced (lifecycle tests on the Mac without noise)
       if (mute) memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize); }
     return noErr;

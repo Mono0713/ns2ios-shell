@@ -292,6 +292,8 @@ step in `shell_build.sh`) is written for this fork; no code was copied.
 `nx_extract` uses **[LibHac](https://github.com/Thealexbarney/LibHac)**; the shader translator embeds Ryujinx's shader library;
 shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**; `zstd.exe` in the tools zip is
 Meta's **[zstd](https://github.com/facebook/zstd)** CLI v1.5.7, redistributed unmodified under its BSD licence.
+`oodle_serve.exe` in the tools zip is built from Powzix's **[ooz](https://github.com/powzix/ooz)** Oodle decoder and is
+GPL-3.0, as ooz is ([dm/tools/oodle_serve](dm/tools/oodle_serve/README.md)); the packer only runs it as a separate program.
 
 **License: MIT**, the same as upstream. [LICENSE](LICENSE) is upstream's own file and carries the original copyright notice
 (© 2026 jhaizhou — nxnative kept it from d2r-mobile, whose generic parts it started from). If you redistribute this fork or a

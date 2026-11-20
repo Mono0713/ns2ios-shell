@@ -3798,6 +3798,36 @@ static NvShader *builtin_get(const char *ctl) {
     }
     return nil;
 }
+// DM_SHADER_RECORD=<dir> (relative to Documents on the phone: shader_used/<title ID>, written into dm/env.txt by nxn_pack.py for a game packed with only the shaders it uses):
+// each shader key the game asks for that the shader map does not hold is written once, one per line, to <dir>/<16 hex digits of this run>.keys. Switch Pad takes the files back and the next
+// pack translates those shaders too (shader_split.py DM_SHADER_USED). Overcooked! All You Can Eat ships 520,394 Unity keyword variants and Pummel Party 276,367: translating all of them
+// takes hours and ships hundreds of thousands of files, while a game draws with a few thousand. The keys already recorded by earlier runs are read first, so each is written once.
+// The line is flushed at once: the game may be closed at any time. Called only on the submit thread (prog_get)
+static void shader_record_miss(const char *key) {
+    static const char *dir; static int init; static FILE *f; static NSMutableSet<NSString *> *seen;
+    if (!init) {
+        init = 1; dir = getenv("DM_SHADER_RECORD");
+        if (!dir || !*dir) { dir = NULL; return; }
+        char p[1024]; snprintf(p, sizeof p, "%s", dir); for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; } mkdir(p, 0755);
+        seen = [NSMutableSet set];
+        for (NSString *n in [NSFileManager.defaultManager contentsOfDirectoryAtPath:@(dir) error:nil]) {
+            if (![n hasSuffix:@".keys"]) continue;
+            NSString *t = [NSString stringWithContentsOfFile:[@(dir) stringByAppendingPathComponent:n] encoding:NSUTF8StringEncoding error:nil];
+            for (NSString *ln in [t componentsSeparatedByString:@"\n"]) if (ln.length == 16) [seen addObject:ln];
+        }
+        MLOG("shader record: shaders this package lacks are recorded in %s (%lu by earlier runs)", dir, (unsigned long)seen.count);
+    }
+    if (!dir) return;
+    NSString *k = @(key);
+    if ([seen containsObject:k]) return;
+    [seen addObject:k];
+    if (!f) {   // made at the first new key, so a run that lacks nothing leaves no empty file
+        char path[1100]; snprintf(path, sizeof path, "%s/%08lx%08x.keys", dir, (unsigned long)time(NULL), (unsigned)getpid());
+        if (!(f = fopen(path, "a"))) { MLOG("[RED] shader record: cannot write %s", path); dir = NULL; return; }
+    }
+    fprintf(f, "%s\n", key); fflush(f);
+    static unsigned n; if (n++ < 8 || !(n % 100)) MLOG("shader record: %u new shader(s) this run, the next pack adds them", n);
+}
 static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only on the submit thread
     prog_t *p = (prog_t *)cp;
     static const prog_t *lp; static uint64_t lser, lgen; static NvProg *lpr;   // Last result: same object, same serial and unchanged serial table means it is used directly
@@ -3815,7 +3845,8 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
         if (!stage) {   // Not in the package: look up the compute kernels embedded in the main body (nvn_builtin.h)
             NvShader *b = builtin_get(k.UTF8String);
             if (b) { o->sh[5] = b; continue; }
-            MLOG("[RED] shader %s is not in the shader map (DM_NVN_SHDUMP=directory saves its control section and code area)", k.UTF8String);
+            shader_record_miss(k.UTF8String);
+            if (!getenv("DM_SHADER_RECORD")) MLOG("[RED] shader %s is not in the shader map (DM_NVN_SHDUMP=directory saves its control section and code area)", k.UTF8String);
             // DM_NVN_SHDUMP=directory: shaders missing from the map are saved as <key>.ctl (0x880-byte control section) and <key>.code (code area, length from control +0x704), to trace their source / add them to the map offline
             static const char *shd; static int shd_init; if (!shd_init) { shd = getenv("DM_NVN_SHDUMP"); shd_init = 1; }
             if (shd) { char path[1024]; FILE *f; uint32_t ncode; memcpy(&ncode, (const uint8_t *)p->sd[i].control + 0x704, 4);   // with SHDUMP set the control section is the host's copy
@@ -10130,17 +10161,22 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
 static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
 static id<MTL4Compiler> g_fx_comp;
-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
+// 1 = metalfx (always), 2 = the launcher's Standard ("off"): MetalFX only while the picture is on a TV, where it is enlarged the most and the iPad is usually on
+// power (front_picture_on_tv), bilinear on the iPad's own screen; 0 = never ("0", a diagnostic)
+static int g_fx_mode = -1;
+__attribute__((weak)) int front_picture_on_tv(void) { return 0; }   // the iOS front end's (front_ios.m); none elsewhere
 static int fx_mode(void) {
     if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 2;
     if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
-    else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
+    else if (e && !strcmp(e, "0")) v = 0;
+    else if (e && *e && strcmp(e, "off")) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx, off or 0; keeping off (MetalFX on a TV only)", e);
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
+    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v == 1 ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it"
+         : v == 2 ? "off: MetalFX while the picture is on a TV, bilinear on the device's screen" : "never, bilinear");
     return g_fx_mode = v;
 }
+static int fx_active(void) { int m = fx_mode(); return m == 1 || (m == 2 && front_picture_on_tv()); }
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
     NSUInteger w = (NSUInteger)vp.width, h = (NSUInteger)vp.height;
@@ -10150,7 +10186,7 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
 // remake_wait: fx is the present thread's, whose textures presents still on the GPU may read: a new scaler waits for them and for FX_REMAKE_PRESENTS presents since the last
 static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake_wait) {
     NSUInteger cw = r[2], ch = r[3], ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
-    if (fx_mode() != 1 || !fx_wanted(vp, cw, ch)) return nil;
+    if (!fx_active() || !fx_wanted(vp, cw, ch)) return nil;
     if (!fx->sc || fx->in.width != cw || fx->in.height != ch || fx->in.pixelFormat != raw.pixelFormat || fx->out.width != ow || fx->out.height != oh || fx->out.pixelFormat != out_pf) {
         NSUInteger key[6] = {cw, ch, raw.pixelFormat, ow, oh, out_pf};
         if (!memcmp(key, fx->refused, sizeof key)) return nil;
@@ -10262,6 +10298,29 @@ static void present_gpu_note(double s, int fx) {
     n[fx] = 0;
 }
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
+// The same picture on a second screen (the iOS front end's handheld play with a TV connected: the TV shows what the iPad shows). Drawn after this frame's present
+// has finished on the GPU (its feedback), so the game's rendering into the window texture is complete, on the classic queue on a queue of its own: taking the
+// TV's drawable may wait for the TV's refresh, and a frame the TV is not ready for is skipped there instead of holding up the game's present
+__attribute__((weak)) void *front_metal_mirror_layer(void) { return NULL; }
+typedef struct { int v[4]; } mirror_crop;
+static void present_mirror(id<MTLTexture> src, const int crop[4]) {
+    static dispatch_queue_t q; static _Atomic int busy; static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("dm.present.mirror", DISPATCH_QUEUE_SERIAL); });
+    if (!front_metal_mirror_layer() || busy) return;
+    busy = 1;
+    mirror_crop c = {{crop ? crop[0] : 0, crop ? crop[1] : 0, crop ? crop[2] : 0, crop ? crop[3] : 0}}; int has = crop != NULL;   // blocks cannot capture arrays
+    dispatch_async(q, ^{ @autoreleasepool {
+        CAMetalLayer *ml = (__bridge CAMetalLayer *)front_metal_mirror_layer();
+        id<CAMetalDrawable> d = ml ? [ml nextDrawable] : nil;
+        if (d) {
+            id<MTLCommandBuffer> cb = [g_q commandBuffer];
+            mirror_crop cc = c;
+            if (present_encode(cb, src, d.texture, has ? cc.v : NULL)) [cb presentDrawable:d];
+            [cb commit];
+        }
+        busy = 0;
+    } });
+}
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     if (zf_waiting(tex_mtl(t))) {   // nothing has drawn into it and it is not filled yet: undefined content (magenta on Apple GPUs). Not presented; the previous picture stays
@@ -10344,8 +10403,10 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     int fx_kind = kind == PRESENT_METALFX;
     [cb endCommandBuffer];
     MTL4CommitOptions *o = [MTL4CommitOptions new];
+    mirror_crop mc = {{crop ? crop[0] : 0, crop ? crop[1] : 0, crop ? crop[2] : 0, crop ? crop[3] : 0}}; int mhas = crop != NULL;
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         if (f.error) MLOG("[RED] display command buffer error: %s", f.error.description.UTF8String);
+        else if (front_metal_mirror_layer()) { mirror_crop m = mc; present_mirror(src, mhas ? m.v : NULL); }   // the TV's copy in handheld play
         pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; if (ticket > g_present_alloc_done[alloc_i]) g_present_alloc_done[alloc_i] = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv);
         present_gpu_note(f.GPUEndTime - f.GPUStartTime, fx_kind); pthread_mutex_unlock(&g_pq_mu);
     }];

@@ -19,7 +19,8 @@ Usage:
   --keep-work   keep the working folder (<NSP folder>/<title ID>_pack) instead of removing it after a good pack, so a
                 rerun reuses the extraction, the rewritten modules and the compiled shaders. Worth it when repacking the
                 same game repeatedly; the folder is several times the size of the game.
-  --clean       delete that working folder without packing anything
+  --clean       delete that working folder without packing anything (<title ID>_shader_cache beside it stays: it is
+                what makes the next repack of the game take minutes instead of hours; delete it by hand to free it)
   --no-shaders  an OpenGL/Vulkan game: build it with no shader library, so it boots (music, no picture) and can capture
                 its own shaders -- the first step of the route below
   --gl-capture  an OpenGL game's captured shaders (<key>.vert / <key>.frag, written by DM_GL_CAPTURE): translated to Metal
@@ -32,7 +33,7 @@ nxnative-windows-tools.zip holds all five, so nothing has to be installed by han
 
 Only your own game files go in, and the IPA it produces contains them: it is for your own use, do not distribute it.
 """
-import argparse, concurrent.futures as cf, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile
+import argparse, concurrent.futures as cf, hashlib, json, os, plistlib, re, shlex, shutil, struct, subprocess, sys, tempfile, time, zipfile, zlib
 from pathlib import Path
 
 PY = sys.executable
@@ -61,6 +62,17 @@ def folder_size(p):
     return n
 
 
+def link_or_copy(src, dst, **kw):
+    """copytree's copy_function for the stage tree: a hard link to the file in the work folder, which nothing writes to
+    again before the IPA is packed and the work folder removed, so the stage costs no space of its own (the RomFS of a
+    12 GB game and every shader library used to be copied a second time here). A plain copy where a link is not possible
+    (another volume, a file system without them)."""
+    try:
+        os.link(src, dst); return dst
+    except OSError:
+        return shutil.copy2(src, dst, **kw)
+
+
 def tidy(work, keep_logs=True):
     """Remove what the pack no longer needs, and return the bytes freed.
 
@@ -84,6 +96,73 @@ def tidy(work, keep_logs=True):
         total += n
         say('  removed %-12s %9.1f MB' % (d.name + ('/' if d.is_dir() else ''), n / 1048576))
     return total
+
+
+TRASH = '_nxn_removing'   # <NSP folder>/_nxn_removing: a finished pack's temporary files, being removed in the background
+
+# The remover runs as its own process so the next game in a queue starts at once: removing the working tree of a big game
+# (the extraction, the shader outputs, the stage tree -- a few hundred thousand files) took 3 to 5 minutes on Windows, most
+# of it the file system and the virus scanner answering one delete at a time. Several threads keep several deletes in
+# flight. It removes only a folder directly inside a folder named TRASH, never follows a link out of it, and a run cut
+# short (the computer shut down) is picked up by the next pack in the same folder.
+PURGE = r'''
+import os, sys, shutil, concurrent.futures as cf
+root = os.path.abspath(sys.argv[1])
+if os.path.basename(os.path.dirname(root)) != sys.argv[2]: sys.exit(2)
+def rm(p):
+    try: os.unlink(p)
+    except OSError:
+        try: os.chmod(p, 0o666); os.unlink(p)
+        except OSError: pass
+files = []
+for r, ds, fs in os.walk(root, followlinks=False):
+    files += [os.path.join(r, f) for f in fs]
+with cf.ThreadPoolExecutor(16) as ex: list(ex.map(rm, files, chunksize=256))
+shutil.rmtree(root, ignore_errors=True)
+try: os.rmdir(os.path.dirname(root))
+except OSError: pass
+'''
+
+
+def purge_later(d):
+    """Start removing d (a folder inside a TRASH folder) in a process of its own that outlives this one."""
+    kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    if os.name == 'nt':
+        base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        # out of the job object the caller may run this in (closing it would take the remover along); not every job allows that
+        for flags in (base | 0x01000000, base):   # 0x01000000 = CREATE_BREAKAWAY_FROM_JOB
+            try: subprocess.Popen([PY, '-I', '-c', PURGE, str(d), TRASH], creationflags=flags, **kw); return True
+            except OSError: continue
+        return False
+    try: subprocess.Popen([PY, '-I', '-c', PURGE, str(d), TRASH], start_new_session=True, **kw); return True
+    except OSError: return False
+
+
+def resume_purge(folder):
+    """A removal an earlier pack started and did not finish (the computer was shut down): start it again."""
+    t = folder / TRASH
+    if not t.is_dir(): return
+    for d in t.iterdir():
+        if d.is_dir() and not d.is_symlink(): purge_later(d)
+
+
+def tidy_later(work):
+    """tidy() without the wait: everything but logs/ is renamed into <NSP folder>/TRASH/<work>-<time> (the same disk, so
+    instant) and removed by a background process. Falls back to tidy() where a rename or the process cannot be had."""
+    if os.environ.get('NXN_TIDY_BG', '1') == '0': return None
+    t = work.parent / TRASH / ('%s-%d' % (work.name, int(time.time() * 1000)))
+    try: t.mkdir(parents=True)
+    except OSError: return None
+    root, moved = work.resolve(), 0
+    for d in sorted(work.iterdir()):
+        if d.name == 'logs' or d.parent.resolve() != root: continue
+        try: d.rename(t / d.name); moved += 1
+        except OSError as e: warn('could not move %s aside (%s): removing it now' % (d.name, e))
+    if not purge_later(t):
+        warn('could not start the background removal: removing the temporary files now')
+        shutil.rmtree(t, ignore_errors=True)
+    rest = tidy(work)   # whatever could not be moved
+    return moved, rest
 
 
 def clean_folders(folder):
@@ -520,6 +599,55 @@ def key_hint(keys):
     return hint
 
 
+def nsp_damaged_ncas(nsp):
+    """The NCAs of an NSP whose content does not match their name (an NCA is named after the first 16 bytes of its own
+    SHA-256), read without keys; [] for an intact NSP or one that is not a PFS0 (an XCI). A truncated file counts too."""
+    import hashlib
+    bad = []
+    try:
+        size = os.path.getsize(nsp)
+        with open(nsp, 'rb') as f:
+            hdr = f.read(16)
+            if hdr[:4] != b'PFS0': return []
+            n, strsz = struct.unpack_from('<II', hdr, 4)
+            ents = f.read(n * 24); strs = f.read(strsz)
+            data0 = 16 + n * 24 + strsz
+            for i in range(n):
+                off, ln, so = struct.unpack_from('<QQI', ents, i * 24)
+                name = strs[so:strs.index(b'\0', so)].decode('utf-8', 'replace')
+                if not name.endswith('.nca'): continue
+                if data0 + off + ln > size: bad.append(name); continue
+                f.seek(data0 + off); h = hashlib.sha256(); left = ln
+                while left:
+                    b = f.read(min(left, 16 << 20))
+                    if not b: break
+                    h.update(b); left -= len(b)
+                if h.hexdigest()[:32] != name.split('.')[0].lower(): bad.append(name)
+    except (OSError, ValueError, struct.error):
+        return []
+    return bad
+
+
+def extract_hint(keys, base, upd):
+    """run() hint for nx_extract: key_hint's, and for a dump that fails the NCA's hash check (2026-11-14: Mario Kart 8
+    Deluxe 4.0.1 and Super Smash Bros. Ultimate 13.0.5 updates, each with its big RomFS patch NCA broken) which file it is,
+    found by checking every NCA against its name, so the message says which NSP to download again."""
+    keyed = key_hint(keys)
+    def hint(text):
+        msg = keyed(text)
+        if msg: return msg
+        if 'the NSP is damaged' not in text and 'Hash error' not in text and 'VerificationFailed' not in text: return None
+        say('the dump fails the hash check: checking every NCA of the NSPs against its name (reads them whole)')
+        found = [(p, nsp_damaged_ncas(p)) for p in (base, upd) if p]
+        broken = [(p, b) for p, b in found if b]
+        if not broken:
+            return ('解包失敗：遊戲檔沒通過雜湊檢查，但每個 NCA 本身都完整，可能是更新檔跟本體不是同一套。'
+                    '重新下載更新檔，最好本體和更新從同一個來源拿，再轉一次。')
+        names = '、'.join('%s（%d 個 NCA 損毀：%s）' % (Path(p).name, len(b), ', '.join(b)) for p, b in broken)
+        return '解包失敗：這個檔案下載不完整或已損毀：%s。重新下載這個檔案再轉一次。' % names
+    return hint
+
+
 def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
     ex = work / 'extract'
     ex.mkdir(parents=True, exist_ok=True)
@@ -531,7 +659,7 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
         tmp = ex / (ver + '.partial')
         shutil.rmtree(tmp, ignore_errors=True)
         run([nx, keys, base, upd if upd else '-', tmp] + (['--allow-damaged'] if allow_damaged else []), log=work / 'logs' / ('extract_%s.log' % ver),
-            what='extracting %s (%s)' % (ver, base.name), hint=key_hint(keys))
+            what='extracting %s (%s)' % (ver, base.name), hint=extract_hint(keys, base, upd))
         # A previous run can leave <ver> behind without an ExeFS (an interrupted extraction, or one made before the folder
         # held an update as well), and a rename onto a non-empty directory fails on Windows. Clear it and take the new one.
         if dst.exists(): shutil.rmtree(dst, ignore_errors=True)
@@ -548,8 +676,12 @@ def step_extract(nx, keys, folder, picks, work, versions, allow_damaged=False):
 
 
 # Files a derived profile leaves out: the build makes all of these again from the packed version's own files.
+# patches.py too: dm/tools/patch_nso.py loads the repository's copy whatever the game, and a second copy on DM_GAMES_DIR
+# claims the same build IDs again, which stops the rewrite ("CUTS of build ... in both ..."; Super Smash Bros. Ultimate
+# 13.0.4 against the 13.0.5 profile). Its CUTS / OBS / FRAME_STEP are keyed by build ID and its MATCH_CUTS are taken from
+# the repository's profile for a derived one, so the copy adds nothing.
 DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv',
-                'dmsh_chain.h', 'vk_capture.tsv'}
+                'dmsh_chain.h', 'vk_capture.tsv', 'patches.py'}
 
 
 def module_build_id(nso):
@@ -643,6 +775,13 @@ def check_free_space(folder, factor=3.5):
               if p.is_file() and p.suffix.lower() in ('.nsp', '.xci', '.nsz'))
     if not src: return                       # nothing recognised yet: scan_nsps says so with a better message
     need, free = int(src * factor), shutil.disk_usage(folder).free
+    pending = [t for t in [folder / TRASH] + sorted(folder.parent.glob('*/' + TRASH)) if t.is_dir()]
+    if free < need and pending:
+        # the previous pack's temporary files (this game's, or the game before it in the queue) are still being removed
+        # in the background: finish that here first
+        say('waiting for the previous pack\'s temporary files to be removed')
+        for t in pending: shutil.rmtree(t, ignore_errors=True)
+        free = shutil.disk_usage(folder).free
     if free >= need:
         say('disk: %.1f GiB free, about %.1f GiB needed' % (free / 2**30, need / 2**30)); return
     die('not enough space on the disk holding %s: %.1f GiB free, about %.1f GiB needed.\n'
@@ -680,6 +819,38 @@ def capture_have(d):
     try: names = os.listdir(d)
     except OSError: return set()
     return {n for n in names if re.fullmatch(r'[0-9a-f]{16}\.(vert|frag)', n)}
+
+
+def vk_capture_have(d):
+    """The SPIR-V modules a capture folder holds (<key>.spv, whole files: the host writes each under a temporary name first)."""
+    try: names = os.listdir(d)
+    except OSError: return set()
+    return {n for n in names if re.fullmatch(r'[0-9a-f]{16}\.spv', n)}
+
+
+def vk_runtime(*dirs):
+    """The profile says the game generates its SPIR-V at run time: upstream's vk_capture.tsv lists what its Mac run captured
+    (Super Mario Galaxy 1 and 2). A derived profile leaves the table out, so the registered one answers for it."""
+    return any(d and (d / 'vk_capture.tsv').is_file() for d in dirs)
+
+
+def vk_capture_want(*dirs):
+    for d in dirs:
+        try: return {l.strip() for l in (d / 'vk_capture.tsv').read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')}
+        except (OSError, TypeError): continue
+    return set()
+
+
+def has_spirv(romfs):
+    """Any file in the RomFS that starts with the SPIR-V magic (vk_shaders.py finds them the same way): only the first four
+    bytes of each file are read, and the walk stops at the first one."""
+    for d, _, fs in os.walk(romfs):
+        for n in fs:
+            try:
+                with open(os.path.join(d, n), 'rb') as f:
+                    if f.read(4) == b'\x03\x02\x23\x07': return True
+            except OSError: pass
+    return False
 
 
 def build_mac_host(work, gid):
@@ -825,7 +996,8 @@ def fill_mem_used(patched, mods, gdir, rows):
     aborts during nninitStartup -- which is what Absolum 1.0.4 did: 138 MB of modules against a 64 MB default. Returns the
     value written, or None when the profile already has enough.
     """
-    total = sum(q.stat().st_size for q in patched.glob('*.patched.bin'))   # the rewritten modules, as step_rewrite names them
+    # the rewritten modules, as step_rewrite names them; not the NROs beside them, which the game loads into buffers of its own heap
+    total = sum((patched / (m + '.patched.bin')).stat().st_size for m in mods if (patched / (m + '.patched.bin')).is_file())
     have = one(rows, 'mem_used')
     if have and int(have, 0) >= total: return None
     if not total: return None                                # nothing rewritten yet
@@ -861,13 +1033,47 @@ def step_rewrite(exe_dir, mods, out, work, force=False):
     todo = list(mods)
     if not force and all((out / (m + '.patched.bin')).is_file() and (out / (m + '.fixups.tsv')).is_file() for m in mods):
         if 'sdk' not in mods or old == auto_text:
-            say('rewritten modules already there'); return
-        say('sdk auto cuts changed: rewriting sdk again'); todo = ['sdk']
+            say('rewritten modules already there'); todo = []
+        else:
+            say('sdk auto cuts changed: rewriting sdk again'); todo = ['sdk']
     out.mkdir(parents=True, exist_ok=True)
     for m in todo:
         run([PY, TOOLS / 'patch_nso.py', exe_dir / m, out, m], env=env,
             log=work / 'logs' / ('rewrite_%s.log' % m), what='rewriting %s' % m)
     if 'sdk' in todo: marker.write_text(auto_text, encoding='utf-8', newline='\n')
+    step_nros(exe_dir.parent / 'RomFS', out, work, env, force)
+
+
+def nro_names(manifest):   # the NROs an nro.tsv lists, without the rows named 'refused' (online SDKs the host never loads)
+    if not manifest.is_file(): return []
+    return [l.split('\t')[0] for l in manifest.read_text(encoding='utf-8').splitlines() if l and not l.startswith('#') and not l.startswith('refused\t')]
+
+
+def step_nros(romfs, out, work, env, force=False):
+    """The NRO modules a game loads at run time with nn::ro (Super Mario Party Jamboree: 139 in nro/NX_Release; Super Smash Bros. Ultimate: 98
+    in data.arc), as upstream's build_ipa_from_nsp.py collect_nros / rewrite: every SHA-256 the RomFS's NRR files register, found by
+    dm/tools/nro_collect.py, rewritten by patch_nso.py beside the other modules, and listed in <patched>/nro.tsv, which the host maps at start
+    (loader.c preload_nros) and step_guest puts into the Guest library (guest_nro.py). Without them the game aborts at its first
+    ro::LoadModule: '[RED] ro::LoadModule: no rewritten NRO with SHA-256 ...: it is not in the patched modules' nro.tsv'."""
+    nrrs = sorted(p for p in romfs.rglob('*.nrr') if p.is_file()) if romfs.is_dir() else []   # Smash keeps them in a folder named .nrr
+    manifest = out / 'nro.tsv'
+    if not nrrs:
+        if manifest.is_file(): manifest.unlink()   # an update can remove its NRRs: no manifest from an earlier pack
+        return []
+    coll = work / 'build' / 'nro'
+    if force or not (coll / 'nro.tsv').is_file():
+        shutil.rmtree(coll, ignore_errors=True)
+        run([PY, TOOLS / 'nro_collect.py', romfs, coll], log=work / 'logs' / 'nro_collect.log',
+            what='collecting the NROs %d NRR file(s) register' % len(nrrs))
+    names = nro_names(coll / 'nro.tsv')
+    todo = [n for n in names if force or not ((out / (n + '.patched.bin')).is_file() and (out / (n + '.fixups.tsv')).is_file())]
+    if todo: say('rewriting %d NROs%s' % (len(todo), '' if len(todo) == len(names) else ' (%d already there)' % (len(names) - len(todo))))
+    for n in todo:
+        run([PY, TOOLS / 'patch_nso.py', coll / (n + '.nro'), out, n], env=env, log=work / 'logs' / ('rewrite_%s.log' % n))
+    shutil.copyfile(coll / 'nro.tsv', manifest)
+    refused = len([l for l in manifest.read_text(encoding='utf-8').splitlines() if l.startswith('refused\t')])
+    say('NROs: %d rewritten%s, listed in nro.tsv' % (len(names), ', %d online SDK(s) refused' % refused if refused else ''))
+    return names
 
 
 def precheck(game, prof_dir, folder):
@@ -928,6 +1134,10 @@ def shader_split_hint(text):
     point of this route is that the user has no Mac -- and repeating it makes a known limitation of the route look like a
     setup mistake on their side. So the packer says it plainly and points at the two documents that answer the next question.
     """
+    if 'oodle_serve' in text:
+        return ('this game keeps its shaders in compressed archives that ooz (oodle_serve.exe) could not decode: LZ5 (an older\n'
+                "    Unreal engine's own format) or an Oodle stream ooz does not know. Those are only decoded by the game's own code,\n"
+                '    inside the Mac host, so this title needs one run on a Mac (docs/CAPTURE.md).')
     if 'DM_OODLE_HOST' in text or 'DM_OODLE_MODULES' in text:
         return ('this game keeps its shaders in Oodle-compressed archives (Trinity packs, PlatinumGames PKZ, or an older\n'
                 "    Unreal pak). Oodle is only decoded by the game's own code, running inside the Mac host, so this title\n"
@@ -965,6 +1175,9 @@ def glslc_needed(work):
     except OSError: return False
 
 
+SOURCE_ABOVE = 40000   # see step_translate
+
+
 def shader_rows(tb):
     """how many shaders the split found (rows of its shader_map.tsv)"""
     try: rows = [l for l in (tb / 'shader_map.tsv').read_text(encoding='utf-8', errors='replace').splitlines() if l.strip() and not l.startswith('#')]
@@ -972,21 +1185,113 @@ def shader_rows(tb):
     return max(0, len(rows) - 1)
 
 
-def step_shaders(game, prof_dir, tables, work, tid, force=False):
+def used_digest(folder):
+    """what the phone recorded (see take_used_shaders), as one value: a split made from other recordings is redone"""
+    h = hashlib.sha256()
+    for f in sorted(Path(folder).glob('*.keys')) if folder and Path(folder).is_dir() else []:
+        h.update(f.name.encode() + b'\0' + f.read_bytes() + b'\0')
+    return h.hexdigest()
+
+
+def take_used_shaders(folder, game):
+    """Copy the shader keys recorded on the phone (*.keys) to <version dir>/shader_used, which shader_split.py reads through
+    DM_SHADER_USED. Returns how many distinct keys there are."""
+    dst = game / 'shader_used'
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    keys = set()
+    for f in sorted(Path(folder).resolve().glob('*.keys')) if folder and Path(folder).is_dir() else []:
+        t = f.read_text(encoding='utf-8', errors='replace')
+        (dst / f.name).write_text(t, encoding='utf-8')
+        keys.update(l.strip().lower() for l in t.splitlines() if len(l.strip()) == 16)
+    return len(keys)
+
+
+def used_only(work):
+    """shader_split.py packed only the shaders the game uses (a Unity game with too many keyword variants): the package records the rest"""
+    log = work / 'logs' / 'shader_split.log'
+    try: return '\nused-only: ' in '\n' + log.read_text(encoding='utf-8', errors='replace')
+    except OSError: return False
+
+
+def ue_stamp(game):
+    """what an extraction's decoded Unreal shader archives were made from: its paks and IoStore TOCs (paths and sizes), as the NSP script's"""
+    rom = game / 'RomFS'
+    return ''.join('%s\t%d\n' % (p.relative_to(rom).as_posix(), p.stat().st_size) for p in sorted([*rom.rglob('*.pak'), *rom.rglob('*.utoc')]))
+
+
+def step_ue_decode(game, work, tools_dir, force=False):
+    """An Unreal game: its shaders are in the shader code archives of its paks or IoStore containers, every shader compressed (Oodle, LZ4), and
+    shader_split.py reads them decoded from <version dir>/ue_shaders. Upstream decodes them with the game's own Oodle in the Mac host
+    (build_ipa_from_nsp.py decode_ue_shaders); here ooz does it (oodle_serve.exe in the tools, dm/tools/oodle_serve): uepak.py takes the archives
+    out (the index AES key from main, through Windows' own bcrypt), decodes the IoStore libraries and the pak blocks on the way, and writes one job of
+    the compressed shaders, which oodle_serve --job decodes. A folder whose stamp matches the paks is reused. Returns True when it decoded anew."""
+    rom = game / 'RomFS'
+    if not any(rom.rglob('*.pak')) and not any(rom.rglob('*.utoc')): return False
+    sys.path.insert(0, str(GFX))
+    import uepak
+    out, stamp = game / 'ue_shaders', ue_stamp(game)
+    try: same = (out / 'stamp').read_text(encoding='utf-8') == stamp
+    except OSError: same = False
+    if same and not force:
+        say('Unreal shader archives already decoded: %s' % out); return False
+    main = str(game / 'ExeFS' / 'main')
+    try: arch, io = uepak.unreal_paks(str(rom), inline=False, mains=[main]), uepak.io_shader_tocs(str(rom))
+    except Exception as x: warn('Unreal paks: not read (%s)' % x); return False
+    if not arch and not io: return False   # no Unreal paks, or ones whose shaders are inline in the packages (shader_split.py reads those itself)
+    exe = find_tool('oodle_serve', tools_dir)
+    if not exe:
+        die('this is an Unreal game whose shaders are compressed in its paks, and the tools have no oodle_serve.exe to decode them.\n'
+            '    Update the tools (Switch Pad does it at start), or put oodle_serve.exe in the --tools folder.')
+    jd, log = work / 'tmp' / 'ue_job', work / 'logs' / 'ue_decode.log'
+    shutil.rmtree(jd, ignore_errors=True); jd.mkdir(parents=True)
+    say('taking the shader code archives out of the Unreal paks%s' % (' and IoStore containers' if io else ''))
+    t0, dec = time.time(), uepak.Ooz(exe)
+    try:
+        try: listing, n = uepak.job(str(rom), main, str(jd), decode=dec)
+        finally: dec.close()
+    except Exception as x:
+        import traceback
+        log.parent.mkdir(parents=True, exist_ok=True); log.write_text(traceback.format_exc(), encoding='utf-8')
+        die('the Unreal shader archives could not be taken out: %s\n    (details: %s; uepak.py probe <RomFS> <main> says what the paks hold)' % (x, log))
+    if not listing: die('the RomFS has Unreal paks, but none holds a shader code archive: where the shaders are has to be found first (uepak.py probe)')
+    say('    ' + '; '.join('%s %s shaders%s' % (x['name'], format(x['shaders'], ','), ' (%s)' % x['compression'] if x.get('compression') else '') for x in listing))
+    if n:
+        run([exe, '--job', jd / 'oodle.job'], log=log, what='decoding %s Oodle-compressed shaders with ooz' % format(n, ','))
+    part = game / 'ue_shaders.partial'
+    shutil.rmtree(part, ignore_errors=True)
+    uepak.finish(str(jd), str(part)); (part / 'stamp').write_text(stamp, encoding='utf-8')
+    shutil.rmtree(out, ignore_errors=True); part.rename(out); shutil.rmtree(jd, ignore_errors=True)
+    say('    Unreal shaders decoded in %.1fs -> %s' % (time.time() - t0, out))
+    return True
+
+
+def step_shaders(game, prof_dir, tables, work, tid, force=False, tools_dir=None):
     """shader_split.py: pull the shaders out of the game files and produce the four tables. The rows must match the
     profile's (that is how we know the files are the version the profile was built from)."""
     need_shaders(prof_dir, 'this game')
     pkg, tb = work / 'shader' / 'pkg', work / 'shader' / 'tables'
-    if not force and (pkg / 'index.tsv').is_file() and all((tb / n).is_file() for n in tables):
+    used = game / 'shader_used'
+    mark = tb / 'shader_used.digest'   # the recordings the split was made from
+    try: same_used = mark.read_text(encoding='utf-8').strip() == used_digest(used)
+    except OSError: same_used = not any(used.glob('*.keys')) if used.is_dir() else True
+    if not force and same_used and (pkg / 'index.tsv').is_file() and all((tb / n).is_file() for n in tables):
         say('shader split already done'); return pkg, tb
     tb.mkdir(parents=True, exist_ok=True)
     # argv of shader_split.py: romfs, main, package, shader_map.tsv, shader_facts.tsv, shader_pairs.tsv, pso_pairs.tsv --
     # the last is what the pipeline prebuild takes of agl's BAHS program variations, as upstream's build_ipa_from_nsp.py
     # asks for it (split_shaders, names + ('pso_pairs.tsv',))
     names = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
+    env = {'DM_GAME': tid, 'DM_SHADER_USED': str(used)}
+    ooz = find_tool('oodle_serve', tools_dir)
+    if ooz and not os.environ.get('DM_OODLE_HOST'):
+        # Oodle-compressed game files the split reads itself (Trinity packs, PlatinumGames PKZ, Unreal paks with the shaders inline): ooz in
+        # place of the game's own decoder in the Mac host, which answers the same requests. LZ5 (DRAGON QUEST XI S) still needs the Mac.
+        env.update(DM_OODLE_HOST=str(ooz), DM_OODLE_MODULES='-')
     run([PY, GFX / 'shader_split.py', game / 'RomFS', game / 'ExeFS' / 'main', pkg] + [tb / n for n in names],
-        env={'DM_GAME': tid}, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
+        env=env, log=work / 'logs' / 'shader_split.log', what='splitting the shaders out of the game files',
         hint=shader_split_hint)
+    mark.write_text(used_digest(used) + '\n', encoding='utf-8')
     for n in names:
         a, b = tb / n, prof_dir / n
         if b.is_file():
@@ -1000,6 +1305,49 @@ def step_shaders(game, prof_dir, tables, work, tid, force=False):
     return pkg, tb
 
 
+def shader_cache(work, tid):
+    """<NSP folder>/<title ID>_shader_cache: the shader cache a repack of this game starts from (see step_translate)"""
+    return work.parent / (tid + '_shader_cache')
+
+
+def prune_shader_cache(cas):
+    """Drop the translated libraries no shader of the game points at any more (index/<key>.json names each one's
+    current entry), so the cache holds one generation of them rather than one more per translation change. The
+    compiled libraries (metallib/, by Metal source) stay: a later change that restores a shader's source reuses them."""
+    idx, lib = cas / 'index', cas / 'shader'
+    if not idx.is_dir() or not lib.is_dir(): return
+    live = set()
+    for j in idx.glob('*.json'):
+        try: live.add(json.load(open(j, encoding='utf-8'))['digest'])
+        except Exception: return   # an index entry that cannot be read: keep everything rather than guess
+    freed = 0
+    for d in lib.iterdir():
+        if d.is_dir() and d.name not in live and d.parent.resolve() == lib.resolve():
+            freed += folder_size(d); shutil.rmtree(d, ignore_errors=True)
+    if freed: say('shader cache: removed %.1f MB of libraries no shader uses any more' % (freed / 1048576))
+
+
+def shader_jobs():
+    """How many shaders dmsh_build.py works on at once (J): every logical processor, where it used to be a fixed 8 that left
+    half of a 16-thread desktop idle through the longest step of a pack. Each job is a translator or Metal compiler
+    process of a few hundred MB, so it stays within the memory too (about 0.5 GB a job), and at most 32."""
+    n = max(8, os.cpu_count() or 8)   # never fewer than the old 8: a job also waits on its files and processes
+    mem = 0
+    try:
+        if os.name == 'nt':
+            import ctypes
+            class MS(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong)] + [(f, ctypes.c_ulonglong) for f in
+                            ('total', 'avail', 'tpf', 'apf', 'tv', 'av', 'aev')]
+            m = MS(); m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)): mem = m.total
+        else:
+            mem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    except Exception: mem = 0
+    if mem: n = min(n, max(4, int(mem / 2**29)))
+    return max(4, min(32, n))
+
+
 def step_translate(pkg, work, xlate, iosout, tid, force=False):
     """dmsh_build.py, with no metal compiler: nometal_run.py turns `xcrun metal` into a copy, so the "libraries" hold MSL
     source and the phone compiles them once on first launch. dmsh_build.py creates <iosout>/b-<chain version> itself."""
@@ -1011,8 +1359,19 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # them at once), without them they hold source. Installing or removing the tools changes the chain version, so a
     # rebuild goes to a new b-<version> folder; the libraries already there count only when they were made the same way.
     mfile = work / 'shader' / 'compiler.txt'
+    # The Windows compiler costs about 0.8 s a library (most of it parsing metal_stdlib again for each one; one call with
+    # several files does not share that), and a shader takes two or three libraries. For a Unity game that ships every
+    # keyword variant as its own program that is a day of full CPU (Pummel Party: 276,368 shaders), while the phone
+    # compiles the same source ten times faster in its first-launch preparation (dm_shader_prep.m). Past SOURCE_ABOVE
+    # shaders the libraries go in as source; DM_METAL_TOOLS set by hand (a folder, or 0) still decides.
+    n = shader_rows(work / 'shader' / 'tables')
+    if n > SOURCE_ABOVE and 'DM_METAL_TOOLS' not in os.environ:
+        os.environ['DM_METAL_TOOLS'] = '0'
+        say('%d shaders: packed as source for the iPad to compile at first launch (compiling them here would take '
+            'about %.0f hours; set DM_METAL_TOOLS to a Metal Developer Tools folder to compile them anyway)' % (n, n * 2 * 0.8 / 3600 / max(1, os.cpu_count() or 1)))
     mode = subprocess.run([PY, nometal, '--mode'], capture_output=True, text=True).stdout.strip() if nometal.is_file() else ''
     if mode.startswith('windows-metal'): say('compiling shaders on this computer with Apple\'s Metal Developer Tools for Windows')
+    say('shader jobs at once: %s (%d logical processors)' % (os.environ.get('J') or shader_jobs(), os.cpu_count() or 0))   # J: set in main
     def done():
         try: same = mfile.read_text(encoding='utf-8').strip() == mode
         except OSError: same = mode == 'source' or not mode
@@ -1024,7 +1383,10 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
         if not res or any(r.get('st') != 'ok' for r in res): return False
         d = iosout / marks[-1].parent.name
         have = {x.name for x in d.glob('*_b.metallib')} if d.is_dir() else set()
-        return all(r['key'] + '_b.metallib' in have for r in res)
+        # and every shader of the map now: a used-only split redone with new recordings names shaders the last build did not have
+        try: want = {l.split('\t')[3] for l in (work / 'shader' / 'tables' / 'shader_map.tsv').read_text(encoding='utf-8').splitlines()[3:] if l.count('\t') >= 3}
+        except OSError: want = set()
+        return all(r['key'] + '_b.metallib' in have for r in res) and all(k + '_b.metallib' in have for k in want)
     if not force and done():
         say('shader libraries already there'); return
     need_tool('spirv-cross', 'translate SPIR-V to Metal Shading Language',
@@ -1048,20 +1410,29 @@ def step_translate(pkg, work, xlate, iosout, tid, force=False):
     # when the toolchain lock changes. It reads the tables, so it costs nothing to do every time.
     run([PY, nometal, GFX / 'dmsh_chain.py', '--header'], env=genv,
         log=work / 'logs' / 'chain_header.log', what='dmsh_chain --header')
+    # The per-shader cache (translated libraries by their inputs, compiled libraries by their Metal source) lives beside
+    # the working folder, not in it, so the temporary files going after a good pack do not take it along: a repack after
+    # an update that left the shaders alone (a rewriter fix, a new package format) takes every library from it, and one
+    # after a translation change compiles only the shaders whose source came out different. It replaced a full rebuild
+    # of every shader on every repack (Super Mario Odyssey: 75 of its 82 minutes).
+    cas = shader_cache(work, tid)
     run([PY, nometal, GFX / 'dmsh_build.py', pkg, work / 'shader' / 'cache'],
-        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J', '8'), 'DM_GAME': tid},
+        env={'IOSOUT': iosout, 'XLATE': xlate, 'WORK': work, 'J': os.environ.get('J') or str(shader_jobs()), 'DM_GAME': tid,
+             'DMSH_CAS': os.environ.get('DMSH_CAS', str(cas))},
         log=work / 'logs' / 'shaders.log', what='translating shaders to Metal source')
     n = len(list(iosout.glob('b-*/*_b.metallib'))) if iosout.is_dir() else 0
     if not n: die('no shader libraries were produced (see %s)' % (work / 'logs' / 'shaders.log'))
+    if 'DMSH_CAS' not in os.environ: prune_shader_cache(cas)
     mfile.write_text(mode + '\n', encoding='utf-8')
     say('%d shader libraries' % n)
 
 
 def step_guest(patched, mods, stage):
+    # guest_nro.write is guest_dylib.write for a game without NROs (the same bytes), and adds the NRO table for one with them
     sys.path.insert(0, str(TOOLS))
-    import guest_dylib
-    fw, n = guest_dylib.write(str(patched), str(stage / 'Frameworks'), mods)
-    say('Frameworks/Guest.framework: %d bytes' % n)
+    import guest_nro
+    fw, n, k = guest_nro.write(str(patched), str(stage / 'Frameworks'), mods)
+    say('Frameworks/Guest.framework: %d bytes%s' % (n, ' with %d NROs' % k if k else ''))
 
 
 def env_for(rows):
@@ -1109,6 +1480,9 @@ def env_for(rows):
         if v: lines.append('%s=%s' % (ev, v.strip()))
     # op_mode is read as atoi() against DM_GAME_OPMODE, which is int(om == "console"): atoi("handheld") and
     # atoi("console") are both 0, so the profile's word has to become the number the host compares.
+    # ub_defer off: every inline uniform update inside a render pass ends the pass, as before the deferral (nvn_mtl.m ubd_on).
+    # Super Mario Odyssey's auto-exposure pass and its smoke read wrong constants with the deferral on (white frames).
+    if one(rows, 'ub_defer') and not truthy(one(rows, 'ub_defer')): lines.append('DM_NVN_UB_DEFER=0')
     om = one(rows, 'op_mode')
     if om: lines.append('DM_OPMODE=' + ('1' if om.strip() == 'console' else '0'))
     # program_id is deliberately NOT written. The shell is compiled from the placeholder profile, so its DM_GAME_PROGRAM_ID
@@ -1156,7 +1530,107 @@ def env_for(rows):
     return lines
 
 
-def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work):
+# ---------------------------------------------------------------- RomFS left in the NSP (--romfs-source)
+#
+# A game package for Switch Pad's library carried the game's whole RomFS (most of its size), next to the NSP it was
+# extracted from, so every game sat on the disk twice (about 40 GB for a library of 33 games). The library never installs
+# the RomFS from the package anyway: romfs_data.py push copies it into the app's Documents on the iPad, and only when the
+# iPad does not have that RomFS yet (its id). With --romfs-source the package holds, instead of romfs/, a record of where
+# the RomFS comes from and what it holds: <App>/romfs.source.json (outside romfs/, dm/ and the other folders nxn_merge.py
+# copies, so it never reaches the iPad). Push extracts the RomFS from the NSP again with the same nx_extract (a minute or
+# two), checks every file against the list (name, size and the CRC-32 the zip entry used to carry, so the id is the same
+# and a game already on the iPad is not sent again) and removes the extraction afterwards.
+ROMFS_RECORD = 'romfs.source.json'
+
+
+def crc_file(path):
+    c = 0
+    with open(path, 'rb') as f:
+        while True:
+            b = f.read(8 << 20)
+            if not b: return c
+            c = zlib.crc32(b, c)
+
+
+def romfs_listing(romfs):
+    """[[path under RomFS with /, size, CRC-32]] of every file, sorted; CRCs over several threads (zlib releases the GIL)"""
+    files = []
+    for root, dirs, fs in os.walk(romfs):
+        dirs.sort()
+        for f in fs:
+            p = os.path.join(root, f)
+            files.append((os.path.relpath(p, romfs).replace(os.sep, '/'), p))
+    files.sort()
+    with cf.ThreadPoolExecutor(min(8, os.cpu_count() or 4)) as ex:
+        crcs = list(ex.map(lambda x: crc_file(x[1]), files))
+    return [[r, os.path.getsize(p), c] for (r, p), c in zip(files, crcs)]
+
+
+def nsp_ref(p):
+    p = Path(p).resolve()
+    return {'path': str(p), 'name': p.name, 'size': p.stat().st_size}
+
+
+def romfs_record(listing, tid, version, base, upd, nx, keys, allow_damaged):
+    return {'v': 1, 'tid': tid, 'version': version, 'base': nsp_ref(base), 'update': nsp_ref(upd) if upd else None,
+            'allow_damaged': bool(allow_damaged), 'nx': str(Path(nx).resolve()), 'keys': str(Path(keys).resolve()),
+            'files': len(listing), 'bytes': sum(x[1] for x in listing), 'list': listing}
+
+
+def romfs_source_wanted(a):
+    return a.romfs_source or os.environ.get('NXN_ROMFS_SOURCE', '') not in ('', '0')
+
+
+def strip_romfs(ipa, folder, keys, tools_dir, allow_damaged=False):
+    """--strip-romfs: turn a game package made before --romfs-source into one: the same package without romfs/, plus the
+    record, written from the zip's own entries (their names, sizes and CRCs), so nothing is extracted or packed again.
+    The NSP files are the ones a pack of this folder picks (the base game and the newest update)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from nxn_merge import Out
+    ipa = Path(ipa).resolve()
+    with zipfile.ZipFile(ipa) as z:
+        names = z.namelist()
+        A = next((n[:-len('Info.plist')] for n in names if re.fullmatch(r'Payload/[^/]+\.app/Info\.plist', n)), None)
+        if not A: die('%s is not an app package' % ipa)
+        if A + ROMFS_RECORD in names: say('%s already keeps its RomFS in the NSP' % ipa.name); return
+        if any(n.startswith(A + 'games/') for n in names): die('%s holds several games: only a single game\'s package can be stripped' % ipa.name)
+        pre = A + 'romfs/'
+        rom = [i for i in z.infolist() if i.filename.startswith(pre) and not i.is_dir()]
+        if not rom: say('%s has no RomFS to leave out' % ipa.name); return
+        pl = plistlib.loads(z.read(A + 'Info.plist'))
+        m = re.fullmatch(r'org\.nxnative\.([0-9a-f]{16})', pl.get('CFBundleIdentifier', ''))
+        tid = m.group(1).upper() if m else ''
+        apps = scan_nsps(folder)
+        fam = apps.get(tid) if tid else (next(iter(apps.values())) if len(apps) == 1 else None)
+        if not fam or not fam['base']: die('no base game for %s in %s' % (tid or ipa.name, folder))
+        upds = sorted(fam['updates'], key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
+        pkg = upds[-1] if upds else 'v0'
+        nx = None
+        for n in ('nx_extract.exe', 'nx_extract'):
+            if tools_dir and (tools_dir / n).is_file(): nx = tools_dir / n
+        if not nx: die('--strip-romfs needs --tools with nx_extract in it (push extracts the RomFS with it)')
+        listing = sorted([i.filename[len(pre):], i.file_size, i.CRC] for i in rom)
+        rec = romfs_record(listing, tid, pkg, fam['base'], fam['updates'].get(pkg) if pkg != 'v0' else None, nx, keys, allow_damaged)
+        part = ipa.with_name(ipa.name + '.partial')
+        o = Out(str(part))
+        try:
+            for i in z.infolist():
+                if i.filename.startswith(pre): continue
+                o.copy(z, i, i.filename)
+            o.add(A + ROMFS_RECORD, json.dumps(rec, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+            o.close()
+        except BaseException:
+            try: o.f.close(); part.unlink()
+            except OSError: pass
+            raise
+    before = ipa.stat().st_size
+    os.replace(part, ipa)
+    say('%s: RomFS left out (%d files, %.2f GB stay in %s%s), package %.2f -> %.2f GB'
+        % (ipa.name, rec['files'], rec['bytes'] / 2**30, fam['base'].name, ' + ' + rec['update']['name'] if rec['update'] else '',
+           before / 2**30, ipa.stat().st_size / 2**30))
+
+
+def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, tid, msl_dir, work, romfs_rec=None):
     """Unpack the shell and put the game into it: guest library, MSL source, RomFS, tables, icon, identity."""
     # Move a previous stage aside instead of deleting it: this environment counts file deletions and refuses to go past a
     # threshold, which a 5000-file app tree trips instantly. Renaming keeps the build going; the old tree is reported so it
@@ -1177,20 +1651,28 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     say('shell unpacked: %s' % A.name)
 
     step_guest(patched, mods, A)
-    for m in mods:
+    # the NROs' tables too, and nro.tsv, which the loader reads from the same folder (loader.c preload_nros)
+    for m in list(mods) + nro_names(patched / 'nro.tsv'):
         for suf in ('.fixups.tsv', '.gates.tsv', '.cuts.tsv', '.obs.tsv'):
             s = patched / (m + suf)
             if s.is_file(): shutil.copyfile(s, A / 'dm' / s.name)
+    if (patched / 'nro.tsv').is_file(): shutil.copyfile(patched / 'nro.tsv', A / 'dm' / 'nro.tsv')
 
     # shader libraries: the directory name is the chain version, which the shell reads at run time
     if msl_dir.is_dir():
         dst = A / 'msl' / msl_dir.name
-        shutil.copytree(msl_dir, dst)
+        shutil.copytree(msl_dir, dst, copy_function=link_or_copy)
         n = len(list(dst.glob('*_b.metallib')))
         if n: say('shader source for %d shaders -> msl/%s' % (n, msl_dir.name))   # empty for a GL package, whose shaders go to msl/gl instead
 
-    shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True)
-    say('RomFS in place')
+    if romfs_rec is not None:
+        (A / ROMFS_RECORD).write_text(json.dumps(romfs_rec, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+        say('RomFS stays in %s%s: %d files, %.2f GB (--romfs-source; push extracts it again)'
+            % (romfs_rec['base']['name'], ' + ' + romfs_rec['update']['name'] if romfs_rec['update'] else '',
+               romfs_rec['files'], romfs_rec['bytes'] / 2**30))
+    else:
+        shutil.copytree(game / 'RomFS', A / 'romfs', symlinks=True, copy_function=link_or_copy)
+        say('RomFS in place')
 
     # tables the game profile carries (shader map, c1 list, warm-up list, uniform extents)
     for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv'):
@@ -1216,6 +1698,11 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # does not crash at once -- the game asks for the wrong heap and aborts in SetHeapSize (Hades II asked for pool - 64 MB
     # instead of pool - 108 MB and overflowed the pool by 44 MB).
     env_lines = env_for(rows)
+    # A guessed profile (switchpad/make_provisional.py, profile_guess.py) is marked for the host, which then gives a game with virtual address memory more alias region
+    # than the guess when the device allows it (hle_svc.c mem_init_once): the guessed size ran out in two Unity games that needed it raised by hand
+    try:
+        if (gdir / 'game.tsv').read_text(encoding='utf-8').startswith('# Provisional game profile'): env_lines.append('DM_MEM_PROVISIONAL=1')
+    except OSError: pass
     # The npdm's main thread stack size: the host runs the main thread on a 64 MB stack and reports this size instead (hle_os.c GetCurrentStackInfo),
     # since Godot sizes its worker stacks from it (Unrailed 2: 1 MB on the Switch, 64 MB x 28 workers on the host ran the heap out)
     try:
@@ -1338,6 +1825,10 @@ def main():
                     help="the GLSLC outputs an NVN game compiled at run time on the phone (<hash>.glslc, which DM_GLSLC_CAPTURE "
                          'writes; Unrailed 2, Godot): split and translated like the shaders the game files hold. Without it '
                          'such a game is packed with what its files hold and records the rest on the phone.')
+    ap.add_argument('--used-shaders', default='', metavar='FOLDER',
+                    help="the shader keys a game packed with only the shaders it uses recorded on the phone (*.keys, which "
+                         'DM_SHADER_RECORD writes: a Unity game with more than 40,000 keyword variants, Overcooked! All You '
+                         'Can Eat, Pummel Party): those are translated and packed too.')
     ap.add_argument('--keep-work', action='store_true',
                     help='keep the working folder after a good pack, so a rerun reuses the extraction, the rewritten '
                          'modules and the shaders (it is several times the size of the game)')
@@ -1347,7 +1838,18 @@ def main():
                     help='folder holding the nx_extract, dmsh_xlate, spirv-cross, glslangValidator and zstd executables '
                          '(the windows-tools CI artifact, packed as nxnative-windows-tools.zip). They are put on PATH and '
                          'used instead of building anything.')
+    ap.add_argument('--romfs-source', action='store_true',
+                    help='leave the RomFS out of the package and record where it comes from instead (Switch Pad\'s library: '
+                         'romfs_data.py push extracts it from the NSP again when the iPad needs it). Also NXN_ROMFS_SOURCE=1')
+    ap.add_argument('--strip-romfs', default='', metavar='IPA',
+                    help='turn a game package packed without --romfs-source into one (nsp_dir: its game folder; needs -k and '
+                         '--tools), and exit')
     a = ap.parse_args()
+    if a.strip_romfs:
+        if not a.nsp_dir: a.nsp_dir = a.shell   # the only positional is the game folder
+        if not a.nsp_dir or not a.keys or not a.tools: die('--strip-romfs IPA needs the game folder, -k prod.keys and --tools')
+        strip_romfs(a.strip_romfs, Path(a.nsp_dir).resolve(), Path(a.keys).resolve(), Path(a.tools).resolve(), a.allow_damaged)
+        return
     if a.capture_gl and a.shell and not a.nsp_dir:      # capture mode's only positional is the game folder
         a.shell, a.nsp_dir = '', a.shell
 
@@ -1369,7 +1871,10 @@ def main():
     folder = Path(a.nsp_dir).resolve()
     if not a.capture_gl and not shell.is_file(): die('no shell file: %s' % shell)
     if not folder.is_dir(): die('no such folder: %s' % folder)
+    resume_purge(folder)
     check_free_space(folder)
+    # shader_split.py's and dmsh_build.py's workers: every logical processor, as upstream's build_ipa_from_nsp.py does (their default is 8)
+    os.environ.setdefault('J', str(shader_jobs()))
     if not a.keys: die('give prod.keys with -k')
     keys = Path(a.keys).resolve()
     stamp = shell_stamp(shell)
@@ -1522,7 +2027,7 @@ def main():
             shutil.rmtree(dst, ignore_errors=True); shutil.copytree(out, dst)
             say('%d files → %s' % (len(os.listdir(dst)), dst))
         return say('stopped after the capture')
-    check_gates(stamp, patched, mods)
+    check_gates(stamp, patched, list(mods) + nro_names(patched / 'nro.tsv'))
 
     # NVN games hold their shaders in the game files, so they are split out and translated here. A GL or Vulkan game does not:
     # its shaders only exist once it runs (LÖVE assembles each one in Lua), and upstream captures them by booting the game on a
@@ -1559,14 +2064,31 @@ def main():
             run(args, log=work / 'logs' / 'gl_prebuilt.log', what='generating the GLSL from the game files')
         if cap is not None: step_gl_shaders(cap, gl_out, gdir, tid, a.tools)
     vk_out = None
+    vk_record = False   # the package records the SPIR-V the game generates, on the phone (Documents/vk_capture/<title ID>)
     if route == 'vulkan' and not a.no_shaders:   # --no-shaders is the capture run: a game that builds its SPIR-V at run
                                                  # time has none in the RomFS, and a missing folder is not an error there
         # SPIR-V, not GLSL: vk_shaders.py only needs spirv-cross here (Apple's Metal compiler is the missing half, and
         # --source-only skips it), so a Windows machine produces the same table a Mac does. Most Vulkan games keep their
         # SPIR-V in the RomFS (Hades: 74 files in Content/EffectsForgeSwitch), so nothing has to be captured; a game that
         # builds its modules at run time needs --vk-capture with what DM_VK_CAPTURE wrote.
+        vcap = Path(a.vk_capture).resolve() if a.vk_capture else None
+        have = vk_capture_have(vcap) if vcap else set()
+        # Super Mario Galaxy 1 and 2: Hagi generates its GX shaders as SPIR-V at run time and the RomFS has none. Upstream
+        # boots the game on a Mac to capture them; there is no Mac here, so the phone does it, as for Roof Rage's GLSL: the
+        # package records every module the game creates (DM_VK_CAPTURE, Documents/vk_capture/<title ID>), Switch Pad takes
+        # them back and the next pack translates them. The first package draws nothing; Galaxy creates all of its modules
+        # while it shows "Initializing system...", so one launch of about a minute is enough. The recording stays on, so
+        # a module a later area creates is taken the same way.
+        vk_record = vk_runtime(gdir, reg) or not has_spirv(game / 'RomFS')
+        if vk_record:
+            want = vk_capture_want(gdir, reg)
+            say('Vulkan game whose SPIR-V shaders exist only at run time: %s' % (
+                '%d recorded on the phone%s' % (len(have), ' (the profile lists %d)' % len(want) if want else '') if have
+                else 'none recorded yet, building without shaders; open it once on the iPad (no picture, about a minute), '
+                     'which records them, then pack again'))
+    if route == 'vulkan' and not a.no_shaders and (not vk_record or have):
         root = work / 'build' / 'vkroot'
-        ins = [game / 'RomFS'] + ([Path(a.vk_capture).resolve()] if a.vk_capture else [])
+        ins = [game / 'RomFS'] + ([vcap] if vcap and have else [])
         run([PY, GFX / 'vk_shaders.py', *ins, root, '--source-only'],
             log=work / 'logs' / 'vk_shaders.log', what='translating the SPIR-V to Metal source')
         vk_out = root / 'vk'
@@ -1574,7 +2096,7 @@ def main():
         tbl = [l for l in (vk_out / 'vk_shaders.tsv').read_text(encoding='utf-8').splitlines() if l and not l.startswith('#')]
         say('Vulkan shaders: %d translated (%d sources) -> %s' % (len(tbl), len(list((vk_out / 'src').glob('*.metal'))), vk_out))
     # A GL game with a capture needs neither: its shaders came from the capture, and there is nothing left to refuse.
-    if route != 'nvn' and not a.no_shaders and not gl_record and gl_out is None and vk_out is None:
+    if route != 'nvn' and not a.no_shaders and not gl_record and not vk_record and gl_out is None and vk_out is None:
         # Refused by default: such a package boots and plays its music but draws nothing, and a user who did not ask for that
         # would only see a black screen with no explanation. The flag exists for the capture run that produces the shaders.
         die('%s game: its shaders are %s, so no game file holds them; upstream captures them by booting the game on a Mac.\n'
@@ -1589,10 +2111,18 @@ def main():
     # the four tables shader_split.py writes (upstream tuple, pso_pairs.tsv included since it is what the pipeline prebuild
     # reads; the .conflicts.tsv is derived by other tools, not passed here)
     tables = ['shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv']
+    shader_record = False   # the package records the shaders it lacks, on the phone (Documents/shader_used/<title ID>): a Unity game packed with only the shaders it uses
     glslc_record = False   # the package records the GLSLC outputs the game compiles, on the phone (Documents/glslc_capture/<title ID>)
     if route == 'nvn':
         glslc_n = take_glslc_capture(a.glslc_capture, game)
-        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n))
+        used_n = take_used_shaders(a.used_shaders, game)
+        ue_new = step_ue_decode(game, work, tools_dir, a.force)
+        pkg_dir, tb = step_shaders(game, gdir, tables, work, tid, a.force or bool(glslc_n) or ue_new, tools_dir)
+        shader_record = used_only(work)
+        if shader_record:
+            say('too many Unity shader variants to translate them all: packed the ones this game draws with (%s); the phone '
+                'records the others it reaches (Documents/shader_used/%s) and the next pack adds them with --used-shaders'
+                % ('%d recorded on the phone' % used_n if used_n else 'none recorded yet: the first play may miss some objects', tid))
         glslc_record = bool(a.glslc_capture) or glslc_needed(work)
         if glslc_record:
             say('this game compiles shaders at run time with GLSLC: %s; the phone keeps recording the ones it compiles '
@@ -1652,20 +2182,37 @@ def main():
     if a.stop_after == 'guest': return say('stopped before assembly')
 
     stage = work / 'stage'
+    romfs_rec = None
+    if romfs_source_wanted(a) and (game / 'RomFS').is_dir() and any((game / 'RomFS').iterdir()):
+        listing = romfs_listing(game / 'RomFS')
+        if listing:
+            romfs_rec = romfs_record(listing, tid, pkg, picks[pkg][0], picks[pkg][1], nx, keys, a.allow_damaged)
     A = step_assemble(shell, stage, game, patched, mods, gdir, rows,
-                      one(rows, 'name', tid), builds[pkg], tid, msl_out, work)
+                      one(rows, 'name', tid), builds[pkg], tid, msl_out, work, romfs_rec)
     if vk_out is not None:
         dst = A / 'msl' / 'vk'
         shutil.rmtree(dst, ignore_errors=True)
         shutil.copytree(vk_out, dst)
         say('Vulkan shader table and %d sources → msl/vk (the phone compiles them at first launch)'
             % len(list((dst / 'src').glob('*.metal'))))
+    if vk_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_VK_CAPTURE=')] + ['DM_VK_CAPTURE=vk_capture/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_VK_CAPTURE=vk_capture/%s (the phone records the SPIR-V the game generates there)' % tid)
     if gl_record:
         env = A / 'dm' / 'env.txt'
         lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
         lines = [l for l in lines if not l.startswith('DM_GL_CAPTURE=')] + ['DM_GL_CAPTURE=gl_capture/%s' % tid]
         env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         say('dm/env.txt: DM_GL_CAPTURE=gl_capture/%s (the phone records the GLSL the game compiles there)' % tid)
+    if shader_record:
+        env = A / 'dm' / 'env.txt'
+        lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
+        lines = [l for l in lines if not l.startswith('DM_SHADER_RECORD=')] + ['DM_SHADER_RECORD=shader_used/%s' % tid]
+        env.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        say('dm/env.txt: DM_SHADER_RECORD=shader_used/%s (the phone records the shaders the package lacks there)' % tid)
     if glslc_record:
         env = A / 'dm' / 'env.txt'
         lines = env.read_text(encoding='utf-8').splitlines() if env.is_file() else []
@@ -1711,9 +2258,14 @@ def main():
     if a.keep_work:
         say('working folder kept: %s (remove it with --clean "%s")' % (work, folder))
     else:
-        say('removing the temporary files (--keep-work keeps them for a faster rerun)')
-        freed = tidy(work)
-        say('removed %.1f MB; the logs stay in %s' % (freed / 1048576, work / 'logs'))
+        bg = tidy_later(work)
+        if bg is not None:
+            say('temporary files: being removed in the background (%s), so the next game can start now; the logs stay in %s'
+                % (work.parent / TRASH, work / 'logs'))
+        else:
+            say('removing the temporary files (--keep-work keeps them for a faster rerun)')
+            freed = tidy(work)
+            say('removed %.1f MB; the logs stay in %s' % (freed / 1048576, work / 'logs'))
 
 
 if __name__ == '__main__':

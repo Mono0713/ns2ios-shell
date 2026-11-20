@@ -33,6 +33,8 @@
 | CloverPit | `0100ABA02501A000` | Unity / NVN | ✅ 可玩 | 不用 | 記錄有 `nvnTextureViewCompare` 未實作的紅字，目前看不出影響。 | 2026-11-07 |
 | Balatro | `0100CD801CE5E000` | LÖVE / OpenGL | ✅ 可玩 | repo 設定檔 | OpenGL 遊戲：第一次玩時殼會錄著色器，再按一次「裝到 iPad」才有完整畫面。 | 2026-11-07 |
 | Ultimate Chicken Horse | `0100FCF002A58000` | Unity 2021.3 / NVN | ✅ 可玩 | 不用 | 開場閃紫已修（`2e0f42f`）；打包器加了 Unity 2021.3 格式。 | 2026-11-07 |
+| The Legend of Zelda: Tears of the Kingdom | `0100F2C0115B6000` | NVN | ✅ 可玩 | repo 設定檔 | | 2026-11-17 |
+| Ember Knights | — | NVN | ✅ 可玩 | 不用 | | 2026-11-17 |
 | Tricky Towers | `010015F005C8E000` | Unity / NVN | ✅ 可玩 | 電腦端專用：`app_pool 0x80000000`（2 GB，1 GB 開不了） | | 2026-10-30（舊殼） |
 | Super Mario Odyssey | `0100000000010000` | NVN | ⚠️ 可玩，有問題 | repo 設定檔（驗證版本 1.4.1，要裝更新） | 帽子王國地上有金色細三角線、偶爾整個畫面閃白；煙霧／粒子邊緣變成硬方塊（半透明沒做出來）。調查中。 | 2026-11-08 |
 | Super Mario 3D World + Bowser's Fury | `010028600EBDA000` | NVN | ⚠️ 可玩，有問題 | repo 設定檔 | 掉幀：記錄中仍有 35 ms 以上的長幀。電腦預先編譯著色器後改善很多，但還沒完全順。 | 2026-11-08 |
@@ -50,7 +52,7 @@
 | Puyo Puyo Tetris 2 | `010038E011940000` | NVN | ❓ 未驗證 | 不用 | 早期列為可玩，目前的殼上沒有記錄。 | 早期 |
 | Boomerang Fu | `010081A00EE62000` | NVN | ❓ 未驗證 | repo 設定檔 | 早期列為可玩；打包器和殼版本不一致時 DLC 曾壞過。 | 早期 |
 | Snipperclips Plus | `01008E20047DC000` | Unity 5.5 / NVN | ❓ 未驗證 | 不用 | 早期列為可玩；資料夾名稱有逗號的問題已修（`PR #34`）。 | 早期 |
-| Unspottable | `0100B410138C0000` | Unity 2019.4 / NVN | ❓ 未驗證 | 不用 | 打包器加了 Unity 2019.4 格式（`PR #32`）。早期列為可玩；記錄中有開過約 40 秒。 | 早期 |
+| Unspottable | `0100B410138C0000` | Unity 2019.4 / NVN | ✅ 可玩 | 不用 | 打包器加了 Unity 2019.4 格式（`PR #32`）。掌機模式關卡中只有 15 fps 的原因是 iPad 全域 env.txt 裡給奧德賽用的 `DM_NVN_UB_DEFER=0`（每幀約 500 個 pass）；拿掉後關卡穩定 60 fps。 | 2026-11-17 |
 | Overcooked! All You Can Eat | `0100F28011892000` | Unity 2019.4 / NVN | ⛔ 上不了 iPad | — | 著色器約 52 萬個，打包後太大裝不上 iPad。另有工作在處理。 | — |
 | Pummel Party | `01007BA01B9B2000` | Unity 2021.3 / NVN | ⛔ 上不了 iPad | — | 著色器約 27.6 萬個，同上。 | — |
 | Mario Kart 8 Deluxe | `0100152000022000` | NVN | ⛔ 還沒試 | repo 設定檔（要 4.0.0） | 手上只有 1.0（v0）本體，要先放 4.0.0 更新檔。 | — |

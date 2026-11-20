@@ -1,7 +1,15 @@
 diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
 --- a/dm/gfx/vk/hle_vk.m
 +++ b/dm/gfx/vk/hle_vk.m
-@@ -129,6 +129,8 @@
+@@ -24,6 +24,7 @@
+ #include <mach-o/ldsyms.h>
+ #include <math.h>
+ #include <stdatomic.h>
++#include <sys/stat.h>
+ #include <time.h>
+ 
+ int mtl_fps_target(void);   // nvn_mtl.m: 60, or 30 when the frame rate is halved
+@@ -129,6 +130,8 @@
  typedef struct { char key[17]; int frag, nres; shres res[24]; } shinfo;
  static shinfo *g_sh; static int g_nsh;
  static id<MTLLibrary> g_lib;
@@ -10,7 +18,7 @@ diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
  static int sh_cmp(const void *a, const void *b) { return memcmp(((const shinfo *)a)->key, ((const shinfo *)b)->key, 16); }
  static void sh_load(void) {
      const char *d = getenv("DM_MSL_DIR"); char p[1024];
-@@ -153,11 +155,48 @@
+@@ -153,11 +156,48 @@
      fclose(f);
      qsort(g_sh, g_nsh, sizeof *g_sh, sh_cmp);   // looked up by key (Super Mario Galaxy creates over 3,000 modules at boot)
      snprintf(p, sizeof p, "%s/vk/vk_shaders.metallib", d);
@@ -62,7 +70,28 @@ diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
  
  static void dev_init_once(void) {
      @autoreleasepool {
-@@ -801,8 +840,12 @@
+@@ -781,11 +821,17 @@
+ VK(vkDestroyFramebuffer, void, VkDevice d, VkFramebuffer fb, const VkAllocationCallbacks *a) { (void)d; (void)a; free(fb); }
+ 
+ // ---------- Shaders and pipelines ----------
+-// DM_VK_CAPTURE=<dir> (Mac): every SPIR-V module the game creates is written to <dir>/<key>.spv. Super Mario Galaxy generates its GX shaders as SPIR-V at run time
+-// (over 3,000 at boot, from the pipeline database), so no game file holds them; vk_shaders.py translates a capture folder like a RomFS
++// DM_VK_CAPTURE=<dir>: every SPIR-V module the game creates is written to <dir>/<key>.spv. Super Mario Galaxy generates its GX shaders as SPIR-V at run time
++// (over 3,000 at boot, from the pipeline database), so no game file holds them; vk_shaders.py translates a capture folder like a RomFS. On the phone the packer writes
++// DM_VK_CAPTURE=vk_capture/<title ID> into the game's dm/env.txt (relative to Documents) when it had none yet; the folder is made here, and Switch Pad takes it back
+ static void sh_capture(const char *key, const void *code, size_t n) {
+     static const char *dir; static int init;
+-    if (!init) { init = 1; dir = getenv("DM_VK_CAPTURE"); if (dir) VLOG("shader capture → %s", dir); }
++    if (!init) {
++        init = 1; dir = getenv("DM_VK_CAPTURE");
++        if (dir && !*dir) dir = NULL;
++        if (dir) { char p[1024]; snprintf(p, sizeof p, "%s", dir); for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; } mkdir(p, 0755);
++                   LOG("[vk] shader capture → %s (the next pack translates what is recorded here)", dir); }
++    }
+     if (!dir) return;
+     char p[1024]; snprintf(p, sizeof p, "%s/%s.spv", dir, key);
+     if (access(p, F_OK) == 0) return;
+@@ -801,8 +847,12 @@
      for (int i = 0; i < 8; i++) snprintf(m->key + 2 * i, 3, "%02x", h[i]);
      sh_capture(m->key, ci->pCode, ci->codeSize);
      m->si = sh_find(m->key);
@@ -77,7 +106,7 @@ diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
      else OLOG("CreateShaderModule %s", m->key);
      *out = m; return VK_SUCCESS;
  }
-@@ -854,7 +897,7 @@
+@@ -854,7 +904,7 @@
              else if (st->stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
                  if (dual && m->fn) {   // pipelines may be built on several threads
                      static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; pthread_mutex_lock(&mu);

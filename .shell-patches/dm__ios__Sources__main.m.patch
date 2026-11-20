@@ -1,8 +1,11 @@
 diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
 --- a/dm/ios/Sources/main.m
 +++ b/dm/ios/Sources/main.m
-@@ -5,38 +5,134 @@
+@@ -3,40 +3,151 @@
+ #import <UIKit/UIKit.h>
+ #include <pthread.h>
  #include <signal.h>
++#include <stdatomic.h>
  #include <stdio.h>
  #include <unistd.h>
 +#include <sys/stat.h>
@@ -108,6 +111,20 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
 +    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
 +    [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
 +    [d writeToFile:cur atomically:YES];
++    // A run that crashed is also kept as <title ID>.crash.txt (and the crash before it as .crash.prev.txt), which later runs that went well do not push out: the
++    // log someone reporting a crash needs is still there however often the game was opened since. Crashed = a host crash (CRASH), a fatal host error (FATAL), the
++    // watchdog's hang exit, or the game's own abort (Break without the notification bit 31)
++    BOOL crashed = [txt containsString:@"[dm] CRASH"] || [txt containsString:@"[dm] FATAL "] || [txt containsString:@"watchdog: no progress"];
++    if (!crashed) {
++        NSRegularExpression *br = [NSRegularExpression regularExpressionWithPattern:@"Break#[0-9]+ reason=(0x[0-9A-Fa-f]+|0) " options:0 error:nil];
++        for (NSTextCheckingResult *b in [br matchesInString:txt options:0 range:NSMakeRange(0, txt.length)])
++            if (!(strtoull([txt substringWithRange:[b rangeAtIndex:1]].UTF8String, NULL, 0) & 0x80000000ull)) { crashed = YES; break; }
++    }
++    if (crashed) {
++        NSString *cc = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".crash.txt"]], *cp = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".crash.prev.txt"]];
++        [fm removeItemAtPath:cp error:nil]; [fm moveItemAtPath:cc toPath:cp error:nil];
++        [d writeToFile:cc atomically:YES];
++    }
 +}
 +
 +// Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
@@ -151,7 +168,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      // Environment switch files (for on-device diagnostics: a sideloaded app cannot be given environment variables from outside): one KEY=VALUE per line, # starts a comment; Documents/env.txt takes precedence over dm/env.txt in the bundle (put there by build_ipa.sh's DM_ENV_FILE)
      NSMutableArray<NSString *> *from_file = [NSMutableArray array];
      for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
-@@ -45,34 +141,61 @@
+@@ -45,34 +156,61 @@
              NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
              if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
              NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
@@ -228,7 +245,7 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
  }
  static int g_boot_ok;
  
-@@ -83,18 +206,61 @@
+@@ -83,22 +221,66 @@
      fprintf(stderr, "boot: dm_main returned %d\n", rc);
      return NULL;
  }
@@ -292,14 +309,26 @@ diff --git a/dm/ios/Sources/main.m b/dm/ios/Sources/main.m
      return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
  }
  @end
-@@ -115,7 +281,28 @@
- - (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
+ 
++static _Atomic int shell_was_active;   // a scene of this process has been active (shell_ever_active)
+ // Scene lifecycle: create the window + hand focus events to front_ios.m
+ @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
+ @property (strong, nonatomic) UIWindow *window;
+@@ -112,10 +294,34 @@
+ - (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
+ - (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
+ - (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
+-- (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
++- (void)sceneDidBecomeActive:(UIScene *)s { shell_was_active = 1; front_ios_focus_event(3); }
  @end
  
 +// Change games left its flag: this process was started right after (ReopenIntent.swift answers a Shortcuts automation with it, so the automation needs no
-+// access to the app's files, which iOS asks about again and again)
-+static int g_relaunch;
-+int shell_relaunch_requested(void) { return g_relaunch; }
++// access to the app's files, which iOS asks about again and again). The answer is yes once: the automation runs again on every later close (going to the
++// Home Screen counts, while the process lives on), and a flag kept for the process's whole life brought the app back each time it was swiped away
++static _Atomic int g_relaunch;
++int shell_relaunch_requested(void) { return atomic_exchange(&g_relaunch, 0); }
++// 1 once the app has been on screen: the Shortcuts actions end the process only when it was started in the background just to answer them, never a game left running
++int shell_ever_active(void) { return shell_was_active; }
 +
  int main(int argc, char **argv) {
 -    @autoreleasepool { g_boot_ok = boot_env(); }

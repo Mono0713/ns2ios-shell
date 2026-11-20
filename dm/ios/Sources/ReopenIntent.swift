@@ -4,7 +4,17 @@
 import AppIntents
 import UIKit
 
-@_silgen_name("shell_relaunch_requested") private func shellRelaunchRequested() -> Int32
+@_silgen_name("shell_relaunch_requested") private func shellRelaunchRequested() -> Int32   // yes once (main.m): later closes answer no
+@_silgen_name("shell_ever_active") private func shellEverActive() -> Int32
+
+// Started in the background only to answer (never on screen): end the process, so Open App starts SwitchPad fresh and a plain close leaves nothing
+// running. A process that has been on screen is the user's, gone to the Home Screen with its game: left alone
+@MainActor private func endIfOnlyAnswering() {
+    if shellEverActive() != 0 { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        if UIApplication.shared.applicationState == .background && shellEverActive() == 0 { fflush(stderr); exit(0) }
+    }
+}
 
 struct ShouldReopenIntent: AppIntent {
     static var title: LocalizedStringResource = "SwitchPad 要重開嗎？"
@@ -14,12 +24,7 @@ struct ShouldReopenIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
         let yes = shellRelaunchRequested() != 0
-        // Started in the background only to answer: end the process, so Open App starts SwitchPad fresh and a plain close leaves nothing running
-        if UIApplication.shared.applicationState == .background {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                if UIApplication.shared.applicationState == .background { fflush(stderr); exit(0) }
-            }
-        }
+        if !yes { endIfOnlyAnswering() }
         return .result(value: yes)
     }
 }
@@ -38,11 +43,7 @@ struct ReopenAfterChangeIntent: AppIntent {
             try await continueInForeground(alwaysConfirm: false)
             return .result()
         }
-        if UIApplication.shared.applicationState == .background {   // a plain close: nothing to do, and nothing left running
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                if UIApplication.shared.applicationState == .background { fflush(stderr); exit(0) }
-            }
-        }
+        endIfOnlyAnswering()   // a plain close: nothing to do, and nothing left running
         return .result()
     }
 }
