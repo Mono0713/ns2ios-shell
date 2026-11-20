@@ -981,7 +981,7 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     let model = PickerModel.kept ?? PickerModel()
     PickerModel.kept = model
     model.starting = false; model.padsOpen = false
-    let h = UIHostingController(rootView: PickerView(m: model))
+    let h = NoFocusHostingController(rootView: PickerView(m: model))   // Launcher.swift
     PregameStage.shared.showPicker({ AnyView(PickerView(m: model)) }, fresh: fresh)   // the TV's copy in handheld mode
     // The blurred backdrops and, with a TV, the enlarged icons made ahead, off the main thread: the TV's copy (built again on the way back from the
     // launcher) had to make them all as it appeared, and came in well after the iPad
