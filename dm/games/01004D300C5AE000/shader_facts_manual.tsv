@@ -1,0 +1,4 @@
+# Hand-written translation facts, merged over the generated rows of shader_facts.tsv by dm/gfx/tools/shader_split.py: key <TAB> facts JSON (same format)
+# 6e5bfad030fe0c68 (pixel, paired with vertex 560bc7cfc368d2f2): writes colour 5 into the R8Uint target, but its output map does not show target 5, so the profile's shader_fout rule
+# misses it and Metal refused the pipeline on an iPad ("output of type float4 is not compatible with a MTLPixelFormatR8Uint color attachment", log 2026-11-20)
+6e5bfad030fe0c68	{"fout":{"5":"uint"}}
