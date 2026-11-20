@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -279,6 +280,7 @@ int shell_game_unchoose(void) {
 }
 @end
 
+static _Atomic int shell_was_active;   // a scene of this process has been active (shell_ever_active)
 // Scene lifecycle: create the window + hand focus events to front_ios.m
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -292,13 +294,16 @@ int shell_game_unchoose(void) {
 - (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
 - (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
 - (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
-- (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
+- (void)sceneDidBecomeActive:(UIScene *)s { shell_was_active = 1; front_ios_focus_event(3); }
 @end
 
 // Change games left its flag: this process was started right after (ReopenIntent.swift answers a Shortcuts automation with it, so the automation needs no
-// access to the app's files, which iOS asks about again and again)
-static int g_relaunch;
-int shell_relaunch_requested(void) { return g_relaunch; }
+// access to the app's files, which iOS asks about again and again). The answer is yes once: the automation runs again on every later close (going to the
+// Home Screen counts, while the process lives on), and a flag kept for the process's whole life brought the app back each time it was swiped away
+static _Atomic int g_relaunch;
+int shell_relaunch_requested(void) { return atomic_exchange(&g_relaunch, 0); }
+// 1 once the app has been on screen: the Shortcuts actions end the process only when it was started in the background just to answer them, never a game left running
+int shell_ever_active(void) { return shell_was_active; }
 
 int main(int argc, char **argv) {
     @autoreleasepool {

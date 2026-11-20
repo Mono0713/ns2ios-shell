@@ -349,6 +349,22 @@ class PhonePadsMotionTests(PhonePadsTests):
         time.sleep(0.2)
         self.assertEqual(self.host()['mask'], 0)
 
+    def test_page_without_hello_is_asked_for_one(self):   # its hello was lost (a failed POST) or the app started again under it: it is asked, then plays
+        p = PostPhone(self.port, 'phone-lost', self.tls)
+        self.assertIn({'t': 'who'}, p.state(1, 1 << 0))
+        self.assertEqual(self.host()['mask'], 0)
+        self.assertNotIn({'t': 'who'}, p.state(2, 1 << 0))   # asked at most once a second
+        self.assertIn({'t': 'assign', 'layout': 'switch', 'player': 1}, p.hello())
+        p.state(3, 1 << 1)
+        self.assertEqual(self.host()['players'][0][0], 1 << 1)
+        w = Phone(self.port, None, self.tls)   # and a WebSocket page the same
+        w.state(1, 1 << 2)
+        self.assertEqual(w.reply(), {'t': 'who'})
+        self.assertEqual(w.hello('phone-lost-ws'), {'t': 'assign', 'layout': 'switch', 'player': 2})
+        x = Phone(self.port, None, self.tls); x.hello('phone-lost')   # the POST page's session ends (it would hold player 1 for 15 s)
+        x.close(); w.close(); p.close()
+        time.sleep(0.2)
+        self.assertEqual(self.host()['mask'], 0)
 
 class PhonePadsHttpsTests(PhonePadsMotionTests):
     """All of it over HTTPS on the same port"""

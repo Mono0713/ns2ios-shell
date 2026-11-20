@@ -12,6 +12,7 @@
 //   binary 8 bytes: 0x01, sequence (u8, wraps), buttons (u16 LE, NpadButton bits as dm_input.h), lx, ly, rx, ry (i8 each, -127..127, y up)
 //   binary 16 bytes: 0x03, sequence (u8), time (u16 LE, ms, wraps), gravity x y z (i16 LE, G * 4096: the acceleration, pointing down), rotation x y z (i16 LE, degrees / s * 8),
 //          in the controller's frame (x right, y away from the player, z out of the screen): the phone's motion as its player's six-axis sensor (shell_motion.h)
+//   to a page that sends input without having said hello on this connection or session: {"t":"who"}, answered with a hello
 //   and to the phone, besides the answers above: {"t":"r","l":<0..255>} the game's rumble for its player (sent on a change, at most every 30 ms, again every 400 ms while it runs)
 // The phone sends on every change and at least every 100 ms; a phone silent for a second has everything released. One thread, poll(), plain BSD sockets.
 // Connections that hold no player cannot pile up and lock phones out: a request that does not arrive within REQ_NS, or a WebSocket silent for GONE_NS, is closed, and when every
@@ -77,6 +78,7 @@ typedef struct {
     int hp;                      // the player whose rumble this phone takes (dm_haptics_route), -1 none
     int rumble; uint64_t rumble_ns;   // the rumble level last sent, when
     shell_motion motion; uint64_t mt; int mlast;   // the phone's orientation (shell_motion.h); its clock in ms, unwrapped, and the last raw u16
+    int greeted; uint64_t who_ns;   // a hello came on this connection (or session); when the page was last asked for one (on_binary)
     _Atomic int moved, kicked, relayout, identify;   // set by the launcher (shell_slots.h handlers, main thread), handled on the server thread
 } client;
 static client g_cl[MAX_CLIENTS];   // a client's address is its owner in the slot table; only the server thread touches a client, but for the two flags
@@ -227,6 +229,7 @@ static void on_hello(client *c, const char *json) {
     char id[64], name[32] = "phone";
     if (!json_str(json, "id", id, sizeof id)) return;
     json_str(json, "name", name, sizeof name);
+    c->greeted = 1;
     if (banned(id, strstr(json, "\"join\"") != NULL)) { say(c, "{\"t\":\"kicked\"}"); return; }
     if (c->player >= 0) { release(c); shell_slot_free(c); c->player = -1; }
     // The same phone still connected on an older socket (a page that reloaded before the old connection timed out, a second tab): that one is told it was replaced, so it
@@ -271,6 +274,12 @@ static void on_motion(client *c, int p, const uint8_t *b) {
 }
 static void on_binary(client *c, const uint8_t *b, size_t n) {
     int p = c->player < 0 ? -1 : shell_slot_of(c);   // the table's, not c->player: the launcher may have just moved the phone
+    // Input from a page that never said hello here: its hello was lost (a POST that failed, whose frames the page does not send again), or the app started
+    // again under it (Change games) and this session is new. The page showed no player and the iPad no phone while it went on sending; it is asked again
+    if (p < 0 && !c->greeted && now_ns() - c->who_ns > 1000000000ull) {
+        c->who_ns = now_ns(); say(c, "{\"t\":\"who\"}");
+        LOG("phone pads: a page sends input without a hello%s: asked for one", c->kind == SESSION ? " (HTTPS requests)" : "");
+    }
     if (p < 0 || n < 8) return;
     if (b[0] == 3 && n >= 16) { on_motion(c, p, b); return; }
     if (b[0] != 1) return;
