@@ -30,6 +30,12 @@ func controllerNotForUIKit(_ view: UIView) {
         view.addInteraction(i)
     }
 }
+// And iPadOS's focus never enters these screens at all: the interaction above did not keep it out everywhere (a row once tapped kept the focus, and A on a
+// player's row also pressed New empty save or Rename this save, which made a save each time or opened the keyboard). Every row here is reached with the
+// controller through DMLauncherInput, so the system's focus has nothing to do on them
+final class NoFocusHostingController<Content: View>: UIHostingController<Content> {
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool { false }
+}
 private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 private func info(_ key: String) -> Any? {
     if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
@@ -194,18 +200,23 @@ private struct LayoutSwitch: View {
     let xbox: Bool
     let set: (Bool) -> Void
     @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
+    @Namespace private var plate
     var body: some View {
-        HStack(spacing: 2 * k) {
+        // two halves of one width at the row's chip height (36), the white plate sliding between them: the two words' own widths made it lopsided and
+        // shorter than the buttons beside it
+        HStack(spacing: 0) {
             ForEach([false, true], id: \.self) { x in
-                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1)
+                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1).fixedSize()
                     .foregroundStyle(x == xbox ? Color.black : Color.white.opacity(0.75))
-                    .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
-                    .background { if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white) } }
+                    .frame(width: 64 * k, height: 30 * k)
+                    .background {
+                        if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white).matchedGeometryEffect(id: "plate", in: plate) }
+                    }
                     .contentShape(Rectangle()).onTapGesture { if x != xbox { set(x) } }
             }
         }
         .padding(3 * k)
-        .background(RoundedRectangle(cornerRadius: (DS.chipRadius + 3) * k, style: .continuous).fill(DS.chip))
+        .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
         .animation(DS.spring, value: xbox)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tr("Button layout")).accessibilityValue(xbox ? "Xbox" : "Switch")
@@ -707,19 +718,25 @@ private struct SaveSlotsSection: View {
                 .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
                 .nav("slotCopy")
             if !tenFoot {
-            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
+            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil").padding(.vertical, 6) }
                 .listRowBackground(rowPlate)
             }
             if s.slots.count > 1 && !tenFoot {
                 Menu {
                     ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
-                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
+                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red).padding(.vertical, 6) }   // room for the icon: the menu lifts the label as it is drawn, and cut the trash can's top and bottom
                 .listRowBackground(rowPlate)
             }
         } header: {
             Text(tr("Saves")).font(.ds(.footnote, .semibold, k: k))
         } footer: {
             if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
+        }
+        // B on the controller cancels them (renaming types on the keyboard, by touch; the controller cannot reach the alert's buttons)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { n in
+            guard (n.userInfo?["key"] as? String) == "b", (n.userInfo?["on"] as? Int ?? 1) != 0 else { return }
+            if renaming { renaming = false }
+            if deleting != nil { deleting = nil }
         }
         .alert(tr("Rename this save"), isPresented: $renaming) {
             TextField(tr("Name"), text: $newName)
@@ -1029,7 +1046,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         h.dismiss(animated: true) { frontIosBackToPicker() }
     } : nil)
     PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
-    let h = UIHostingController(rootView: view)
+    let h = NoFocusHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen

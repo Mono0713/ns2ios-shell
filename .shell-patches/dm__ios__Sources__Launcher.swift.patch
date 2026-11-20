@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,13 +3,399 @@
+@@ -3,13 +3,410 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -32,6 +32,12 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        let i = GCEventInteraction(); i.handledEventTypes = .gamepad
 +        view.addInteraction(i)
 +    }
++}
++// And iPadOS's focus never enters these screens at all: the interaction above did not keep it out everywhere (a row once tapped kept the focus, and A on a
++// player's row also pressed New empty save or Rename this save, which made a save each time or opened the keyboard). Every row here is reached with the
++// controller through DMLauncherInput, so the system's focus has nothing to do on them
++final class NoFocusHostingController<Content: View>: UIHostingController<Content> {
++    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool { false }
 +}
 +private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 +private func info(_ key: String) -> Any? {
@@ -197,18 +203,23 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    let xbox: Bool
 +    let set: (Bool) -> Void
 +    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
++    @Namespace private var plate
 +    var body: some View {
-+        HStack(spacing: 2 * k) {
++        // two halves of one width at the row's chip height (36), the white plate sliding between them: the two words' own widths made it lopsided and
++        // shorter than the buttons beside it
++        HStack(spacing: 0) {
 +            ForEach([false, true], id: \.self) { x in
-+                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1)
++                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1).fixedSize()
 +                    .foregroundStyle(x == xbox ? Color.black : Color.white.opacity(0.75))
-+                    .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
-+                    .background { if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white) } }
++                    .frame(width: 64 * k, height: 30 * k)
++                    .background {
++                        if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white).matchedGeometryEffect(id: "plate", in: plate) }
++                    }
 +                    .contentShape(Rectangle()).onTapGesture { if x != xbox { set(x) } }
 +            }
 +        }
 +        .padding(3 * k)
-+        .background(RoundedRectangle(cornerRadius: (DS.chipRadius + 3) * k, style: .continuous).fill(DS.chip))
++        .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
 +        .animation(DS.spring, value: xbox)
 +        .accessibilityElement(children: .ignore)
 +        .accessibilityLabel(tr("Button layout")).accessibilityValue(xbox ? "Xbox" : "Switch")
@@ -402,7 +413,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  }
  
  private struct SettingRow: View {
-@@ -18,27 +404,74 @@
+@@ -18,27 +415,74 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -482,7 +493,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,81 +484,520 @@
+@@ -51,81 +495,526 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -712,19 +723,25 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
 +                .nav("slotCopy")
 +            if !tenFoot {
-+            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
++            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil").padding(.vertical, 6) }
 +                .listRowBackground(rowPlate)
 +            }
 +            if s.slots.count > 1 && !tenFoot {
 +                Menu {
 +                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
-+                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
++                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red).padding(.vertical, 6) }   // room for the icon: the menu lifts the label as it is drawn, and cut the trash can's top and bottom
 +                .listRowBackground(rowPlate)
 +            }
 +        } header: {
 +            Text(tr("Saves")).font(.ds(.footnote, .semibold, k: k))
 +        } footer: {
 +            if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
++        }
++        // B on the controller cancels them (renaming types on the keyboard, by touch; the controller cannot reach the alert's buttons)
++        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { n in
++            guard (n.userInfo?["key"] as? String) == "b", (n.userInfo?["on"] as? Int ?? 1) != 0 else { return }
++            if renaming { renaming = false }
++            if deleting != nil { deleting = nil }
 +        }
 +        .alert(tr("Rename this save"), isPresented: $renaming) {
 +            TextField(tr("Name"), text: $newName)
@@ -1040,7 +1057,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +1009,32 @@
+@@ -137,21 +1026,32 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
@@ -1059,6 +1076,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          model.apply()
 -        h.dismiss(animated: false) { done() }
 -    }
+-    let h = UIHostingController(rootView: view)
 +        shell.apply()
 +        if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
 +        h.dismiss(animated: true) { done() }
@@ -1069,7 +1087,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        h.dismiss(animated: true) { frontIosBackToPicker() }
 +    } : nil)
 +    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
-     let h = UIHostingController(rootView: view)
++    let h = NoFocusHostingController(rootView: view)
 +    controllerNotForUIKit(h.view)
      h.modalPresentationStyle = .fullScreen
 +    h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
