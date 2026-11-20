@@ -2,7 +2,8 @@
 // A row of game tiles, the chosen one in the middle, over its icon blurred as the backdrop; the time, Wi-Fi and battery at the top right, as on a console.
 // Styled like Switch Pad on the PC: the package's icon and name at the top left, app-icon corners, a white focus ring, small rounded chips.
 // Touch: swipe the row to move through it, tap a tile to start that game. Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput):
-// left and right move, A or + starts. The games stay in order by name; the highlight starts on the phones' QR code, and the row goes round (after the last game, the QR code again).
+// left and right move, A or + starts, X shows every game at once (a grid: the arrows move, A opens the game's settings, B goes back). The games keep the
+// order set on the PC (Documents/game-order.json), else by name; the highlight starts on the phones' QR code, and the row goes round (after the last game, the QR code again).
 // The first tile is the phones' QR code (phone_pads.c, started at launch for the picker), with a dot for each player that has joined; choosing it (or Y)
 // opens the players card: eight places, each lighting up as its player presses something, with Identify (tap or A), the button layout (− ) and Remove (X).
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
@@ -262,6 +263,7 @@ private func tileRadius(_ side: CGFloat) -> CGFloat { side * 0.2237 }   // the h
 private struct FocusRing: ViewModifier {
     let focused: Bool
     let side: CGFloat
+    var grid = false   // in the all-games grid the others stay near full size and bright: they are what the eye looks through
     @Environment(\.uiK) private var k
     func body(content: Content) -> some View {
         content
@@ -270,8 +272,8 @@ private struct FocusRing: ViewModifier {
                     .stroke(focused ? Color.white.opacity(0.95) : .clear, lineWidth: 4 * k).padding(-8 * k)
             }
             .shadow(color: .black.opacity(focused ? 0.55 : 0.4), radius: (focused ? 22 : 8) * k, y: (focused ? 14 : 4) * k)
-            .scaleEffect(focused ? 1 : 0.84)
-            .opacity(focused ? 1 : 0.6)
+            .scaleEffect(focused ? (grid ? 1.06 : 1) : (grid ? 1 : 0.84))
+            .opacity(focused || grid ? 1 : 0.6)
             .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
     }
 }
@@ -308,7 +310,24 @@ private func loadGames() -> [PickerGame] {
         return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "", icon: gameIcon(dir),
                           played: UserDefaults.standard.object(forKey: "picker.played." + id) as? Date)
     }
-    return list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }   // a fixed order, by name (the highlight starts on the phones' tile)
+    // The order set on the PC (PadSwitch writes Documents/game-order.json on each sync: title IDs, first to last); games it does not list follow by name,
+    // and without the file the order is by name
+    let rank = Dictionary(gameOrder().enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+    return list.sorted {
+        switch (rank[$0.id.uppercased()], rank[$1.id.uppercased()]) {
+        case let (a?, b?): return a < b
+        case (.some, nil): return true
+        case (nil, .some): return false
+        default: return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+}
+private func gameOrder() -> [String] {
+    // the system folder of the reorganised Documents (main.m moves the file there), Documents/ before
+    guard let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+          let data = (try? Data(contentsOf: doc.appendingPathComponent("\u{7CFB}\u{7D71}/game-order.json"))) ?? (try? Data(contentsOf: doc.appendingPathComponent("game-order.json"))),
+          let ids = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { return [] }
+    return ids.compactMap { ($0 as? String)?.uppercased() }
 }
 
 // The row: the phones' tile at 0, then the games (game i at i + 1). It goes round: after the last game comes the phones' tile again, so the
@@ -327,12 +346,34 @@ private final class PickerModel: ObservableObject {
     func item(_ v: Int) -> Int { ((v % count) + count) % count }
     @Published var starting = false
     @Published var padsOpen = false
+    @Published var gridOpen = false   // every game at once (X, or the button at the top); kept while a game's launcher is over the picker
+    var gridCols = 6                  // the grid's columns, as laid out (the arrows move by them)
     @Published var sel = 0   // the highlighted place on the players card (player sel + 1)
     @Published var picked: Int?   // a player picked up to move to another number (A or a tap, then A or a tap on the place; or dragged there)
     var count: Int { games.count + 1 }
     func game(_ i: Int) -> PickerGame? { games.indices.contains(i - 1) ? games[i - 1] : nil }
     var start: (PickerGame) -> Void = { _ in }
     func move(_ d: Int) { if !starting { pos += d } }
+    func showGrid(_ on: Bool) {
+        guard !starting, !games.isEmpty, on != gridOpen else { return }
+        if on && focus == 0 { pos += 1 }   // on the phones' tile: the first game
+        gridOpen = on
+    }
+    // In the grid: left and right go one game (on to the next row), up and down a row; the last row's gap takes down to the last game
+    func gridMove(_ key: String) {
+        guard !starting, !games.isEmpty else { return }
+        let n = games.count, c = max(1, gridCols), i = max(0, focus - 1)
+        var j = i
+        switch key {
+        case "left": j = i - 1
+        case "right": j = i + 1
+        case "up": j = i - c
+        case "down": j = i + c < n ? i + c : (i / c < (n - 1) / c ? n - 1 : i)
+        default: break
+        }
+        guard j >= 0, j < n, j != i || focus == 0 else { return }
+        pos += j + 1 - focus
+    }
     func choose(at v: Int? = nil) {   // the item at place v of the ring (the focused one when nil)
         guard !starting else { return }
         if let v { pos = v }
@@ -454,6 +495,7 @@ private struct GameTile: View {
     let game: PickerGame
     let focused: Bool
     let side: CGFloat
+    var grid = false
     @Environment(\.tenFoot) private var tenFoot
     @Environment(\.uiK) private var k
     var body: some View {
@@ -468,7 +510,7 @@ private struct GameTile: View {
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .modifier(FocusRing(focused: focused, side: side))
+        .modifier(FocusRing(focused: focused, side: side, grid: grid))
     }
 }
 
@@ -512,6 +554,13 @@ private struct PlaceFrames: PreferenceKey {
     static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) { value.merge(nextValue()) { $1 } }
 }
 
+private func shortURL(_ url: String) -> String {   // http://192.168.0.152:8080/ -> 192.168.0.152:8080
+    var u = url
+    if u.hasPrefix("http://") { u.removeFirst(7) }
+    if u.hasSuffix("/") { u.removeLast() }
+    return u
+}
+
 // The players card: the QR code and address on the left, the eight places on the right (two columns of four, so it keeps its size)
 private struct PadsCard: View {
     @ObservedObject var m: PickerModel
@@ -546,8 +595,11 @@ private struct PadsCard: View {
                     }
                     .frame(width: 230 * k, height: 230 * k).clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
                     if let url = pads.url {
-                        Text(url).font(.ds(.callout, design: .monospaced, k: t)).lineLimit(1).minimumScaleFactor(0.6).padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
-                            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
+                        // what a phone's browser takes typed in (it adds http:// itself), as wide as the code above it and in the card's own type
+                        Text(shortURL(url)).font(.ds(.title3, .semibold, k: t)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                            .frame(width: 230 * k).padding(.vertical, 8 * k)
+                            .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
+                            .accessibilityLabel(url)
                     } else {
                         Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first")).font(.ds(.footnote, k: t)).foregroundStyle(.white.opacity(0.65))
                     }
@@ -653,6 +705,45 @@ private struct PadsCard: View {
     }
 }
 
+// Every game at once: icons in rows with their names under them, in the row's order, the chosen one ringed and kept in view. The arrows move (PickerModel.gridMove),
+// A or a tap opens the game's settings (its launcher, as Play in the row), B or X goes back to the row on the same game
+private struct GameGrid: View {
+    @ObservedObject var m: PickerModel
+    let width: CGFloat
+    let cols: Int
+    @Environment(\.uiK) private var k
+    var body: some View {
+        let pad = 48 * k, gap = 28 * k
+        let side = max(60, ((width - 2 * pad - CGFloat(cols - 1) * gap) / CGFloat(cols)).rounded(.down))
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(side), spacing: gap), count: cols), spacing: 26 * k) {
+                    ForEach(Array(m.games.enumerated()), id: \.element.id) { i, g in
+                        let on = m.focus == i + 1
+                        VStack(spacing: 10 * k) {
+                            GameTile(game: g, focused: on, side: side, grid: true)
+                            Text(g.name).font(.ds(.footnote, on ? .bold : .semibold, k: k)).lineLimit(1).truncationMode(.tail)
+                                .foregroundStyle(.white.opacity(on ? 1 : 0.65)).frame(width: side + gap * 0.8)
+                        }
+                        .padding(.top, 12 * k)   // room for the ring and the larger chosen tile
+                        .opacity(m.starting && !on ? 0 : 1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { m.choose(at: m.pos + i + 1 - m.focus) }
+                        .accessibilityLabel(g.name).accessibilityAddTraits(.isButton)
+                        .id(g.id)
+                    }
+                }
+                .padding(.horizontal, pad).padding(.vertical, 20 * k)
+                .animation(DS.spring, value: m.pos)
+                .animation(.easeOut(duration: 0.3), value: m.starting)
+            }
+            .onChange(of: m.pos) { _, _ in if let id = m.game(m.focus)?.id { withAnimation(DS.spring) { proxy.scrollTo(id, anchor: .center) } } }
+            .onAppear { if let id = m.game(m.focus)?.id { proxy.scrollTo(id, anchor: .center) } }
+        }
+        .onChange(of: cols, initial: true) { _, c in m.gridCols = c }
+    }
+}
+
 private struct PickerView: View {
     @ObservedObject var m: PickerModel
     @StateObject private var pads = PadsModel()
@@ -672,12 +763,21 @@ private struct PickerView: View {
             ZStack {
                 VStack(spacing: 0) {
                     header(k).padding(.horizontal, 32 * k).padding(.top, 22 * k)
-                    Spacer(minLength: 0)
-                    row(width: g.size.width, side: side, gap: gap)
-                    details(current, k).padding(.top, 22 * k)
-                    Spacer(minLength: 0)
+                    if m.gridOpen {
+                        GameGrid(m: m, width: g.size.width, cols: tv.on ? 6 : g.size.width > g.size.height ? 7 : 5)
+                            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    } else {
+                        Group {
+                            Spacer(minLength: 0)
+                            row(width: g.size.width, side: side, gap: gap)
+                            details(current, k).padding(.top, 22 * k)
+                            Spacer(minLength: 0)
+                        }
+                        .transition(.opacity)
+                    }
                     footer(k).padding(.horizontal, 32 * k).padding(.bottom, 22 * k)
                 }
+                .animation(DS.pop, value: m.gridOpen)
                 if m.padsOpen {
                     Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.picked = nil; m.padsOpen = false }
                         .transition(.opacity)
@@ -767,9 +867,21 @@ private struct PickerView: View {
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text(appName).font(.ds(.subheadline, .semibold, k: k)).foregroundStyle(.white.opacity(0.55))
-                Text(tr("選擇遊戲", "Choose a game")).font(.ds(.largeTitle, .bold, k: k))
+                HStack(alignment: .firstTextBaseline, spacing: 12 * k) {
+                    Text(m.gridOpen ? tr("所有遊戲", "All games") : tr("選擇遊戲", "Choose a game")).font(.ds(.largeTitle, .bold, k: k)).contentTransition(.opacity)
+                    if m.gridOpen { Chip(text: tr("\(m.games.count) 款", "\(m.games.count)")).transition(.opacity) }
+                }
             }
             Spacer()
+            if m.games.count > 1 {
+                Button { withAnimation(DS.pop) { m.showGrid(!m.gridOpen) } } label: {   // the same as X, for touch
+                    Image(systemName: m.gridOpen ? "rectangle.split.3x1.fill" : "square.grid.3x3.fill").font(.ds(.title3, .semibold, k: k))
+                        .frame(width: 48 * k, height: 44 * k)
+                        .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(m.gridOpen ? DS.accent : DS.chip))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(m.gridOpen ? tr("回到單排", "Back to the row") : tr("所有遊戲", "All games"))
+            }
             BackToTVButton()
             StatusBar()
         }
@@ -800,8 +912,15 @@ private struct PickerView: View {
     private func footer(_ k: CGFloat) -> some View {
         HStack(spacing: 22 * k) {
             Spacer()
-            KeyHint(key: "◀ ▶", text: tr("選擇", "Choose"))
-            KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
+            if m.gridOpen {
+                KeyHint(key: "✛", text: tr("選擇", "Choose"))
+                KeyHint(key: "A", text: tr("設定", "Settings"))
+                KeyHint(key: "B", text: tr("返回", "Back"))
+            } else {
+                KeyHint(key: "◀ ▶", text: tr("選擇", "Choose"))
+                KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
+                if m.games.count > 1 { KeyHint(key: "X", text: tr("所有遊戲", "All games")) }
+            }
             KeyHint(key: "Y", text: tr("玩家", "Players"))
             if tv.on { KeyHint(key: "Home", text: tr("切換模式", "Switch mode")) }   // on the TV, the same in console and handheld mode
         }
@@ -838,13 +957,15 @@ private struct PickerView: View {
         if m.padsOpen { cardInput(key); return }
         switch key {
         case "y": m.padsOpen = true
+        case "x": m.showGrid(!m.gridOpen)
+        case "b" where m.gridOpen: m.showGrid(false)   // back to the row, standing on the game chosen in the grid
         case "a", "plus": m.choose()
         case "left", "right", "up", "down":
-            let d = key == "left" || key == "up" ? -1 : 1
-            m.move(d)
+            let step: @MainActor () -> Void = m.gridOpen ? { m.gridMove(key) } : { m.move(key == "left" || key == "up" ? -1 : 1) }
+            step()
             held = (key, Task { @MainActor in   // repeats while held
                 try? await Task.sleep(for: .milliseconds(400))
-                while !Task.isCancelled { m.move(d); try? await Task.sleep(for: .milliseconds(160)) }
+                while !Task.isCancelled { step(); try? await Task.sleep(for: .milliseconds(m.gridOpen ? 130 : 160)) }
             })
         default: break
         }
