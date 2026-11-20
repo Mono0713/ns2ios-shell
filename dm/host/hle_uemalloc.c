@@ -37,6 +37,8 @@ static const struct { const char *build, *what; int layout; uint64_t obj, vtable
     // Pikmin 4 1.1.1 (Unreal Engine 4.26.2, the 4.27 slot layout: TryMalloc / TryRealloc call +0x18 / +0x28, slot 17 returns 1): made by GCreateMalloc, its vtable (main+0x8da4758, 21 slots),
     // the cut constructor call (main+0x353f788)
     { "060f827bd2b38703e9ea11e3210d89bc", "Pikmin 4 1.1.1", UE4_27, 0, 0x8da4758, 0x353f788 },
+    // It Takes Two 1.0.3 (Unreal Engine 4.26, Pikmin 4's shape): made by GCreateMalloc (main+0x349e9c8), its vtable (main+0x97d5f70, no OnMallocInitialized), the cut constructor call (main+0x349e9e0)
+    { "104db32fd10e753898d3957264a24c08", "It Takes Two 1.0.3", UE4_27, 0, 0x97d5f70, 0x349e9e0 },
     // OCTOPATH TRAVELER II 1.1.1 (Unreal Engine 4.27): made by GCreateMalloc, its vtable (main+0x64710b0: slots 0-19 as the 4.27 layout, TryMalloc / TryRealloc call +0x18 / +0x28,
     // slots 17 and 18 return 1, 19 the name; there is no OnMallocInitialized, so the 21st word copied is the next vtable's offset to top, which nothing calls), the cut constructor call (main+0xbecc08)
     { "0d9649011312f62e93f6a5673a09d7e9", "OCTOPATH TRAVELER II 1.1.1", UE4_27, 0, 0x64710b0, 0xbecc08 },

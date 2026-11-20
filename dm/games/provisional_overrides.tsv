@@ -17,3 +17,11 @@
 # 256 MB in front + the 1 GB stack region + the 128 MB heap region (0x170000000 − 0x118000000 before).
 01008970149B0000	mem_alias	0x400000000
 01008970149B0000	mem_reserve	0x458000000
+
+# It Takes Two. Unreal Engine 4.26: its engine region is cut from 62 GB to 4064 MB and its FMallocBinned3 replaced by the host's
+# allocator (dm/games/010092A0172E4000/patches.py, hle_uemalloc.c), so it no longer needs the 64 GB alias region the guess gave
+# it (the iPad held 49 GB of it and the game hung in main's init_array, iPad log 2026-11-20). Pikmin 4's 5 GB block.
+010092A0172E4000	mem_reserve	0x140000000
+010092A0172E4000	mem_alias	0x118000000
+010092A0172E4000	mem_stack	0x10000000
+010092A0172E4000	app_pool	0xCD500000
