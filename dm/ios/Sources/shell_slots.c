@@ -9,6 +9,7 @@
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pad_slots g_slots;
 static shell_slot_info g_info[DM_PLAYERS];
+static unsigned char g_joyright[DM_PLAYERS];
 static void (*g_moved[SHELL_SLOT_KINDS])(const void *, int, int);
 static void (*g_kick[SHELL_SLOT_KINDS])(const void *);
 static void (*g_layout[SHELL_SLOT_KINDS])(const void *, int);
@@ -19,21 +20,47 @@ static void (*g_layout_req)(int, int);
 
 static void changed(void) { void (*h)(void) = g_hook; if (h) h(); }
 
-int shell_slot_take(const void *owner, const char *name, int kind, const char *label) {
+// Called with the table locked: occupancy and mode come from the same holders.
+static void publish_slots(void) {
+    uint32_t joyright = 0;
+    for (int p = 0; p < DM_PLAYERS; p++) if (g_joyright[p]) joyright |= 1u << p;
+    dm_pad_players_with_joyright(pad_slot_mask(&g_slots), joyright);
+}
+static int take(const void *owner, const char *name, int kind, const char *label, int joyright) {
     pthread_mutex_lock(&g_mu);
     int p = pad_slot_take(&g_slots, owner, name);
     if (p >= 0 && g_info[p].kind != kind) g_info[p].xbox = 0;   // a new holder starts with the Switch layout until its own choice is set (shell_players.m)
-    if (p >= 0) { g_info[p].kind = kind; snprintf(g_info[p].label, sizeof g_info[p].label, "%s", label ? label : ""); }
-    dm_pad_players(pad_slot_mask(&g_slots));   // under the lock, so the last mask set is the table's
+    if (p >= 0) {
+        g_info[p].kind = kind;
+        g_joyright[p] = joyright != 0;
+        snprintf(g_info[p].label, sizeof g_info[p].label, "%s", label ? label : "");
+    }
+    publish_slots();
     pthread_mutex_unlock(&g_mu);
     changed();
+    return p;
+}
+int shell_slot_take(const void *owner, const char *name, int kind, const char *label) {
+    return take(owner, name, kind, label, 0);
+}
+int shell_slot_take_phone(const void *owner, const char *name, const char *label, int joyright) {
+    return take(owner, name, SHELL_SLOT_PHONE, label, joyright);
+}
+int shell_slot_set_joyright(const void *owner, int joyright) {
+    pthread_mutex_lock(&g_mu);
+    int p = pad_slot_of(&g_slots, owner);
+    if (p >= 0 && g_info[p].kind == SHELL_SLOT_PHONE) {
+        g_joyright[p] = joyright != 0;
+        publish_slots();
+    } else p = -1;
+    pthread_mutex_unlock(&g_mu);
     return p;
 }
 int shell_slot_free(const void *owner) {
     pthread_mutex_lock(&g_mu);
     int p = pad_slot_free(&g_slots, owner);
-    if (p >= 0) { g_info[p].kind = SHELL_SLOT_NONE; g_info[p].xbox = 0; }
-    dm_pad_players(pad_slot_mask(&g_slots));
+    if (p >= 0) { g_info[p].kind = SHELL_SLOT_NONE; g_info[p].xbox = 0; g_joyright[p] = 0; }
+    publish_slots();
     pthread_mutex_unlock(&g_mu);
     changed();
     return p;
@@ -72,10 +99,11 @@ int shell_slot_swap(int a, int b) {
     g_slots.owner[a] = ob; g_slots.owner[b] = oa;
     shell_slot_info t = g_info[a]; g_info[a] = g_info[b]; g_info[b] = t;
     void (*ma)(const void *, int, int) = oa ? g_moved[g_info[b].kind] : NULL, (*mb)(const void *, int, int) = ob ? g_moved[g_info[a].kind] : NULL;
-    dm_pad_players(pad_slot_mask(&g_slots));
+    unsigned char joyright = g_joyright[a]; g_joyright[a] = g_joyright[b]; g_joyright[b] = joyright;
+    dm_pad_clear_player(a);
+    dm_pad_clear_player(b);
+    publish_slots();
     pthread_mutex_unlock(&g_mu);
-    if (!ob) dm_pad_set_player(a, 0, 0, 0, 0, 0);   // a player left without a holder has nothing pressed; a held one is fed by its new holder (moved)
-    if (!oa) dm_pad_set_player(b, 0, 0, 0, 0, 0);
     if (ma) ma(oa, a, b);
     if (mb) mb(ob, b, a);
     changed();

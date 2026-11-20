@@ -244,6 +244,8 @@ supported list packs and plays from its own files.
   `DM_PHONE_PADS_PORT=<port>` moves it off 8080.
   On Android the first tap goes full screen (no address bar); on iPhone, add the page to the Home Screen and open it from there.
   **Layout** on the phone lets you drag each control and change its size (kept on that phone).
+  For games that ask for a single Joy-Con, choose **Right Joy-Con** on the phone, allow motion access, and hold it
+  upright. The page supplies the right stick, ABXY, R/ZR and the SL/SR rail buttons. Choose **Standard pad** to switch back.
 - **Players.** The top of the settings screen lists who plays which player: each controller and phone with its icon. Swap a
   player with another, remove one (a removed phone can join again from its page), and pick each one's button layout: Switch
   (by position) or Xbox (as printed, A at the bottom). A phone's page moves its buttons to match and shows the Xbox colours.

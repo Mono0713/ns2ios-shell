@@ -79,12 +79,32 @@
   #rotate { display:none; position:fixed; inset:0; background:var(--bg); flex-direction:column; align-items:center; justify-content:center; gap:14px; font-size:18px; font-weight:600; color:var(--dim); z-index:9; }
   #rotate .phone { width:46px; height:80px; border-radius:12px; box-shadow:inset 0 0 0 3px var(--fg); animation:turn 1.6s ease-in-out infinite; }
   @keyframes turn { 0%, 25% { transform:rotate(0); } 55%, 100% { transform:rotate(-90deg); } }
-  @media (orientation:portrait) { #rotate { display:flex; } }
+  .joyright-only { display:none; }
+  body.joyright :is([data-k="ls"], [data-k="dpad"], [data-k="l"], [data-k="zl"], [data-k="minus"], #face, #edit) { display:none; }
+  body.joyright .joyright-only { display:block; }
+  body.joyright .joy-rails { position:absolute; left:50%; bottom:max(18px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:12px; }
+  .joy-rails .b { position:relative; min-width:54px; min-height:48px; }
+  @media (orientation:portrait) {
+    body:not(.joyright):not(.kicked):not(.asking) #rotate { display:flex; }
+    body.joyright #top { gap:4px; max-width:calc(100% - 12px); white-space:nowrap; }
+    body.joyright #top .tb { padding:7px 8px; }
+    body.joyright #pad { --joy-button:clamp(42px, 14dvw, 64px); }
+    body.joyright #rs { left:50%; top:23dvh; width:min(22dvh, 52dvw) !important; height:min(22dvh, 52dvw) !important; transform:translateX(-50%); }
+    body.joyright .piece[data-k="abxy"] .b { width:var(--joy-button) !important; height:var(--joy-button) !important; }
+    body.joyright .piece[data-k="abxy"] [data-bit="2"] { left:calc(50% - var(--joy-button) / 2); top:47dvh !important; }
+    body.joyright .piece[data-k="abxy"] [data-bit="3"] { left:calc(50% - 1.5 * var(--joy-button)); top:calc(47dvh + var(--joy-button)) !important; }
+    body.joyright .piece[data-k="abxy"] [data-bit="0"] { left:calc(50% + var(--joy-button) / 2); top:calc(47dvh + var(--joy-button)) !important; }
+    body.joyright .piece[data-k="abxy"] [data-bit="1"] { left:calc(50% - var(--joy-button) / 2); top:calc(47dvh + 2 * var(--joy-button)) !important; }
+    body.joyright .piece[data-k="plus"] .b { left:5dvw; top:17dvh !important; width:48px !important; height:48px !important; }
+    body.joyright .piece[data-k="r"] .b { left:5dvw; top:9dvh !important; }
+    body.joyright .piece[data-k="zr"] .b { top:9dvh !important; }
+    body.joyright .piece[data-k="rs-click"] .b { top:calc(20dvh + 8px); }
+  }
 </style>
 </head>
 <body>
 <div id="flash"></div>
-<div id="rotate"><div class="phone"></div><div data-t="rotate">Turn your phone sideways</div></div>
+<div id="rotate"><div class="phone"></div><div data-t="rotate">Turn your phone sideways</div><button class="tb" id="joy-portrait" data-t="joyright">Right Joy-Con</button></div>
 <div id="pad">
   <!-- Each piece is a layer over the whole pad holding one control (or one group): the layout editor moves and scales the piece, never its controls -->
   <div class="piece" data-k="zl"><div class="b sh" data-bit="8" style="left:2dvw;top:2dvh;width:16dvw;height:11dvh">ZL</div></div>
@@ -117,6 +137,8 @@
 
   <!-- Right stick (smaller) -->
   <div class="piece" data-k="rs"><div class="stick" id="rs" style="right:30dvw;bottom:4dvh;width:26dvh;height:26dvh"><div class="knob"></div></div></div>
+  <div class="piece joyright-only" data-k="rails"><div class="joy-rails"><div class="b sh" data-bit="6">SL</div><div class="b sh" data-bit="8">SR</div></div></div>
+  <div class="piece joyright-only" data-k="rs-click"><div class="b sh" data-bit="5" style="right:5dvw;bottom:8dvh;width:48px;height:44px">R3</div></div>
 </div>
 
 <!-- Outside the pad, so its taps are ordinary clicks: the player, the full-screen and layout buttons, the layout editor's bar, and the removed notice -->
@@ -124,6 +146,7 @@
   <button class="tb" id="fs" aria-label="Full screen">⛶</button>
   <div id="status"><div id="player" class="none">--</div><div id="conn"></div></div>
   <button class="tb" id="face" aria-label="Button layout">Switch</button>
+  <button class="tb" id="type" aria-pressed="false">Joy-Con</button>
   <button class="tb" id="motion" aria-label="Motion">Motion</button>
   <button class="tb" id="edit" data-t="layout">Layout</button>
   <button class="tb" id="home" aria-label="Menu">⌂</button>
@@ -148,6 +171,7 @@
                    layout: '版面', drag: '拖曳移動，兩指縮放', size: '大小', reset: '還原', done: '完成',
                    kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入', replaced: '這支手機的手把在另一個頁面（或瀏覽器）使用中', useHere: '改用這個頁面',
                    ios: 'iPhone 沒辦法讓網頁全螢幕：按 Safari 的「分享」→「加入主畫面」，再從主畫面打開，就不會有網址列。',
+                   joyright: '右 Joy-Con', pro: '一般手把',
                    motion: '體感', mOff: '體感 關', mGyro: '體感 陀螺儀', mTilt: '體感 方向盤',
                    tGyro: '陀螺儀：手機的轉動會傳給遊戲（支援體感的遊戲用得到）', tTilt: '方向盤：左右傾斜手機就是左搖桿，適合賽車', tOff: '體感已關閉',
                    goSecure: '手機只在安全連線（HTTPS）下才給網頁陀螺儀', goNote: '接著會出現「此連線不是私人連線」：點「顯示詳細資訊」→「瀏覽此網站」（Android：「進階」→「繼續前往」）。這是 iPad 自己的憑證，只要信任一次。', goOk: '前往',
@@ -157,6 +181,7 @@
                    layout: 'Layout', drag: 'Drag to move, pinch to resize', size: 'Size', reset: 'Reset', done: 'Done',
                    kicked: 'This phone was removed on the iPad', rejoin: 'Join again', replaced: 'This phone\'s controller is in use on another page (or browser)', useHere: 'Use this page',
                    ios: 'iPhone cannot show a web page full screen: tap Share, then Add to Home Screen in Safari, and open it from the Home Screen for no address bar.',
+                   joyright: 'Right Joy-Con', pro: 'Standard pad',
                    motion: 'Motion', mOff: 'Motion off', mGyro: 'Motion: gyro', mTilt: 'Motion: wheel',
                    tGyro: 'Gyro: the phone\'s turning goes to the game (for games with motion controls)', tTilt: 'Wheel: tilt the phone left and right as the left stick, for racing', tOff: 'Motion is off',
                    goSecure: 'Phones give a page their gyroscope only over a secure connection (HTTPS)', goNote: 'A "connection is not private" warning comes next: tap Show Details, then visit this website (Android: Advanced, then Proceed). It is the iPad\'s own certificate: trust it once.', goOk: 'Go',
@@ -178,6 +203,13 @@
   // Device id: a reconnecting phone gets its player back
   let id;
   const params = new URLSearchParams(location.search);
+  let controllerMode = params.get('type');
+  try { controllerMode ??= localStorage.getItem('padType'); } catch (e) {}
+  controllerMode = controllerMode === 'joyright' ? 'joyright' : 'pro';
+  const rememberControllerMode = () => {
+    try { localStorage.setItem('padType', controllerMode); } catch (e) {}
+  };
+  rememberControllerMode();
   try { id = params.get('id') || localStorage.getItem('padId'); if (params.get('id')) localStorage.setItem('padId', id); } catch (e) {}
   if (!id) {
     id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -195,7 +227,11 @@
   }, 1000);
   // why: what this (re)connection follows, for the iPad's log (load: the page just loaded; ping: the iPad went quiet; closed: the link dropped; front: back from the background)
   let why = 'load';
-  function hello() { put(JSON.stringify(join ? { t: 'hello', v: 1, id, name, why, join: 1 } : { t: 'hello', v: 1, id, name, why })); join = false; why = 'closed'; }
+  function hello() {
+    const packet = { t: 'hello', v: 1, id, name, why, mode: controllerMode };
+    if (join) packet.join = 1;
+    put(JSON.stringify(packet)); join = false; why = 'closed';
+  }
   // What took the page out of full screen (an edge swipe is Android's Back, which leaves full screen first and cancels every touch): told to the iPad's log
   function note(w) { if (up()) put(JSON.stringify({ t: 'note', w })); }
   // The link to the iPad: a WebSocket, or over HTTPS where one cannot open (iPhone Safari refuses WebSockets to a certificate the user trusted by hand), POST requests to
@@ -232,7 +268,7 @@
   function message(m) {
     if (m.t === 'assign') {
       replaced = false; document.body.classList.remove('kicked'); showPlayer(m.player); conn('ok'); dirty = true;
-      faceLayout(m.layout === 'xbox');
+      faceLayout(controllerMode === 'pro' && m.layout === 'xbox');
     }
     else if (m.t === 'full') { showPlayer(0); conn('full'); toast(T.full); }
     else if (m.t === 'kicked') { showPlayer(0); $('#kickmsg').textContent = T.kicked; $('#rejoin').textContent = T.rejoin; document.body.classList.add('kicked'); release(); }
@@ -322,9 +358,10 @@
   // out of the screen z (as DmGamepad.m does for the iPad's own). Browsers disagree on signs and units (iPhone reports gravity the other way round), so both are worked out
   // from the readings: gravity points down out of the back of a phone held as one does, and the gyroscope has to agree with how gravity turns
   const modes = ['off', 'gyro', 'tilt'];
+  const availableMotion = () => controllerMode === 'joyright' ? ['off', 'gyro'] : modes;
   let motionMode = 'off';
   try { motionMode = params.get('motion') || localStorage.getItem('padMotion') || 'off'; } catch (e) {}
-  if (!modes.includes(motionMode) || !window.isSecureContext) motionMode = 'off';   // kept by the https page only
+  if (!availableMotion().includes(motionMode) || !window.isSecureContext) motionMode = 'off';   // kept by the https page only
   let tiltX = null, listening = false, mseq = 0, lastMotion = 0;
   let gSign = 0, gVotes = 0, rotScale = 1, fitNum = 0, fitDen = 0, fitMoved = 0, prevG = null, prevT = 0;
   function motionLabel() { $('#motion').textContent = { off: T.mOff, gyro: T.mGyro, tilt: T.mTilt }[motionMode]; $('#motion').classList.toggle('on', motionMode !== 'off'); }
@@ -340,7 +377,8 @@
     if (m === 'off') { toast(T.tOff); return; }
     if (!window.isSecureContext) {   // over http: to https, with the device id and the mode
       motionMode = 'off'; motionLabel();
-      ask(T.goSecure, T.goNote, T.goOk, () => { location.href = 'https://' + location.host + '/?id=' + encodeURIComponent(id) + '&motion=' + m; });
+      const query = new URLSearchParams({ id, motion: m, type: controllerMode });
+      ask(T.goSecure, T.goNote, T.goOk, () => { location.href = 'https://' + location.host + '/?' + query; });
       return;
     }
     startSensors(true);
@@ -355,7 +393,10 @@
     else go();
   }
   $('#ask').addEventListener('click', e => { if (e.target.id === 'ask') document.body.classList.remove('asking'); });   // a tap beside the card: not now
-  $('#motion').addEventListener('click', () => setMode(modes[(modes.indexOf(motionMode) + 1) % modes.length]));
+  $('#motion').addEventListener('click', () => {
+    const choices = availableMotion();
+    setMode(choices[(choices.indexOf(motionMode) + 1) % choices.length]);
+  });
   function nearest(f) {   // degrees or radians, either sign: the one the fit is closest to
     const off = x => Math.abs(Math.log(Math.abs(f) + 1e-9) - Math.log(Math.abs(x))) + (Math.sign(f) !== Math.sign(x) ? 9 : 0);
     return [1, -1, 57.29578, -57.29578].reduce((b, x) => off(x) < off(b) ? x : b);
@@ -411,7 +452,7 @@
     if (!canFull) { if (!standalone) toast(T.ios); return; }
     if (document.fullscreenElement) return;
     document.documentElement.requestFullscreen({ navigationUI: 'hide' })
-      .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {})).catch(() => {});
+      .then(() => controllerMode === 'pro' && screen.orientation?.lock?.('landscape')).catch(() => {});
   }
   if (standalone) $('#fs').style.display = 'none';
   document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && triedFull) note('left full screen'); });
@@ -442,7 +483,10 @@
     p.style.transformOrigin = `${(x0 + x1) / 2}px ${(y0 + y1) / 2}px`;
     p.style.transform = `translate(${l.x * pad.clientWidth}px,${l.y * pad.clientHeight}px) scale(${l.s})`;
   }
-  function applyLayout() { pieces.forEach(applyPiece); }
+  function applyLayout() {
+    if (controllerMode === 'joyright') pieces.forEach(p => { p.style.transform = ''; });
+    else pieces.forEach(applyPiece);
+  }
   function saveLayout() { try { localStorage.setItem('padLayout', JSON.stringify(layout)); } catch (e) {} }
   addEventListener('resize', applyLayout);
   applyLayout();
@@ -595,7 +639,7 @@
       touches.delete(tp.identifier);
     }
     recompute();
-    if (e.type === 'touchend' && (canFull ? !document.fullscreenElement : !triedFull)) goFull();   // a touchend counts as the tap full screen needs; Android goes back to it on any tap after leaving it
+    if (controllerMode === 'pro' && e.type === 'touchend' && (canFull ? !document.fullscreenElement : !triedFull)) goFull();   // a touchend counts as the tap full screen needs; Android goes back to it on any tap after leaving it
   };
   pad.addEventListener('touchend', end, { passive: false });
   pad.addEventListener('touchcancel', end, { passive: false });
@@ -612,6 +656,33 @@
     lock(); document.addEventListener('visibilitychange', () => { if (!document.hidden) lock(); });
   }
 
+  function showControllerMode() {
+    const single = controllerMode === 'joyright';
+    document.body.classList.toggle('joyright', single);
+    $('#type').textContent = single ? T.pro : T.joyright;
+    $('#type').setAttribute('aria-pressed', String(single));
+    if (single) faceLayout(false);
+    applyLayout();
+  }
+  function changeControllerMode() {
+    release();
+    controllerMode = controllerMode === 'joyright' ? 'pro' : 'joyright';
+    rememberControllerMode();
+    // A motion link may include the previous choice so it can cross from HTTP to HTTPS. Clear it after the user changes mode.
+    if (params.has('type')) {
+      params.delete('type');
+      history.replaceState(null, '', location.pathname + (params.size ? '?' + params : ''));
+    }
+    showControllerMode();
+    if (up()) put(JSON.stringify({ t: 'padtype', mode: controllerMode }));
+    if (controllerMode === 'joyright') {
+      screen.orientation?.unlock?.();
+      setMode('gyro');
+    }
+  }
+  $('#type').addEventListener('click', changeControllerMode);
+  $('#joy-portrait').addEventListener('click', changeControllerMode);
+  showControllerMode();
   connect();
   tick();
 })();

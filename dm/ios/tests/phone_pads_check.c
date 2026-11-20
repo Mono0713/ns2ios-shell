@@ -13,7 +13,7 @@
 
 void phone_pads_start(void);
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-static uint64_t g_btn[DM_PLAYERS]; static int32_t g_ax[DM_PLAYERS][4]; static uint32_t g_mask;
+static uint64_t g_btn[DM_PLAYERS]; static int32_t g_ax[DM_PLAYERS][4]; static uint32_t g_mask, g_joyright;
 void dm_pad_set_player(int p, uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     pthread_mutex_lock(&g_mu); g_btn[p] = b; g_ax[p][0] = lx; g_ax[p][1] = ly; g_ax[p][2] = rx; g_ax[p][3] = ry; pthread_mutex_unlock(&g_mu);
 }
@@ -22,7 +22,10 @@ void dm_motion_set_player(int p, const float acc[3], const float gyro[3], const 
     (void)angle; (void)dir; pthread_mutex_lock(&g_mu); for (int i = 0; i < 3; i++) { g_acc[p][i] = acc[i]; g_gyro[p][i] = gyro[i]; } g_motions[p]++; pthread_mutex_unlock(&g_mu);
 }
 static void no_output(dm_haptic_state s) { (void)s; }   // the Apple output (haptics_apple.m) plays nothing for a phone's player either
-void dm_pad_players(uint32_t mask) { pthread_mutex_lock(&g_mu); g_mask = mask; pthread_mutex_unlock(&g_mu); }
+void dm_pad_players_with_joyright(uint32_t mask, uint32_t joyright) {
+    pthread_mutex_lock(&g_mu); g_mask = mask; g_joyright = joyright; pthread_mutex_unlock(&g_mu);
+}
+void dm_pad_clear_player(int p) { dm_pad_set_player(p, 0, 0, 0, 0, 0); }
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec; }
 
 static void *commands(void *arg) {
@@ -52,7 +55,7 @@ int main(int argc, char **argv) {
         pthread_mutex_lock(&g_mu);
         fprintf(f, "{\"slots\": [");
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%d, %d]", i ? ", " : "", info[i].kind, info[i].xbox);
-        fprintf(f, "], \"mask\": %u, \"players\": [", g_mask);
+        fprintf(f, "], \"mask\": %u, \"joyright\": %u, \"players\": [", g_mask, g_joyright);
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%llu, %d, %d, %d, %d]", i ? ", " : "", (unsigned long long)g_btn[i], g_ax[i][0], g_ax[i][1], g_ax[i][2], g_ax[i][3]);
         fprintf(f, "], \"motion\": [");
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%d, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]", i ? ", " : "", g_motions[i], g_acc[i][0], g_acc[i][1], g_acc[i][2], g_gyro[i][0], g_gyro[i][1], g_gyro[i][2]);

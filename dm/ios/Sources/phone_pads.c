@@ -6,6 +6,7 @@
 // its page asks to join again or the app restarts.
 // One port serves the page (GET /, phone_pad_page.h, generated from phone_pad.html) and the controller stream (GET /ws, WebSocket). Protocol, all from the phone:
 //   text   {"t":"layout","xbox":0|1}  -> the phone's own layout switch, answered with an assign in that layout
+//   text   {"t":"padtype","mode":"pro"|"joyright"}  -> set the phone's controller type; hello can also include "mode"
 //   text   {"t":"home"}  -> the page's Home button: the app's menu over the game (shell_slot_home), as a controller's Home button
 //   text   {"t":"hello","v":1,"id":"<device id>","name":"<label>"[,"join":1]}  -> answered {"t":"assign","player":<1..8>,"layout":"switch"|"xbox"}, {"t":"full"} or {"t":"kicked"}
 //          (join: the player asked to come back after the launcher removed the phone); assign comes again whenever the launcher moves the phone to another player or changes its button layout
@@ -69,7 +70,7 @@ typedef struct {
     uint32_t ip;                 // the phone's address (network order): one phone, one player
     void *tls;                   // the connection's TLS (phone_pads_tls.h), NULL for plain HTTP
     size_t n; uint8_t in[IN_CAP];
-    int last_seq; uint64_t last_ns; int released;
+    int last_seq; uint64_t last_ns; int released, joyright;
     uint16_t raw; int32_t axes[4];   // the buttons and sticks the phone last sent; what the game gets adds the taps still held (MIN_HOLD_NS)
     uint16_t kept; uint64_t press_ns[16], hold_until;   // kept: buttons the phone let go of that stay down until hold_until; when each button went down
     uint64_t open_ns, seen_ns;   // when the connection opened, when anything last arrived on it (a session: its last request)
@@ -186,6 +187,18 @@ static int rumble_due(client *c, uint64_t t) {   // 1: a rumble message is waiti
 
 // ---- Players ----
 static void send_assign(client *c, int p);
+static void publish_input(client *c, int p) {
+    uint64_t buttons = c->raw | c->kept;
+    if (c->joyright) {
+        // The existing 16-bit wire format has no rail bits; the page uses the otherwise absent L and ZL.
+        uint64_t rails = buttons & (DM_BTN_L | DM_BTN_ZL);
+        buttons &= ~(DM_BTN_L | DM_BTN_ZL);
+        if (rails & DM_BTN_L) buttons |= DM_BTN_RIGHT_SL;
+        if (rails & DM_BTN_ZL) buttons |= DM_BTN_RIGHT_SR;
+    }
+    dm_pad_set_player(p, buttons, c->axes[0], c->axes[1], c->axes[2], c->axes[3]);
+    shell_slot_input(p, buttons, c->axes[c->joyright ? 2 : 0], c->axes[c->joyright ? 3 : 1]);
+}
 static void release(client *c) { int p = shell_slot_of(c); c->raw = 0; c->kept = 0; c->hold_until = 0; if (p >= 0 && !c->released) { dm_pad_set_player(p, 0, 0, 0, 0, 0); c->released = 1; } }
 // A game reads the buttons once a frame, so a press and its release closer together than a frame or two are never seen: a quick tap (Tetris), or two packets the
 // Wi-Fi held back and handed over at once. A button let go within MIN_HOLD_NS of going down stays down until then (the loop below lets it go)
@@ -194,7 +207,7 @@ static void hold_expire(client *c, int p, uint64_t t) {
     uint16_t still = 0; uint64_t until = 0;
     for (int b = 0; b < 16; b++) if (c->kept >> b & 1 && t - c->press_ns[b] < MIN_HOLD_NS) { still |= 1 << b; if (!until || c->press_ns[b] + MIN_HOLD_NS < until) until = c->press_ns[b] + MIN_HOLD_NS; }   // the next to let go
     c->kept = still; c->hold_until = until;
-    if (p >= 0) { dm_pad_set_player(p, c->raw | c->kept, c->axes[0], c->axes[1], c->axes[2], c->axes[3]); shell_slot_input(p, c->raw | c->kept, c->axes[0], c->axes[1]); }
+    if (p >= 0) publish_input(c, p);
 }
 static void drop(client *c) {
     if (c->player >= 0) {
@@ -241,7 +254,10 @@ static void on_hello(client *c, const char *json) {
     if (c->ip && c->ip != htonl(INADDR_LOOPBACK))
         for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && used(&g_cl[i]) && g_cl[i].player >= 0 && g_cl[i].ip == c->ip && now_ns() - g_cl[i].seen_ns > ALIVE_NS)
             replace(&g_cl[i], name);
-    int p = shell_slot_take(c, id, SHELL_SLOT_PHONE, name);   // a phone that held a player before has its id on that slot and gets it back while it is free
+    char mode[16] = "";
+    json_str(json, "mode", mode, sizeof mode);
+    c->joyright = !strcmp(mode, "joyright");
+    int p = shell_slot_take_phone(c, id, name, c->joyright);   // a reconnecting phone gets its old slot while it is free
     snprintf(c->name, sizeof c->name, "%s", name); snprintf(c->id, sizeof c->id, "%s", id);
     if (p < 0) { say(c, "{\"t\":\"full\"}"); LOG("phone pads: '%s' connected: all %d players are taken, not used", name, DM_PLAYERS); return; }
     c->player = p; c->last_seq = -1; c->last_ns = now_ns(); c->released = 1; c->motion.init = 0;
@@ -256,6 +272,21 @@ static void on_text(client *c, const char *json) {
     if (!strcmp(t, "home")) { int p = c->player < 0 ? -1 : shell_slot_of(c); if (p >= 0) { LOG("phone pads: '%s' (player %d) pressed Home", c->name, p + 1); shell_slot_home(p); } return; }
     if (!strcmp(t, "ping")) { say(c, "{\"t\":\"pong\"}"); return; }
     if (!strcmp(t, "note")) { char w[48] = ""; json_str(json, "w", w, sizeof w); LOG("phone pads: '%s': the page %s", c->name, w); return; }   // phone_pad.html note()   // the page's check that the iPad is still there (phone_pad.html)
+    if (!strcmp(t, "padtype")) {
+        if (c->player < 0) return;
+        char mode[16] = "";
+        json_str(json, "mode", mode, sizeof mode);
+        if (strcmp(mode, "pro") && strcmp(mode, "joyright")) return;
+        int joyright = !strcmp(mode, "joyright");
+        if (c->joyright != joyright) {
+            release(c);
+            c->motion.init = 0;
+            c->joyright = joyright;
+        }
+        int p = shell_slot_set_joyright(c, joyright);
+        if (p >= 0) send_assign(c, p);
+        return;
+    }
     if (strcmp(t, "layout")) { on_hello(c, json); return; }
     int p = c->player < 0 ? -1 : shell_slot_of(c); if (p < 0) return;
     int xbox = strstr(json, "\"xbox\":1") != NULL;
@@ -296,9 +327,7 @@ static void on_binary(client *c, const uint8_t *b, size_t n) {
     for (int k = 0; k < 16; k++) if (c->kept >> k & 1 && (!c->hold_until || c->press_ns[k] + MIN_HOLD_NS < c->hold_until)) c->hold_until = c->press_ns[k] + MIN_HOLD_NS;
     c->raw = raw;
     for (int i = 0; i < 4; i++) c->axes[i] = (int8_t)b[4 + i] * (DM_STICK_MAX / 127);
-    uint64_t btn = raw | c->kept;
-    dm_pad_set_player(p, btn, c->axes[0], c->axes[1], c->axes[2], c->axes[3]);
-    shell_slot_input(p, btn, c->axes[0], c->axes[1]);
+    publish_input(c, p);
 }
 
 // ---- The launcher's moves and removals (shell_slots.h handlers): called on the main thread, carried out by the server thread ----
