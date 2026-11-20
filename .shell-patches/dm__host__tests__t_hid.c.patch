@@ -1,10 +1,12 @@
 diff --git a/dm/host/tests/t_hid.c b/dm/host/tests/t_hid.c
 --- a/dm/host/tests/t_hid.c
 +++ b/dm/host/tests/t_hid.c
-@@ -84,6 +84,14 @@
+@@ -83,7 +83,15 @@
+     CHECK(h_hid_ShowCtrl(info, arg) == RES_OK && info[0] == 2 && info[1] == 0, "the controller applet reports two players, player 1 selected");
      arg[1] = 1; h_hid_ShowCtrl(info, arg);
      CHECK(info[0] == 1, "the applet's count is capped at the game's maximum");
-     CHECK(six_connected(0x0100 | 0) && !six_connected(0x0200 | 0), "player 2 has a six-axis sensor, No3 none");
+-    CHECK(six_connected(0x0100 | 0) && !six_connected(0x0200 | 0), "player 2 has a six-axis sensor, No3 none");
++    CHECK(six_player(0x0100 | 0) == 1 && six_player(0x0200 | 0) < 0, "player 2 has a six-axis sensor, No3 none");
 +    SixAxisState six[2];
 +    CHECK(six_states(six, 2, 0x0100) == 2 && six[0].acc[2] == -1 && six[0].gyro[2] == 0 && six[0].dir[0] == 1 && h_hid_SixRest(&(uint32_t){0x0100}),
 +          "player 2's sensor lies still while no real motion is reported");
@@ -16,3 +18,54 @@ diff --git a/dm/host/tests/t_hid.c b/dm/host/tests/t_hid.c
  
      // A one-player game ({No1, Handheld}): player 2's controller plays as player 1, No2 reads as not connected
      g_signals = 0; ids((const uint32_t[]){0, NPAD_HANDHELD}, 2);
+@@ -206,12 +214,50 @@
+     unsetenv("DM_RUMBLE_LOG");
+ }
+ 
++static void t_joyright(void) {
++    uint32_t no1 = 0, no2 = 1, handheld = NPAD_HANDHELD;
++    uint32_t handles[2];
++    int32_t info[2];
++    const int8_t limits[2] = {1, 4};
++    NpadState s;
++    SixAxisState motion;
++    g_mode = 0;
++    ids((uint32_t[]){no1, no2, handheld}, 3);
++    h_hid_SetStyles(STYLE_JOYLEFT | STYLE_JOYRIGHT);
++    dm_pad_players_with_joyright(3, 2);
++    h_hid_ShowCtrl(info, limits);
++    CHECK(info[0] == 1 && info[1] == 1, "a single Joy-Con game selects P2's Joy-Con over P1's regular pad");
++    CHECK(h_hid_GetStyle(&no2) == STYLE_JOYRIGHT && h_hid_GetJoyAssign(&no2) == 1, "P2 advertises a single Joy-Con");
++    dm_pad_players_with_joyright(3, 1);
++    CHECK(h_hid_GetStyle(&no1) == STYLE_JOYRIGHT && !h_hid_GetStyle(&handheld), "P1 single Joy-Con uses No1 even in handheld mode");
++    CHECK(h_hid_GetStyle(&no2) == STYLE_FULLKEY, "the other player keeps the Pro style");
++    dm_pad_set_player(0, DM_BTN_A | DM_BTN_RIGHT_SL | DM_BTN_RIGHT_SR | DM_BTN_L, 20000, 0, 25000, -27000);
++    h_hid_StateJoyRight(&s, &no1);
++    CHECK(s.attributes == (ATTR_CONNECTED | ATTR_RIGHT_CONN), "only the right half is connected");
++    CHECK((s.buttons & (DM_BTN_A | DM_BTN_RIGHT_SL | DM_BTN_RIGHT_SR | DM_BTN_L)) == (DM_BTN_A | DM_BTN_RIGHT_SL | DM_BTN_RIGHT_SR),
++          "right rail buttons and ABXY reach Joy-Con reads, left shoulder does not");
++    CHECK(!s.lx && !s.ly && s.rx == 25000 && s.ry == -27000, "Joy-Con exports only its right stick");
++    dm_motion_set_player(0, (float[]){0, 0, -1}, (float[]){0, 0, .25f}, (float[]){0, 0, 0},
++                         (float[]){1, 0, 0, 0, 1, 0, 0, 0, 1});
++    CHECK(h_hid_SixHandles(handles, 2, &no1, STYLE_JOYRIGHT) == 1 &&
++          h_hid_SixStates(&motion, 1, handles) == 1 && motion.gyro[2] == .25f, "the Joy-Con exposes its gyro as one working sensor");
++    dm_pad_set_player(0, DM_BTN_B, 0, 0, 0, 0);
++    dm_pad_players(2);
++    CHECK(h_hid_GetStyle(&handheld) == STYLE_HANDHELD && !h_hid_GetStyle(&no1), "disconnect restores P1 Handheld");
++    CHECK(!buttons_of(handheld, STYLE_HANDHELD) && h_hid_SixStates(&motion, 1, handles) == 0, "removed Joy-Con leaves no unread edge or live gyro handle");
++    h_hid_ShowCtrl(info, limits);
++    CHECK(!info[0], "a regular pad does not count in a single Joy-Con applet");
++    h_hid_SetStyles(0xffffffffu);
++    dm_pad_players(0);
++}
++
+ int main(void) {
+     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
+     t_slots();
+     t_npads();
+     t_vibration();
+     t_rumble_log();
++    t_joyright();
+     printf("hid players: %d checks, %d failed\n", checks, fails);
+     return fails != 0;
+ }

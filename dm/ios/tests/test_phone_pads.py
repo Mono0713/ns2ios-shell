@@ -101,7 +101,7 @@ class PostPhone:
         self.s.close()
 
 
-class PhonePadsTests(unittest.TestCase):
+class PhonePadsServer(unittest.TestCase):
     controllers = 0   # players physical controllers hold before any phone connects
     tls = False       # HTTPS too (phone_pads_tls_test.c with OpenSSL, a certificate made for the test)
 
@@ -149,6 +149,8 @@ class PhonePadsTests(unittest.TestCase):
         time.sleep(0.1)
         return json.loads(self.state_file.read_text())
 
+
+class PhonePadsTests(PhonePadsServer):
     def test_page_is_served(self):
         with connect(self.port, self.tls) as s:
             s.sendall(b'GET / HTTP/1.1\r\nHost: t\r\n\r\n')
@@ -297,6 +299,55 @@ class PhonePadsWithControllersTests(PhonePadsTests):
         self.assertEqual(a.reply(), {'t': 'assign', 'player': 1, 'layout': 'switch'})
         for ph in [a, extra] + more: ph.close()
         self.assertEqual(self.host()['mask'], 0b110)   # the phones leaving does not take the controllers' players away (now players 2 and 3)
+
+class PhoneJoyconTests(PhonePadsServer):
+    controllers = 2
+
+    def test_joycon_moves_with_phone_and_reconnects(self):
+        a = Phone(self.port)
+        self.addCleanup(lambda: a.close())
+        a.frame(1, b'{"t":"hello","v":1,"id":"right-joy","name":"test","mode":"joyright"}')
+        self.assertEqual(a.reply()['player'], 3)
+        self.assertEqual(self.host()['joyright'], 0b100)
+        rail_buttons = (1 << 6) | (1 << 8)
+        a.state(1, rail_buttons, rx=60)
+        self.assertEqual(self.host()['players'][2], [(1 << 26) | (1 << 27), 0, 0, 60 * 258, 0])
+        self.launcher('swap 0 2')
+        self.assertEqual(a.reply()['player'], 1)
+        host = self.host()
+        self.assertEqual(host['joyright'], 0b1)
+        self.assertEqual(host['players'][2], [0, 0, 0, 0, 0])
+        a.frame(1, b'{"t":"padtype","mode":"pro"}')
+        self.assertEqual(a.reply()['player'], 1)
+        a.state(2, rail_buttons)
+        host = self.host()
+        self.assertEqual(host['joyright'], 0)
+        self.assertEqual(host['players'][0][0], rail_buttons)
+        a.close()
+        self.assertEqual(self.host()['players'][0][0], 0)
+        a = Phone(self.port)
+        a.frame(1, b'{"t":"hello","v":1,"id":"right-joy","name":"test","mode":"joyright"}')
+        self.assertEqual(a.reply()['player'], 1)
+        self.assertEqual(self.host()['joyright'], 0b1)
+
+
+class PhoneJoyconPostTests(PhonePadsServer):
+    def test_joycon_over_post(self):
+        p = PostPhone(self.port, 'joy-post', self.tls)
+        self.addCleanup(p.close)
+        hello = '{"t":"hello","v":1,"id":"joy-post","name":"test","mode":"joyright"}'
+        self.assertEqual(p.post(hello)[0]['player'], 1)
+        p.state(1, 1 << 8, rx=-60)
+        host = self.host()
+        self.assertEqual(host['joyright'], 1)
+        self.assertEqual(host['players'][0], [1 << 27, 0, 0, -60 * 258, 0])
+        p.reconnect()
+        self.assertEqual(p.post('{"t":"padtype","mode":"pro"}')[0]['player'], 1)
+        for _ in range(10):
+            if not self.host()['joyright']:
+                break
+        self.assertEqual(self.host()['joyright'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
