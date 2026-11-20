@@ -254,6 +254,11 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
 // and menus (the stick's direction bits) worked; with every entry written the camera turns
 static int states(NpadState *out, int n, uint32_t id, uint32_t style) {
     if (n <= 0) return 0;
+    {   // once per npad id and style: which controllers the game reads, and whether a player is there (local multiplayer: a player whose input never arrives)
+        static _Atomic uint64_t seen; unsigned slot = (id < DM_PLAYERS ? id : id == NPAD_HANDHELD ? 8u : 9u) * 6u + (unsigned)__builtin_ctz(style | 0x20u);
+        if (slot < 64 && !(atomic_fetch_or(&seen, 1ull << slot) >> slot & 1))
+            LOG("hid: the game reads npad %#x as style %#x: %s", id, style, style_of(id) & style ? "a player is there" : style_of(id) ? "connected in another style" : "nobody");
+    }
     fill(out, id, style);
     for (int i = 1; i < n; i++) { out[i] = out[0]; out[i].sampling = out[0].sampling - i; }
     return n;
@@ -295,6 +300,7 @@ HLE_FORCE("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoE
     int count = 0; for (int p = 0; p < DM_PLAYERS; p++) count += reported(p);
     if (arg && arg[1] > 0 && count > arg[1]) count = arg[1];
     if (info) { info[0] = count; info[1] = (int32_t)connected_id(); }
+    LOG("hid: controller applet asked for %d to %d players: %d reported, player 1 on npad %#x", arg ? arg[0] : -1, arg ? arg[1] : -1, count, connected_id());
     return RES_OK;
 }
 // Six-axis sensor (accelerometer + gyroscope) of the connected controller. SixAxisSensorState (0x60): acceleration in G, angular velocity in revolutions / s, angle in revolutions,
@@ -488,7 +494,7 @@ HLE_FORCE("_ZN2nn3hid19GetPlayerLedPatternERKj", "player LED: the Switch's patte
 static void ctrl_color(uint32_t *c) { c[0] = 0xff828282u; c[1] = 0xff0f0f0fu; }
 HLE_FORCE("_ZN2nn3hid22GetNpadControllerColorEPNS0_19NpadControllerColorERKj", "controller color", Result, h_hid_Color, uint32_t *c, const uint32_t *id) { (void)id; ctrl_color(c); return RES_OK; }
 HLE_FORCE("_ZN2nn3hid22GetNpadControllerColorEPNS0_19NpadControllerColorES2_RKj", "left and right Joy-Con colors", Result, h_hid_Color2, uint32_t *l, uint32_t *r, const uint32_t *id) { (void)id; ctrl_color(l); ctrl_color(r); return RES_OK; }
-HLE_FORCE("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", "controller applet (no result wanted); the host reports a selection right away", Result, h_hid_ShowCtrl0, const void *arg) { (void)arg; return RES_OK; }
+HLE_FORCE("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", "controller applet (no result wanted); the host reports a selection right away", Result, h_hid_ShowCtrl0, const void *arg) { const int8_t *a = arg; LOG("hid: controller applet (no result) asked for %d to %d players", a ? a[0] : -1, a ? a[1] : -1); return RES_OK; }
 HLE_FORCE("_ZN2nn3hid24ShowControllerStrapGuideEv", "strap guide applet; not shown by the host", Result, h_hid_Strap, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn3hid28ShowControllerFirmwareUpdateERKNS0_27ControllerFirmwareUpdateArgE", "controller firmware update applet; not shown by the host", Result, h_hid_FwUpd, const void *arg) { (void)arg; return RES_OK; }
 
