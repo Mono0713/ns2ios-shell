@@ -23,7 +23,7 @@ struct ShouldReopenIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
-        let yes = shellRelaunchRequested() != 0
+        let yes = shellRelaunchRequested() != 0 && UIApplication.shared.isProtectedDataAvailable
         if !yes { endIfOnlyAnswering() }
         return .result(value: yes)
     }
@@ -39,11 +39,19 @@ struct ReopenAfterChangeIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        if shellRelaunchRequested() != 0 && systemContext.currentMode.canContinueInForeground {
-            try await continueInForeground(alwaysConfirm: false)
-            return .result()
+        if shellRelaunchRequested() != 0 {
+            if systemContext.currentMode == .foreground { return .result() }
+            if UIApplication.shared.isProtectedDataAvailable && systemContext.currentMode.canContinueInForeground {
+                do {
+                    try await continueInForeground(alwaysConfirm: false)
+                    return .result()
+                } catch {
+                    // The device can lock after the availability check. Let Shortcuts finish quietly.
+                    fputs("shortcuts: iPadOS declined to bring SwitchPad to the foreground\n", stderr)
+                }
+            }
         }
-        endIfOnlyAnswering()   // a plain close: nothing to do, and nothing left running
+        endIfOnlyAnswering()
         return .result()
     }
 }

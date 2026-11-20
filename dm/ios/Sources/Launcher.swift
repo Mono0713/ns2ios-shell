@@ -711,8 +711,15 @@ private struct SaveSlotsSection: View {
                 .pickerStyle(.menu)
                 .nav("slot")
             }
-            Button { s.addEmpty() } label: { Label(tr("New empty save"), systemImage: "plus.circle") }
+            // UIKit can still activate a List button from a gamepad press even when our controller focus
+            // is on a player action. Use a touch gesture here; the controller uses the explicit slotNew action.
+            Label(tr("New empty save"), systemImage: "plus.circle")
                 .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { s.addEmpty() }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(named: Text(tr("New empty save"))) { s.addEmpty() }
                 .nav("slotNew")
             Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
                 .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
