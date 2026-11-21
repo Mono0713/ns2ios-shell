@@ -793,26 +793,50 @@ def fs_uint(src):
         mask = sum(1 << int(re.search(r'color\((\d+)\)', at).group(1)) for _, nm, at in mem if nm in from_int)
     return out, mask
 
-SG_OPS = {333: 'true', 334: 'pred', 335: 'pred', 336: 'true', 337: 'value', 338: 'value', 339: 'ballot', 345: 'value', 346: 'value', 347: 'value', 348: 'value'}   # OpGroupNonUniform* → its one-lane value
+SG_OPS = {333: 'true', 334: 'pred', 335: 'pred', 336: 'true', 337: 'value', 338: 'value', 339: 'ballot', 345: 'value', 346: 'value', 347: 'value', 348: 'value',   # OpGroupNonUniform* → its one-lane value
+          340: 'inverse', 341: 'bitextract', 342: 'bitcount', 343: 'zero', 344: 'zero', 365: 'value', 366: 'value',
+          **{o: 'scan' for o in range(349, 365)},   # IAdd … LogicalXor: a reduction or inclusive scan of one lane is its value
+          4421: 'ballot_khr', 4422: 'value_khr', 4428: 'pred_khr', 4429: 'pred_khr', 4430: 'true', 4432: 'value_khr'}   # SPV_KHR_shader_ballot / SPV_KHR_subgroup_vote (no scope operand)
 SG_BUILTINS = {36: 'one', 41: 'zero', 4416: 'one4', 4417: 'one4', 4418: 'zero4', 4419: 'one4', 4420: 'zero4'}   # SubgroupSize, SubgroupLocalInvocationId, Eq / Ge / Gt / Le / Lt masks
 def spv_single_lane(path):
-    """Metal has no SIMD-group functions in vertex functions, and SPIRV-Cross's subgroup emulation covers only Elect. Monster Hunter Rise's vertex shaders (about 4%) scalarize uniform loads:
+    """Metal has no SIMD-group functions in vertex functions, and SPIRV-Cross's subgroup emulation covers only Elect (any subgroup builtin left in a vertex shader stops it:
+    "Subgroup builtins are not available in this type of function"). Monster Hunter Rise's vertex shaders (about 4%) scalarize uniform loads:
     ballot the active lanes, shuffle the first lane's value to all, and take a fast path when all agree. With a subgroup of one lane that is exact: the ballot is the lane's own bit, shuffles and
-    broadcasts return the lane's own value, all / any are the predicate, all-equal and elect are true, the lane ID is 0, the size 1 and the masks follow. The SPIR-V is rewritten that way
-    (the builtin variables, their decorations and the subgroup capabilities removed). → True when rewritten, False when there is nothing to do or an operation it does not cover"""
+    broadcasts return the lane's own value, all / any are the predicate, all-equal and elect are true, the lane ID is 0, the size 1 and the masks follow; a ballot's inverse or bit 0 is
+    its lowest bit, its bit count that bit, its lowest / highest set bit 0, a reduction or inclusive scan the lane's value. The SPIR-V is rewritten that way (the builtin variables, their
+    decorations and the subgroup capabilities removed). A mask builtin read one component at a time (an access chain with a constant index: Super Mario Party Jamboree, whose
+    translator reads SR_EQMASK and friends as gl_SubgroupEqMask[0]) gives that component's constant. → True when rewritten, False when there is nothing to do or an operation
+    it does not cover (an exclusive scan, a mask indexed by a variable)"""
     d = open(path, 'rb').read(); words = list(struct.unpack(f'<{len(d) // 4}I', d)); hdr, ins, i = words[:5], [], 5
     while i < len(words): n = words[i] >> 16; ins.append(words[i:i + n]); i += n
     op = lambda x: x[0] & 0xffff
     if not any(op(x) in SG_OPS or (op(x) == 71 and len(x) > 3 and x[2] == 11 and x[3] in SG_BUILTINS) for x in ins): return False
-    if any(340 <= op(x) <= 366 and op(x) not in SG_OPS for x in ins): return False   # other subgroup operations (bit counts, arithmetic): not covered
+    if any(340 <= op(x) <= 366 and op(x) not in SG_OPS for x in ins): return False   # (all of 333-366 are covered now; kept for opcodes added later)
+    if any(op(x) in range(349, 365) and x[4] == 2 for x in ins): return False   # an exclusive scan: its identity depends on the operation and type
     bvar = {x[1]: SG_BUILTINS[x[3]] for x in ins if op(x) == 71 and len(x) > 3 and x[2] == 11 and x[3] in SG_BUILTINS}
     uint = next((x[1] for x in ins if op(x) == 21 and x[2:4] == [32, 0]), None); boolt = next((x[1] for x in ins if op(x) == 20), None)
     uvec4 = next((x[1] for x in ins if op(x) == 23 and x[2] == uint and x[3] == 4), None)
     if uint is None or boolt is None or uvec4 is None: return False
+    consts = {x[2]: x[3] for x in ins if op(x) == 43 and len(x) == 4}   # OpConstant id → 32-bit value (access chain indices)
     bound = hdr[3]; c = {}
     for nm in ('zero', 'one', 'zero4', 'one4', 'true'): c[nm] = bound; bound += 1
-    consts = [[43 | 4 << 16, uint, c['zero'], 0], [43 | 4 << 16, uint, c['one'], 1], [44 | 7 << 16, uvec4, c['zero4'], c['zero'], c['zero'], c['zero'], c['zero']],
-              [44 | 7 << 16, uvec4, c['one4'], c['one'], c['zero'], c['zero'], c['zero']], [41 | 3 << 16, boolt, c['true']]]
+    consts_out = [[43 | 4 << 16, uint, c['zero'], 0], [43 | 4 << 16, uint, c['one'], 1], [44 | 7 << 16, uvec4, c['zero4'], c['zero'], c['zero'], c['zero'], c['zero']],
+                  [44 | 7 << 16, uvec4, c['one4'], c['one'], c['zero'], c['zero'], c['zero']], [41 | 3 << 16, boolt, c['true']]]
+    chain = {}   # access chain into a mask builtin → the constant its component reads as
+    for x in ins:
+        if op(x) in (65, 66) and len(x) > 3 and x[3] in bvar:   # OpAccessChain / OpInBoundsAccessChain
+            kind = bvar[x[3]]
+            if kind in ('one', 'zero') and len(x) == 4: chain[x[2]] = kind; continue
+            if kind not in ('one4', 'zero4') or len(x) != 5 or x[4] not in consts: return False   # indexed by a variable: not covered
+            chain[x[2]] = 'one' if kind == 'one4' and consts[x[4]] == 0 else 'zero'
+    def fresh():
+        nonlocal bound
+        bound += 1
+        return bound - 1
+    def low_bit(value, body):   # (value.x & 1) as uint, the instructions appended to body
+        x0, b = fresh(), fresh()
+        body += [[81 | 5 << 16, uint, x0, value, 0], [199 | 5 << 16, uint, b, x0, c['one']]]   # OpCompositeExtract, OpBitwiseAnd
+        return b
     out, placed = [], False
     for x in ins:
         o = op(x)
@@ -820,16 +844,30 @@ def spv_single_lane(path):
         if o == 10 and (b'ballot' in struct.pack(f'<{len(x) - 1}I', *x[1:]) or b'subgroup' in struct.pack(f'<{len(x) - 1}I', *x[1:])): continue
         if o in (71, 5) and x[1] in bvar: continue   # the builtin's decoration and name
         if o == 59 and x[2] in bvar: continue        # the builtin variable itself
+        if o in (65, 66) and x[2] in chain: continue  # an access chain into it (its loads take the constant)
         if o == 15: x = _ep_drop(x, bvar)
-        if o == 54 and not placed: out += consts; placed = True
+        if o == 54 and not placed: out += consts_out; placed = True
         if o == 61 and x[3] in bvar: out.append([83 | 4 << 16, x[1], x[2], c[bvar[x[3]]]]); continue   # a load of a builtin → its constant
+        if o == 61 and x[3] in chain: out.append([83 | 4 << 16, x[1], x[2], c[chain[x[3]]]]); continue   # a load of one of its components → that constant
         if o in SG_OPS:
             kind = SG_OPS[o]
             if kind == 'ballot': out.append([169 | 6 << 16, x[1], x[2], x[4], c['one4'], c['zero4']]); continue   # OpSelect(pred, own bit, 0)
+            if kind == 'ballot_khr': out.append([169 | 6 << 16, x[1], x[2], x[3], c['one4'], c['zero4']]); continue
+            if kind in ('value_khr', 'pred_khr'): out.append([83 | 4 << 16, x[1], x[2], x[3]]); continue
+            if kind == 'zero': out.append([83 | 4 << 16, x[1], x[2], c['zero']]); continue
+            if kind == 'scan': out.append([83 | 4 << 16, x[1], x[2], x[5]]); continue   # [scope, group operation, value]
+            if kind == 'bitcount':   # [scope, group operation, value]: reduce / inclusive → the lane's bit
+                if x[4] == 2: out.append([83 | 4 << 16, x[1], x[2], c['zero']]); continue   # exclusive: the lanes below this one, none
+                b = low_bit(x[5], out); out.append([83 | 4 << 16, x[1], x[2], b]); continue
+            if kind == 'inverse':   # [scope, value] → (value.x & 1) != 0
+                b = low_bit(x[4], out); out.append([171 | 5 << 16, x[1], x[2], b, c['zero']]); continue   # OpINotEqual
+            if kind == 'bitextract':   # [scope, value, index] → index == 0 && (value.x & 1) != 0
+                b = low_bit(x[4], out); nz, z = fresh(), fresh()
+                out += [[171 | 5 << 16, boolt, nz, b, c['zero']], [170 | 5 << 16, boolt, z, x[5], c['zero']], [167 | 5 << 16, x[1], x[2], z, nz]]; continue   # INotEqual, IEqual, LogicalAnd
             out.append([83 | 4 << 16, x[1], x[2], c['true'] if kind == 'true' else x[4]]); continue
         out.append(x)
     if not placed: return False
-    if any(op(x) == 65 and len(x) > 3 and x[3] in bvar for x in out): return False   # reached through an access chain: not covered
+    if any(op(x) in (65, 66) and len(x) > 3 and x[3] in bvar for x in out): return False   # reached some other way: not covered
     hdr[3] = bound
     flat = hdr + [v for x in out for v in x]; open(path, 'wb').write(struct.pack(f'<{len(flat)}I', *flat))
     return True
