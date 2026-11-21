@@ -13,7 +13,7 @@ import Combine
 
 struct SaveSlot: Identifiable, Codable, Equatable { var id: Int; var name: String }
 struct SaveSlotProblem { let what, detail: String }   // what in English, which the launcher translates
-private struct SlotsFile: Codable { var active: Int; var slots: [SaveSlot] }
+private struct SlotsFile: Codable { var active: Int; var slots: [SaveSlot]; var lastID: Int? }
 
 final class SaveSlotsModel: ObservableObject {
     @Published private(set) var slots: [SaveSlot] = []
@@ -22,6 +22,8 @@ final class SaveSlotsModel: ObservableObject {
     let live: URL?                    // $DM_SAVE: the save in use
     private let defaultName: (Int) -> String
     private let fm = FileManager.default
+    // Keep the ID of a deleted slot retired. The PC's sync history uses the ID to match the two copies.
+    private var lastID = 1
 
     init(defaultName: @escaping (Int) -> String) {
         self.defaultName = defaultName
@@ -48,6 +50,7 @@ final class SaveSlotsModel: ObservableObject {
         guard let file else { return }
         if let d = try? Data(contentsOf: file), let f = try? JSONDecoder().decode(SlotsFile.self, from: d), !f.slots.isEmpty {
             slots = f.slots; active = f.active
+            lastID = f.lastID ?? 1
         } else {
             slots = [SaveSlot(id: 1, name: defaultName(1))]; active = 1
         }
@@ -62,13 +65,14 @@ final class SaveSlotsModel: ObservableObject {
             if (try? fm.contentsOfDirectory(atPath: p.path))?.isEmpty == true { try? fm.removeItem(at: p) }
         }
         slots.sort { $0.id < $1.id }
+        lastID = max(lastID, slots.last?.id ?? active)
     }
 
-    private func persist() throws {
+    private func persist(active selectedID: Int? = nil) throws {
         guard let dir, let file else { return }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try e.encode(SlotsFile(active: active, slots: slots)).write(to: file, options: .atomic)
+        try e.encode(SlotsFile(active: selectedID ?? active, slots: slots, lastID: lastID)).write(to: file, options: .atomic)
     }
 
     private func fail(_ what: String, _ e: Error) {
@@ -80,23 +84,31 @@ final class SaveSlotsModel: ObservableObject {
     func switchTo(_ id: Int) {
         guard let live, id != active, slots.contains(where: { $0.id == id }), let from = parked(active), let to = parked(id) else { return }
         var done: [(URL, URL)] = []
+        var createdLive = false
+        let outgoing = pairs(in: from).filter { exists($0.0) }
         do {
+            // If interrupted operations left two versions, stop before moving either one.
+            if let collision = outgoing.first(where: { exists($0.1) }) {
+                throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: collision.1.path])
+            }
             try fm.createDirectory(at: from, withIntermediateDirectories: true)
-            for (l, p) in pairs(in: from) where exists(l) {
-                if exists(p) { try fm.removeItem(at: p) }   // a leftover of an older switch: what is in use is the newer
+            for (l, p) in outgoing {
                 try fm.moveItem(at: l, to: p); done.append((l, p))
             }
             for (l, p) in pairs(in: to) where exists(p) { try fm.moveItem(at: p, to: l); done.append((p, l)) }
-            if !exists(live) { try fm.createDirectory(at: live, withIntermediateDirectories: true) }   // a new slot starts empty, as a first start does
-            try? fm.removeItem(at: to)
+            if !exists(live) {
+                try fm.createDirectory(at: live, withIntermediateDirectories: true)
+                createdLive = true
+            }
             let old = activeName
+            try persist(active: id)
             active = id
-            try persist()
+            if (try? fm.contentsOfDirectory(atPath: to.path))?.isEmpty == true { try? fm.removeItem(at: to) }
             problem = nil
             fputs("save slots: \(old) put away, \(activeName) in use (\(live.path))\n", stderr)
         } catch {
+            if createdLive { try? fm.removeItem(at: live) }
             for (a, b) in done.reversed() { try? fm.moveItem(at: b, to: a) }
-            if let f = file, let d = try? Data(contentsOf: f), let s = try? JSONDecoder().decode(SlotsFile.self, from: d) { active = s.active }
             fail("Could not switch saves", error)
         }
     }
@@ -107,11 +119,14 @@ final class SaveSlotsModel: ObservableObject {
         switchTo(slots[((i + d) % slots.count + slots.count) % slots.count].id)
     }
 
-    private var nextId: Int { (slots.map(\.id).max() ?? 0) + 1 }
+    private func allocateID() -> Int {
+        lastID += 1
+        return lastID
+    }
 
     // A new, empty save, at once in use: the game starts as on its first run, and the save that was in use waits in its slot
     func addEmpty() {
-        let id = nextId
+        let id = allocateID()
         slots.append(SaveSlot(id: id, name: defaultName(id)))
         do { try persist() } catch { slots.removeAll { $0.id == id }; fail("Could not add a save", error); return }
         switchTo(id)
@@ -120,7 +135,7 @@ final class SaveSlotsModel: ObservableObject {
 
     // A copy of the save in use as a slot of its own (not in use): a point to go back to
     func duplicate(name: String) {
-        let id = nextId
+        let id = allocateID()
         guard let dir, let destination = parked(id) else { return }
         let staging = dir.appendingPathComponent(".copy-" + UUID().uuidString, isDirectory: true)
         var installed = false

@@ -49,6 +49,17 @@ enum SaveSlotsTests {
         precondition(reloaded.problem == nil && reloaded.active == 2)
         try check(live.appendingPathComponent("game/slot.dat"), "progress")
         try check(device.appendingPathComponent("settings.dat"), "settings")
+        for _ in 0..<5 {
+            reloaded.switchTo(1)
+            reloaded.switchTo(2)
+        }
+        precondition(reloaded.problem == nil && reloaded.slots.count == 2)
+        reloaded.switchTo(1)
+        reloaded.delete(2)
+        let afterDeletion = SaveSlotsModel(defaultName: { "Save \($0)" })
+        afterDeletion.addEmpty()
+        precondition(afterDeletion.active == 3 && afterDeletion.slots.map(\.id) == [1, 3])
+        try check(parked.appendingPathComponent("1/save/game/slot.dat"), "progress")
 
         let (blank, blankLive, _, _) = fixture("blank", in: root)
         blank.duplicate(name: "Blank copy")
@@ -72,6 +83,19 @@ enum SaveSlotsTests {
         try check(failedLive.appendingPathComponent("state.dat"), "source")
         let remaining = try fm.contentsOfDirectory(atPath: failedParked.path)
         precondition(remaining == ["slots.json"])
+
+        let (switchFailure, switchLive, _, switchParked) = fixture("switch-metadata-failure", in: root)
+        try put("original", at: switchLive.appendingPathComponent("state.dat"))
+        switchFailure.duplicate(name: "Copy")
+        let copyPath = switchParked.appendingPathComponent("2/save/state.dat")
+        try put("different copy", at: copyPath)
+        let metadata = switchParked.appendingPathComponent("slots.json")
+        try fm.removeItem(at: metadata)
+        try fm.createDirectory(at: metadata, withIntermediateDirectories: false)
+        switchFailure.switchTo(2)
+        precondition(switchFailure.problem != nil && switchFailure.active == 1)
+        try check(switchLive.appendingPathComponent("state.dat"), "original")
+        try check(copyPath, "different copy")
 
         print("Save slots: committed data, device data, blank save and rollback checks passed")
     }
