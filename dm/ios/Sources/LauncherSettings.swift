@@ -126,6 +126,10 @@ struct MemoryAuto {
             if kv["auto"] == "1", let p = kv["pool"].flatMap(Self.parse), let o = Self.outcome(state: chars[0], flag: chars[1]) {
                 var o = o
                 if o == .maybeSmall && failed.values.contains(.maybeSmall) { o = .notMemory }   // already moved up once for an abort: it is not memory
+                // Below the package's own size, a crash or abort is taken as too small: the package's size is the one the game was set up for, and a game whose heap
+                // came up short often crashes on the null pointer its allocator returns, which the marker cannot tell from any other crash. Kirby Star Allies was moved
+                // down from 0xCD500000 to 0xA0000000 by kills that were not about its memory, then crashed at nnMain asking for 1.3 GB; counted as not memory, the size stayed
+                if (o == .notMemory || o == .maybeSmall) && p < package { o = .tooSmall }
                 last = (p, o); lastPool = p
                 switch o {
                 case .worked: ok = p; failed = [:]

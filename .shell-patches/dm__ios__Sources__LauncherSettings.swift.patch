@@ -22,7 +22,7 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
          case "toggle": return v == onValue || v == offValue
          default: return true
          }
-@@ -28,23 +33,191 @@
+@@ -28,23 +33,195 @@
      enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off }
  }
  struct SettingsFile: Decodable { let settings: [Setting] }
@@ -119,6 +119,10 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +            if kv["auto"] == "1", let p = kv["pool"].flatMap(Self.parse), let o = Self.outcome(state: chars[0], flag: chars[1]) {
 +                var o = o
 +                if o == .maybeSmall && failed.values.contains(.maybeSmall) { o = .notMemory }   // already moved up once for an abort: it is not memory
++                // Below the package's own size, a crash or abort is taken as too small: the package's size is the one the game was set up for, and a game whose heap
++                // came up short often crashes on the null pointer its allocator returns, which the marker cannot tell from any other crash. Kirby Star Allies was moved
++                // down from 0xCD500000 to 0xA0000000 by kills that were not about its memory, then crashed at nnMain asking for 1.3 GB; counted as not memory, the size stayed
++                if (o == .notMemory || o == .maybeSmall) && p < package { o = .tooSmall }
 +                last = (p, o); lastPool = p
 +                switch o {
 +                case .worked: ok = p; failed = [:]
@@ -222,7 +226,7 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
      }
  
      var sections: [String] {
-@@ -54,20 +227,37 @@
+@@ -54,20 +231,37 @@
  
      // Reset every launcher choice to the game's defaults; an env file's values stay.
      func reset() {
