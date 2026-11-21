@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 --- a/dm/ios/Sources/front_ios.m
 +++ b/dm/ios/Sources/front_ios.m
-@@ -1,25 +1,286 @@
+@@ -1,25 +1,287 @@
  // iOS front end (the iOS implementation of front.h): a centered 16:9 Metal view (black bars on both sides) + a full-screen virtual gamepad layer (DmGamepad.m, controls drawn over the picture).
 +// A TV on the iPad's USB-C / HDMI adapter (an external display scene, DmTvSceneDelegate) takes the game's picture once the game starts: the picture fills the TV's own
 +// screen and its resolution instead of the mirrored iPad screen (whose 4:3 shape left bars all round), and the touch controls stay on the iPad. A Home button (a
@@ -25,6 +25,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
  #include "haptics_apple.h"
 +#include "dm_input.h"
 +#include "shell_slots.h"
++#include "relaunch_ticket.h"
  
  UIView *dm_gamepad_view(CGRect frame);
  void dm_gamepad_reset(void);
@@ -288,7 +289,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
  
  @interface DmGameView : UIView
  @end
-@@ -37,24 +298,106 @@
+@@ -37,24 +299,106 @@
  - (void)layoutSubviews {
      [super layoutSubviews];
      CAMetalLayer *l = (CAMetalLayer *)self.layer;
@@ -395,7 +396,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
      if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
          UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
          lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-@@ -68,36 +411,391 @@
+@@ -68,36 +412,391 @@
  - (void)startGame {
      if (self.game) return;
      front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
@@ -799,7 +800,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
  }
  - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
  - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
-@@ -129,43 +827,111 @@
+@@ -129,43 +828,111 @@
      const char *e = getenv("DM_SHOW_FPS");
      if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
      UILabel *l = [UILabel new];
@@ -934,7 +935,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
      });
  }
  void *front_metal_layer(void) { return (__bridge void *)g_layer; }
-@@ -218,13 +984,23 @@
+@@ -218,13 +985,23 @@
  // so every callback came up 1.3 ms short and was zero-filled, about 47 gaps per second (crackling; reproducible on the Mac by forcing 1024-frame callbacks: 1999 underruns in 2000 callbacks). Ask for 5 ms and the system picks the nearest it supports;
  // the category stays the default SoloAmbient (silent switch and interrupting other apps' audio behave as before). Set once at boot and again on return to the foreground (the system may reset it after an interruption)
  static int g_session_off;   // the last activation failed (another app or a call still held the session): tried again when the app becomes active
@@ -959,7 +960,7 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
      LOG("audio session: sample rate %.0f Hz, I/O buffer %.2f ms (asked for 5 ms)", s.sampleRate, s.IOBufferDuration * 1000);
  }
  
-@@ -256,12 +1032,509 @@
+@@ -256,12 +1033,511 @@
      if (!g_layer) return;
      switch (ev) {
          case 0: dm_gamepad_reset(); dm_focus_set(2); break;
@@ -1084,13 +1085,8 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +    resume_when_released(g_menu_gen, 0);
 +    [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the TV panel's Pause / Continue
 +}
-+// Change games leaves Documents/relaunch.txt behind; the next launch takes it (main.m) and the Shortcuts action "SwitchPad 要重開嗎？" (ReopenIntent.swift) answers yes, so an automation on "SwitchPad is closed"
-+// brings the app straight back to the picker with nobody touching the iPad; Close the game leaves none, and the next launch removes it (main.m)
++// Closing from the Home menu is deliberate. Only Change games grants the next process a one-shot relaunch request.
 +static void home_menu_quit(int relaunch) {
-+    if (relaunch) {
-+        NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-+        [@"change games\n" writeToFile:[doc stringByAppendingPathComponent:@"relaunch.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-+    }
 +    BOOL z = zh_ui();
 +    for (UIView *card in g_menu_cards) {
 +        UIView *keep = [card viewWithTag:1];
@@ -1104,11 +1100,18 @@ diff --git a/dm/ios/Sources/front_ios.m b/dm/ios/Sources/front_ios.m
 +            [card addSubview:l];
 +        } completion:nil];
 +    }
-+    LOG("front end: Home menu: closing the app to change games");
++    LOG("front end: Home menu: user confirmed %s", relaunch ? "Change games" : "Close the game");
 +    fflush(stderr);
-+    // iOS lets no app open itself again, and a process cannot load a second game (its program sits at fixed addresses), so the app ends here and the next
-+    // launch shows the picker; 2 s for the line above
-+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ fflush(stderr); exit(0); });
++    // The next game needs a fresh process. Leave the request just before exiting, after the closing animation.
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
++        if (relaunch) {
++            NSError *error = nil;
++            if (!dm_write_relaunch_ticket(dm_relaunch_ticket_url(), &error))
++                LOG("front end: cannot save Change games request: %s", error.localizedDescription.UTF8String ?: "unknown error");
++        }
++        fflush(stderr);
++        exit(0);
++    });
 +}
 +static void players_cmd(NSDictionary *u) { [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:u]; }
 +static void menu_refresh(int sel) {   // the same page drawn again (a value changed): no slide, the pill moves from where it was
