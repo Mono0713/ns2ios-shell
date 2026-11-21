@@ -2,6 +2,7 @@
 // On the real device all of these go through Horizon system services (IPC); the host gives values directly or makes them "unavailable".
 #include "hle.h"
 #include <fcntl.h>
+#include <mach/mach.h>
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <stdatomic.h>
@@ -269,11 +270,40 @@ HLE_FORCE("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7Displa
 HLE_FORCE("_ZN2nn4diag6detail7PutImplERKNS0_11LogMetaDataEPKcm", "game log → host log", void, h_diag_Put, const void *meta, const char *s, size_t n) {
     (void)meta; while (n && (s[n - 1] == '\n' || s[n - 1] == '\0')) n--; if (n) LOG("[game] %.*s", (int)n, s);
 }
-// Abort: report the call site (module + offset) and the guest backtrace, then exit
+// The text an abort leaves behind: an engine that formats its own fatal message (Unreal's LowLevelFatalError: "LowLevelFatalError [File:%s] [Line: %d]" and the
+// message, in UTF-16, then a break into nn::diag abort; Minecraft Dungeons II's intro, main+0x3c18) passes the format, the file name and the message format
+// through its stack frames, and the formatted text sits in a buffer they point at. Each 8-byte word of the guest stack above the abort (up to 32 KB, stopping
+// at the first unreadable page) that points at readable memory holding a string of 6 or more printable characters, UTF-16 or ASCII, is printed once.
+// Reads go through vm_read_overwrite, which fails instead of faulting
+static int abort_rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 0x10000 && vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n; }
+static void abort_strings(uint64_t sp) {
+    enum { MAXSEEN = 48, MAXC = 240 };
+    uint64_t seen[MAXSEEN]; int nseen = 0;
+    for (uint64_t at = sp & ~7ull; at < (sp & ~7ull) + 0x8000 && nseen < MAXSEEN; at += 8) {
+        uint64_t a; if (!abort_rd(at, &a, 8)) break;
+        if (a < 0x100000000ull || (a & 1)) continue;
+        int dup = 0; for (int i = 0; i < nseen; i++) dup |= seen[i] == a; if (dup) continue;
+        uint8_t b[2 * MAXC]; size_t got = 0;
+        for (size_t k = 0; k < sizeof b; k += 64) { if (!abort_rd(a + k, b + k, 64)) break; got = k + 64; }
+        if (got < 16) continue;
+        char t[MAXC + 1]; int n = 0;
+        // UTF-16: printable ASCII in the low byte, 0 in the high byte (Unreal's TCHAR on the Switch)
+        while (2 * n + 1 < (int)got && n < MAXC && b[2 * n + 1] == 0 && b[2 * n] >= 0x20 && b[2 * n] < 0x7f) { t[n] = (char)b[2 * n]; n++; }
+        const char *kind = "utf16";
+        if (n < 6) { n = 0; kind = "ascii"; while (n < (int)got && n < MAXC && b[n] >= 0x20 && b[n] < 0x7f) { t[n] = (char)b[n]; n++; } }
+        if (n < 6) continue;
+        t[n] = 0; seen[nseen++] = a;
+        module_t *m = module_of((void *)(uintptr_t)a);
+        if (m) LOG("[diag] stack +%#llx → %s+%#llx %s: %s", (unsigned long long)(at - sp), m->name, (unsigned long long)(a - (uint64_t)(uintptr_t)m->base), kind, t);
+        else LOG("[diag] stack +%#llx → %#llx %s: %s", (unsigned long long)(at - sp), (unsigned long long)a, kind, t);
+    }
+}
+// Abort: report the call site (module + offset), the guest backtrace and the strings the guest stack points at, then exit
 static void diag_abort(uint32_t res, void *lr) {
     module_t *m = module_of(lr);
     LOG("game called nn::diag abort: Result %#x, call site %s+%#llx", res, m ? m->name : "?", m ? (unsigned long long)((uint8_t *)lr - m->base) : (unsigned long long)(uintptr_t)lr);
     dm_backtrace((uint64_t)__builtin_frame_address(1));
+    abort_strings((uint64_t)__builtin_frame_address(1));
     die("game aborted");
 }
 HLE_FORCE("_ZN2nn4diag6detail9AbortImplEv", "game aborted", void, h_diag_Abort0, void) { diag_abort(0, __builtin_return_address(0)); }
