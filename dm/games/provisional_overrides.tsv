@@ -17,6 +17,10 @@
 # 256 MB in front + the 1 GB stack region + the 128 MB heap region (0x170000000 − 0x118000000 before).
 01008970149B0000	mem_alias	0x400000000
 01008970149B0000	mem_reserve	0x458000000
+# Its pool too: with the region fixed (art61) the game got to its intro movie at the provisional 1 GB pool, 0.82 GB of it used, and the
+# movie's track object read back as garbage (SIGSEGV addr=0x2b at subsdk1+0x2e9e2c, NuMediaExtractor::fetchTrackSamples, on the audio
+# read thread, iPad log 2026-11-21). The whole pool of a 4 GB Switch, as Clubhouse Games 51's.
+01008970149B0000	app_pool	0xCD500000
 
 # It Takes Two. Unreal Engine 4.26: its engine region is cut from 62 GB to 4064 MB and its FMallocBinned3 replaced by the host's
 # allocator (dm/games/010092A0172E4000/patches.py, hle_uemalloc.c), so it no longer needs the 64 GB alias region the guess gave
@@ -25,3 +29,8 @@
 010092A0172E4000	mem_alias	0x118000000
 010092A0172E4000	mem_stack	0x10000000
 010092A0172E4000	app_pool	0xCD500000
+
+# Overcooked (0100F28011892000, Unity 2019.4). The provisional 1 GB pool ran out soon after the first picture: Unity's
+# MemoryManager::Reallocate (main+0x51fc90) got 0 for 320 bytes from a dynamic_array's growth (main+0x2a9130) and copied into it
+# (SIGSEGV addr=0 in the SDK's memcpy, pool 0.75 of 1.00 GB used, iPad log 2026-11-21). The whole pool of a 4 GB Switch.
+0100F28011892000	app_pool	0xCD500000
