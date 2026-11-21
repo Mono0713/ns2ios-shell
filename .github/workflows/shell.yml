@@ -348,6 +348,13 @@ jobs:
           print('nometal_run: 4/4 probes answered')
           PY
 
+      - name: Check save-slot copying
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/fork"
+          xcrun swiftc dm/ios/Sources/SaveSlots.swift dm/ios/tests/test_save_slots.swift -o "$RUNNER_TEMP/test-save-slots"
+          "$RUNNER_TEMP/test-save-slots"
+
       - name: Build the shell
         env:
           DM_ROOT: ${{ runner.temp }}/dm-work

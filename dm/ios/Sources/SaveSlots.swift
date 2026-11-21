@@ -36,8 +36,8 @@ final class SaveSlotsModel: ObservableObject {
     private func parked(_ id: Int) -> URL? { dir?.appendingPathComponent(String(id), isDirectory: true) }
 
     // Each folder of a save as it is in use and as it waits in its slot: the save, the device save, and the host's .work / .new of each
-    private func pairs(_ id: Int) -> [(URL, URL)] {
-        guard let live, let p = parked(id) else { return [] }
+    private func pairs(in p: URL) -> [(URL, URL)] {
+        guard let live else { return [] }
         return [("", "save"), ("_device", "device")].flatMap { suffix, name in
             ["", ".work", ".new"].map { x in (URL(fileURLWithPath: live.path + suffix + x, isDirectory: true), p.appendingPathComponent(name + x, isDirectory: true)) }
         }
@@ -57,8 +57,10 @@ final class SaveSlotsModel: ObservableObject {
         }
         if !slots.contains(where: { $0.id == active }) { slots.insert(SaveSlot(id: active, name: defaultName(active)), at: 0) }
         // a switch cut short (the app killed between moves): the slot in use whose save is still parked gets it back
-        for (l, p) in pairs(active) where exists(p) && !exists(l) { try? fm.moveItem(at: p, to: l) }
-        if let p = parked(active), (try? fm.contentsOfDirectory(atPath: p.path))?.isEmpty == true { try? fm.removeItem(at: p) }
+        if let p = parked(active) {
+            for (l, q) in pairs(in: p) where exists(q) && !exists(l) { try? fm.moveItem(at: q, to: l) }
+            if (try? fm.contentsOfDirectory(atPath: p.path))?.isEmpty == true { try? fm.removeItem(at: p) }
+        }
         slots.sort { $0.id < $1.id }
     }
 
@@ -80,11 +82,11 @@ final class SaveSlotsModel: ObservableObject {
         var done: [(URL, URL)] = []
         do {
             try fm.createDirectory(at: from, withIntermediateDirectories: true)
-            for (l, p) in pairs(active) where exists(l) {
+            for (l, p) in pairs(in: from) where exists(l) {
                 if exists(p) { try fm.removeItem(at: p) }   // a leftover of an older switch: what is in use is the newer
                 try fm.moveItem(at: l, to: p); done.append((l, p))
             }
-            for (l, p) in pairs(id) where exists(p) { try fm.moveItem(at: p, to: l); done.append((p, l)) }
+            for (l, p) in pairs(in: to) where exists(p) { try fm.moveItem(at: p, to: l); done.append((p, l)) }
             if !exists(live) { try fm.createDirectory(at: live, withIntermediateDirectories: true) }   // a new slot starts empty, as a first start does
             try? fm.removeItem(at: to)
             let old = activeName
@@ -118,19 +120,29 @@ final class SaveSlotsModel: ObservableObject {
 
     // A copy of the save in use as a slot of its own (not in use): a point to go back to
     func duplicate(name: String) {
-        guard let p = parked(nextId) else { return }
         let id = nextId
+        guard let dir, let destination = parked(id) else { return }
+        let staging = dir.appendingPathComponent(".copy-" + UUID().uuidString, isDirectory: true)
+        var installed = false
+        defer { if exists(staging) { try? fm.removeItem(at: staging) } }
         do {
-            try fm.createDirectory(at: p, withIntermediateDirectories: true)
-            for (l, q) in pairs(active) where exists(l) && !l.lastPathComponent.hasSuffix(".work") && !l.lastPathComponent.hasSuffix(".new") {
-                try fm.copyItem(at: l, to: q)   // APFS clones the files
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            // Copy the live save to a new slot. The active slot's parked path is normally absent.
+            for (livePath, copyPath) in pairs(in: staging)
+                where exists(livePath) && ["save", "device"].contains(copyPath.lastPathComponent) {
+                try fm.copyItem(at: livePath, to: copyPath)
             }
+            try fm.moveItem(at: staging, to: destination)
+            installed = true
             slots.append(SaveSlot(id: id, name: name))
             try persist()
             problem = nil
             fputs("save slots: \(activeName) copied as \(name)\n", stderr)
         } catch {
-            try? fm.removeItem(at: p); slots.removeAll { $0.id == id }
+            if installed {
+                try? fm.removeItem(at: destination)
+                slots.removeAll { $0.id == id }
+            }
             fail("Could not copy the save", error)
         }
     }
