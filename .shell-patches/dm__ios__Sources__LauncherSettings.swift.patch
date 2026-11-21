@@ -22,7 +22,7 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
          case "toggle": return v == onValue || v == offValue
          default: return true
          }
-@@ -28,23 +33,195 @@
+@@ -28,23 +33,205 @@
      enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off }
  }
  struct SettingsFile: Decodable { let settings: [Setting] }
@@ -76,6 +76,9 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +    enum Outcome: String { case worked, tooBig, tooSmall, maybeSmall, notMemory }
 +    static let key = "auto.DM_APP_POOL"
 +    static let ladder: [UInt64] = [0x40000000, 0x60000000, 0x80000000, 0xA0000000, 0xCCD00000]   // 1, 1.5, 2, 2.5, 3.2 GB (the slider's whole MiB)
++    static var top: UInt64 { ladder.last! }
++    // A package made from a guessed profile (the packer writes DM_MEM_PROVISIONAL=1 into the bundle's dm/env.txt)
++    static var provisional: Bool { ProcessInfo.processInfo.environment["DM_MEM_PROVISIONAL"] == "1" }
 +    let package: UInt64
 +    private(set) var pick: UInt64
 +    private(set) var confirmed = false   // pick ran 40 s before
@@ -109,6 +112,7 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +            if let p = Self.parse(e.key), let o = Outcome(rawValue: e.value) { r[p] = o } }
 +        var ok = (d["ok"] as? String).flatMap(Self.parse)
 +        var lastPool = (d["last"] as? String).flatMap(Self.parse)
++        var jumpTop = false
 +        let cands = Array(Set(Self.ladder + [package])).filter { $0 >= 0x20000000 && $0 <= 0xCCD00000 }
 +        // the previous run's marker: read once, then removed
 +        if let data = try? Data(contentsOf: store.runURL), data.count >= 2, let txt = String(data: data, encoding: .utf8) {
@@ -123,6 +127,11 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +                // came up short often crashes on the null pointer its allocator returns, which the marker cannot tell from any other crash. Kirby Star Allies was moved
 +                // down from 0xCD500000 to 0xA0000000 by kills that were not about its memory, then crashed at nnMain asking for 1.3 GB; counted as not memory, the size stayed
 +                if (o == .notMemory || o == .maybeSmall) && p < package { o = .tooSmall }
++                // A guessed (provisional) package starts at 1 GB, below what most games were made for, and a game whose own allocator runs dry inside the pool crashes on the
++                // null pointer it got back without the host ever refusing it memory, so the marker reads "not memory" and the size never moved: Overcooked and Rabbids Party
++                // of Legends crashed at 1 GB run after run (2026-11-21), and Overcooked ran at 3.2 GB. So the first crash or abort of a provisional package below the top
++                // size goes straight to the top size; a crash there too is the game's own, and the size stays where it is
++                if Self.provisional && (o == .notMemory || o == .maybeSmall) && p < Self.top && failed[Self.top] == nil { o = .tooSmall; jumpTop = true }
 +                last = (p, o); lastPool = p
 +                switch o {
 +                case .worked: ok = p; failed = [:]
@@ -142,6 +151,7 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +            failed = [:]; ok = nil; lastPool = nil; last = nil
 +        }
 +        if let ok { pick = ok; confirmed = true }
++        else if jumpTop, lastPool != nil { pick = Self.top; fputs("launcher: automatic memory: a provisional package crashed below \(Self.hex(Self.top)); trying \(Self.hex(Self.top))\n", stderr) }
 +        else if let p = lastPool, let o = failed[p] {
 +            if let n = Self.next(after: p, smaller: o == .tooBig, candidates: cands, failed: Set(failed.keys)) { pick = n }
 +            else { pick = package; exhausted = true; failed = [:]; fputs("launcher: automatic memory: every size failed; back to the package's \(Self.hex(package))\n", stderr) }
@@ -226,7 +236,7 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
      }
  
      var sections: [String] {
-@@ -54,20 +231,37 @@
+@@ -54,20 +241,37 @@
  
      // Reset every launcher choice to the game's defaults; an env file's values stay.
      func reset() {

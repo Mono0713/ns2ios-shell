@@ -763,6 +763,7 @@ def derive_profile(gdir, tid, ver, game, mods, dest, disp):
 
 
 PROVISIONAL_OVERRIDES = DM / 'games' / 'provisional_overrides.tsv'
+PROVISIONAL_SEEDS = DM / 'games' / 'provisional_seeds'   # <title ID>/pso_manifest.tsv: warm-up lists for games packed from a provisional profile
 
 
 def apply_provisional_overrides(gdir, tid):
@@ -1719,6 +1720,14 @@ def step_assemble(shell, stage, game, patched, mods, gdir, rows, name, version, 
     # tables the game profile carries (shader map, c1 list, warm-up list, uniform extents)
     for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'cb_extent.tsv'):
         if (gdir / n).is_file(): shutil.copyfile(gdir / n, A / 'dm' / n)
+    # A provisional profile's folder is made again on every pack (make_provisional), so a warm-up list recorded on an iPad (its
+    # pso_user.tsv: the shaders and pipelines it had to build on the spot) lives apart from it, as the settled rows do: a list
+    # there stands in for a pso_manifest.tsv without rows. It Takes Two stuttered up to 1.1 s on every new scene with none.
+    seed = PROVISIONAL_SEEDS / tid / 'pso_manifest.tsv'
+    have = (gdir / 'pso_manifest.tsv').is_file() and any(l.strip() and not l.startswith('#') for l in (gdir / 'pso_manifest.tsv').read_text(encoding='utf-8').splitlines())
+    if seed.is_file() and not have:
+        shutil.copyfile(seed, A / 'dm' / 'pso_manifest.tsv')
+        say('warm-up list: %d rows from %s' % (sum(1 for l in seed.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')), seed.relative_to(DM.parent)))
     # The shader pairs the pipeline prebuild and the hybrid pipelines read (nvn_mtl.m pso_prebuild, from the folder
     # DM_NVN_SHMAP names). Upstream's build_ipa.sh copies the profile's two; the split's copy stands in for pso_pairs.tsv
     # when the profile has none, which is the substitution the Mac route makes with --pso-pairs. Without them a profile
