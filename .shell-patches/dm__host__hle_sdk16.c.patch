@@ -9,7 +9,7 @@ diff --git a/dm/host/hle_sdk16.c b/dm/host/hle_sdk16.c
  #include <pthread.h>
  #include <pthread/qos.h>
  #include <stdatomic.h>
-@@ -269,16 +270,55 @@
+@@ -269,16 +270,75 @@
  HLE_FORCE("_ZN2nn4diag6detail7PutImplERKNS0_11LogMetaDataEPKcm", "game log → host log", void, h_diag_Put, const void *meta, const char *s, size_t n) {
      (void)meta; while (n && (s[n - 1] == '\n' || s[n - 1] == '\0')) n--; if (n) LOG("[game] %.*s", (int)n, s);
  }
@@ -42,6 +42,26 @@ diff --git a/dm/host/hle_sdk16.c b/dm/host/hle_sdk16.c
 +        else LOG("[diag] stack +%#llx → %#llx %s: %s", (unsigned long long)(at - sp), (unsigned long long)a, kind, t);
 +    }
 +}
++// Observation gate OBS_TRACE (a game's patches.py puts it where a value goes wrong): the registers and the first four words each of x0-x28 points at, for the first
++// 16 hits of the process. Rabbids Party of Legends' intro movie read a track source that held 3, 3, 0, 2 instead of an object (subsdk1, NuMediaExtractor): the gate
++// on the store of that pointer tells who handed it over. Each hit prints where it came from as x30 (the return address of the function the gate sits in)
++static void obs_trace(const uint64_t *r) {
++    static _Atomic int hits; int n = atomic_fetch_add(&hits, 1); if (n >= 16) return;
++    module_t *m = module_of((void *)(uintptr_t)r[30]);
++    LOG("[trace] hit %d, lr %s+%#llx: x0 %#llx x1 %#llx x2 %#llx x3 %#llx x4 %#llx x5 %#llx x6 %#llx x7 %#llx x8 %#llx x19 %#llx x20 %#llx x21 %#llx x22 %#llx x23 %#llx x24 %#llx x25 %#llx x26 %#llx x27 %#llx x28 %#llx fp %#llx",
++        n, m ? m->name : "?", (unsigned long long)(m ? r[30] - (uint64_t)(uintptr_t)m->base : r[30]),
++        (unsigned long long)r[0], (unsigned long long)r[1], (unsigned long long)r[2], (unsigned long long)r[3], (unsigned long long)r[4], (unsigned long long)r[5],
++        (unsigned long long)r[6], (unsigned long long)r[7], (unsigned long long)r[8], (unsigned long long)r[19], (unsigned long long)r[20], (unsigned long long)r[21],
++        (unsigned long long)r[22], (unsigned long long)r[23], (unsigned long long)r[24], (unsigned long long)r[25], (unsigned long long)r[26], (unsigned long long)r[27],
++        (unsigned long long)r[28], (unsigned long long)r[29]);
++    for (int i = 0; i <= 28; i++) {
++        uint64_t w[4]; if (r[i] < 0x100000000ull || (r[i] & 7) || !abort_rd(r[i], w, sizeof w)) continue;
++        module_t *wm = module_of((void *)(uintptr_t)w[0]);
++        if (wm) LOG("[trace]   x%d → %s+%#llx %#llx %#llx %#llx", i, wm->name, (unsigned long long)(w[0] - (uint64_t)(uintptr_t)wm->base), (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3]);
++        else LOG("[trace]   x%d → %#llx %#llx %#llx %#llx", i, (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3]);
++    }
++}
++__attribute__((constructor)) static void obs_trace_attach(void) { gate_obs_set(OBS_TRACE, obs_trace); }
 +// Abort: report the call site (module + offset), the guest backtrace and the strings the guest stack points at, then exit
  static void diag_abort(uint32_t res, void *lr) {
      module_t *m = module_of(lr);
