@@ -22,10 +22,11 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
          case "toggle": return v == onValue || v == offValue
          default: return true
          }
-@@ -29,22 +34,190 @@
+@@ -28,23 +33,191 @@
+     enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, options, min, max, step, on, off }
  }
  struct SettingsFile: Decodable { let settings: [Setting] }
- 
++
 +// Where the launcher keeps a game's choices: Library/Application Support/launcher/<name>.json (name: the title ID in a package of several games,
 +// "app" otherwise), written whole as each choice changes. A file of the app's own rather than UserDefaults: those writes go to a system process
 +// that the game, once it runs, may keep from getting them, and choices were found missing after the app was closed. The UserDefaults ones of
@@ -181,18 +182,20 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +    }
 +    return has("en-US") ?? has("en-GB")
 +}
-+
+ 
  final class LauncherModel: ObservableObject {
      let settings: [Setting]
      let fromFile: Set<String>   // set by an env file: shown, not changed
 -    @Published var values: [String: String] = [:]
-+    @Published var values: [String: String] = [:] { didSet { save() } }   // kept as soon as changed: closing the app or going back to the game list keeps them
- 
+-
 -    private let defaults: UserDefaults
+-
+-    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
++    @Published var values: [String: String] = [:] { didSet { save() } }   // kept as soon as changed: closing the app or going back to the game list keeps them
++
 +    private let defaults: SettingsStore
 +    let memory: MemoryAuto?   // the memory pool at Auto ("-"): nil when an env file sets it or the package gives no size
- 
--    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
++
 +    init(_ settings: [Setting], defaults: SettingsStore) {
          self.defaults = defaults
 +        var settings = settings
@@ -211,9 +214,10 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
 +            if fromFile.contains(s.env), let v = ProcessInfo.processInfo.environment[s.env] { loaded[s.env] = v; continue }
              let saved = defaults.string(forKey: "launcher." + s.env)
 -            values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
+-        }
 +            loaded[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
 +            if let saved, !s.isDefault(loaded[s.env]!) { fputs("launcher: \(s.env)=\(saved) kept from before\n", stderr) }
-         }
++        }
 +        values = loaded
      }
  
@@ -226,8 +230,9 @@ diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSett
          for s in settings {
              defaults.removeObject(forKey: "launcher." + s.env)
 -            if !fromFile.contains(s.env) { values[s.env] = s.def }
+-        }
 +            if !fromFile.contains(s.env) { v[s.env] = s.def }
-         }
++        }
 +        values = v
          fputs("launcher: settings reset to the game's defaults\n", stderr)
      }
