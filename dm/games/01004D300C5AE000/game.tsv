@@ -15,6 +15,9 @@ ipa	KirbyAndTheForgottenLand.ipa
 app_category	public.app-category.games
 # inline uniform updates end the render pass (no deferral), as for Super Mario Odyssey: on an iPad the textures flickered and shook (2026-11-20 report); DM_NVN_UB_DEFER=0 is what fixed the same look in Odyssey
 ub_defer	off
+# 60 fps (30 on the Switch): the host sets the game's frame interval to 0, no limit, and the game steps by the time that passed (hle_fpslock.c, FPSLocker's address for 1.1.0);
+# the launcher's 30 / 60 cap (DM_FPS_TARGET=30) puts back the game's own 2
+fps_target	60
 
 # ---- Versions ----
 build	v65536	1.1.0	main=a6ce40dc3aedb1becacd2f1ff4515307	subsdk0=535249a546887cac875a099e9c8ef367	sdk=b39add63421be525d352e576dab438d3
