@@ -11,7 +11,7 @@
 // period, so frames at exactly 16.667 ms came 0.11 ms late each on the Mac (59.6 fps, every 150th frame shown two vsyncs). Slightly shorter, the host's present pacing sets the pace
 // (the acquire waits): Luigi's Mansion 3's display interval p99 18.69 → 16.67 ms, 60.0 fps. Not at 30: with present_interval display the presents follow every vsync and hold no
 // frame for two, so a shorter time showed some frames for one (30.4 fps); 30 writes the game's own 33.333 ms
-enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, UNLOCK_I32 };   // UNLOCK_I32: vsyncs per frame, where 0 means no limit with the game stepping by the time that passed (written 0 at 60, 2 at 30)
+enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, UNLOCK_I32, VSYNCS_M1_I32 };   // UNLOCK_I32: vsyncs per frame, where 0 means no limit with the game stepping by the time that passed (written 0 at 60, 2 at 30); VSYNCS_M1_I32: vsyncs per frame less one (0 at 60, 1 at 30)
 #define MS_MARGIN 0.5f
 static float ms_want(int fps) { return 1000.0f / (float)fps - (fps == 60 ? MS_MARGIN : 0); }
 static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; } k_locks[] = {
@@ -62,6 +62,10 @@ static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field
     // passed (dynamic game speed); the game asks for present interval 1, so the display's vsync caps it at 60. From masagrator's FPSLocker config for this build
     // (FPSLocker-Warehouse, patches/01004D300C5AE000/A6CE40DC3AEDB1BE.yaml; offsets found by Hazerou). The same config's dynamic-resolution timings are left alone (the iPad's GPU has room)
     { "a6ce40dc3aedb1becacd2f1ff4515307", "frame interval", 0xa76728, 0x50, UNLOCK_I32, 1 },
+    // Kirby Star Allies 4.0.0a: the frame interval as vsyncs less one, an int32 at [main+0x54c5b0]+0, 1 (30 fps) as the game sets it; 0 = 60 fps. The game's own update of it
+    // (main+0x5a4c) is cut in its patches.py so the value stays. From masagrator's FPSLocker config for this build (FPSLocker-Warehouse, patches/01007E3006DDA000/D55608916FA56C18.yaml,
+    // interval offsets by Kirby567Fan); its triple-buffer patches are for the Switch's own queue, which the host's presents replace
+    { "d55608916fa56c184f2a8fe80da0427c", "frame interval", 0x54c5b0, 0, VSYNCS_M1_I32, 1 },
 };
 #define NLOCKS ((int)(sizeof k_locks / sizeof k_locks[0]))
 
@@ -94,6 +98,10 @@ void dm_fps_lock_tick(void) {
                 want = target == 60 ? 0 : 60 / (uint32_t)target;
                 if (cur == want || cur > 4) continue;
                 snprintf(was, sizeof was, "%u", cur);
+            } else if (k_locks[k].kind == VSYNCS_M1_I32) {
+                want = 60 / (uint32_t)target - 1;
+                if (cur == want || cur > 3) continue;
+                snprintf(was, sizeof was, "%u", cur + 1);
             } else {
                 int fps = k_locks[k].kind == FPS_I32;
                 want = fps ? (uint32_t)target : 60 / (uint32_t)target;
@@ -105,6 +113,7 @@ void dm_fps_lock_tick(void) {
             if (nlog[k] < 8) { nlog[k]++; char now[48];
                 if (k_locks[k].kind == MS_F32) snprintf(now, sizeof now, "%.3f ms (%d fps)", ms_want(target), target);
                 else if (k_locks[k].kind == UNLOCK_I32 && !want) snprintf(now, sizeof now, "0 (no limit, %d fps by the display)", target);
+                else if (k_locks[k].kind == VSYNCS_M1_I32) snprintf(now, sizeof now, "%u vsyncs (%d fps)", want + 1, target);
                 else snprintf(now, sizeof now, "%u%s", k_locks[k].kind == FPS_F32 ? (unsigned)target : want, k_locks[k].kind == FPS_F32 || k_locks[k].kind == FPS_I32 ? " fps" : " vsyncs");
                 LOG("main: %s%s %s → %s (%s)", k_locks[k].what, k_locks[k].copies > 1 ? (c ? " (render thread)" : " (game thread)") : "", was, now, src); }
         }
