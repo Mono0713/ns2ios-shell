@@ -83,6 +83,9 @@ struct MemoryAuto {
     enum Outcome: String { case worked, tooBig, tooSmall, maybeSmall, notMemory }
     static let key = "auto.DM_APP_POOL"
     static let ladder: [UInt64] = [0x40000000, 0x60000000, 0x80000000, 0xA0000000, 0xCCD00000]   // 1, 1.5, 2, 2.5, 3.2 GB (the slider's whole MiB)
+    static var top: UInt64 { ladder.last! }
+    // A package made from a guessed profile (the packer writes DM_MEM_PROVISIONAL=1 into the bundle's dm/env.txt)
+    static var provisional: Bool { ProcessInfo.processInfo.environment["DM_MEM_PROVISIONAL"] == "1" }
     let package: UInt64
     private(set) var pick: UInt64
     private(set) var confirmed = false   // pick ran 40 s before
@@ -116,6 +119,7 @@ struct MemoryAuto {
             if let p = Self.parse(e.key), let o = Outcome(rawValue: e.value) { r[p] = o } }
         var ok = (d["ok"] as? String).flatMap(Self.parse)
         var lastPool = (d["last"] as? String).flatMap(Self.parse)
+        var jumpTop = false
         let cands = Array(Set(Self.ladder + [package])).filter { $0 >= 0x20000000 && $0 <= 0xCCD00000 }
         // the previous run's marker: read once, then removed
         if let data = try? Data(contentsOf: store.runURL), data.count >= 2, let txt = String(data: data, encoding: .utf8) {
@@ -126,6 +130,15 @@ struct MemoryAuto {
             if kv["auto"] == "1", let p = kv["pool"].flatMap(Self.parse), let o = Self.outcome(state: chars[0], flag: chars[1]) {
                 var o = o
                 if o == .maybeSmall && failed.values.contains(.maybeSmall) { o = .notMemory }   // already moved up once for an abort: it is not memory
+                // Below the package's own size, a crash or abort is taken as too small: the package's size is the one the game was set up for, and a game whose heap
+                // came up short often crashes on the null pointer its allocator returns, which the marker cannot tell from any other crash. Kirby Star Allies was moved
+                // down from 0xCD500000 to 0xA0000000 by kills that were not about its memory, then crashed at nnMain asking for 1.3 GB; counted as not memory, the size stayed
+                if (o == .notMemory || o == .maybeSmall) && p < package { o = .tooSmall }
+                // A guessed (provisional) package starts at 1 GB, below what most games were made for, and a game whose own allocator runs dry inside the pool crashes on the
+                // null pointer it got back without the host ever refusing it memory, so the marker reads "not memory" and the size never moved: Overcooked and Rabbids Party
+                // of Legends crashed at 1 GB run after run (2026-11-21), and Overcooked ran at 3.2 GB. So the first crash or abort of a provisional package below the top
+                // size goes straight to the top size; a crash there too is the game's own, and the size stays where it is
+                if Self.provisional && (o == .notMemory || o == .maybeSmall) && p < Self.top && failed[Self.top] == nil { o = .tooSmall; jumpTop = true }
                 last = (p, o); lastPool = p
                 switch o {
                 case .worked: ok = p; failed = [:]
@@ -135,12 +148,22 @@ struct MemoryAuto {
                 fputs("launcher: automatic memory: the last run at \(Self.hex(p)) → \(o.rawValue) (marker \(chars[0])\(chars[1]))\n", stderr)
             }
         }
+        // A package whose size changed (a repack with a settled pool: Clubhouse Games 51 went from the provisional 1 GB to 0xCD500000) starts over from its own size:
+        // what earlier runs told was about the old package. Its last run at 1 GB crashed for want of heap, which the marker counted as not memory, so the launcher kept
+        // 1 GB and the new package crashed the same way. Choices kept before the package size was recorded start over only in that case: no size confirmed and a last size below the package's whose run did not fail for memory.
+        // After the marker is read, so the last run (at the old package's size) is dropped with the rest
+        let pkgWas = (d["package"] as? String).flatMap(Self.parse)
+        if pkgWas.map({ $0 != package }) ?? (ok == nil && lastPool.map { $0 < package && failed[$0] == nil } ?? false) {
+            fputs("launcher: automatic memory: the package's size is now \(Self.hex(package))\(pkgWas.map { " (was \(Self.hex($0)))" } ?? ""); earlier runs, the last one too, no longer count\n", stderr)
+            failed = [:]; ok = nil; lastPool = nil; last = nil
+        }
         if let ok { pick = ok; confirmed = true }
+        else if jumpTop, lastPool != nil { pick = Self.top; fputs("launcher: automatic memory: a provisional package crashed below \(Self.hex(Self.top)); trying \(Self.hex(Self.top))\n", stderr) }
         else if let p = lastPool, let o = failed[p] {
             if let n = Self.next(after: p, smaller: o == .tooBig, candidates: cands, failed: Set(failed.keys)) { pick = n }
             else { pick = package; exhausted = true; failed = [:]; fputs("launcher: automatic memory: every size failed; back to the package's \(Self.hex(package))\n", stderr) }
         } else { pick = lastPool ?? package }
-        d["ok"] = ok.map(Self.hex); d["last"] = Self.hex(pick)
+        d["ok"] = ok.map(Self.hex); d["last"] = Self.hex(pick); d["package"] = Self.hex(package)
         d["failed"] = Dictionary(uniqueKeysWithValues: failed.map { (Self.hex($0.key), $0.value.rawValue) })
         store.set(d, forKey: Self.key)
     }

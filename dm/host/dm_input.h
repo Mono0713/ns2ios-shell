@@ -8,6 +8,7 @@ enum {
     DM_BTN_LS = 1u << 4, DM_BTN_RS = 1u << 5, DM_BTN_L = 1u << 6, DM_BTN_R = 1u << 7,
     DM_BTN_ZL = 1u << 8, DM_BTN_ZR = 1u << 9, DM_BTN_PLUS = 1u << 10, DM_BTN_MINUS = 1u << 11,
     DM_BTN_LEFT = 1u << 12, DM_BTN_UP = 1u << 13, DM_BTN_RIGHT = 1u << 14, DM_BTN_DOWN = 1u << 15,
+    DM_BTN_RIGHT_SL = 1u << 26, DM_BTN_RIGHT_SR = 1u << 27,
 };
 #define DM_BTN_SHAKE (1ull << 63)   // not an NpadButton: the controller is shaken while set (its six-axis sensor, hle_hid.c); never reaches the game's buttons
 #define DM_STICK_MAX 32767
@@ -21,7 +22,9 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);   // player 0..DM_PLAYERS-1 (player 1..8)
 void dm_pad_players(uint32_t mask);   // bit p: player p + 1 has a controller; player 1 always counts as connected (the keyboard, the touch gamepad, DM_KEYS)
-uint32_t dm_player_npad(int player);  // the npad id the game reads player p + 1 on: Handheld (0x20) or No1 (0) for player 1, No n (id n - 1) for player n
+void dm_pad_players_with_joyright(uint32_t mask, uint32_t joyright);   // joyright is a subset of the occupied slots
+void dm_pad_clear_player(int player);   // release inputs, including unread press edges and motion, when the holder changes
+uint32_t dm_player_npad(int player);  // player 1 uses Handheld (0x20) or No1 (0); a single Joy-Con always uses a numbered npad
 // Motion (the six-axis sensor) of player p + 1's controller, from a front end with a real sensor (the iOS shell: the iPad itself, controllers with a gyroscope). In the
 // controller's frame (x right, y away from the player, z up; lying flat, gravity reads (0, 0, -1)): acceleration in G with gravity, angular velocity in revolutions / s,
 // angle in revolutions, dir = the controller's x, y and z axes in the world, one after another (the identity lying flat). A player whose motion is not set, or not set again

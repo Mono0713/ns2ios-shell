@@ -9,7 +9,8 @@
 //                                               | launcher (on 0/1: the settings screen is shown)
 //   DMLauncherInput (posted here, main thread)   while the launcher is shown, each player's controller or phone: userInfo p (player from 1), key: a | b | plus | up |
 //                                               down | left | right (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can
-//                                               repeat them). Player 1 drives the whole screen, the others only their own row
+//                                               repeat them). Player 1 drives the whole screen, the others only their own row (all of them have player 1's say while nobody holds it in
+//                                               console mode: acting())
 //   DMHomePressed (posted here, main thread)    a player pressed Home: a controller's Home (Xbox) button, − and + together, or a phone page's Home button
 //                                               (shell_slot_home): userInfo p (player from 1). front_ios.m opens or closes its menu over the game
 //   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
@@ -24,6 +25,7 @@
 #import <CoreHaptics/CoreHaptics.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <string.h>
 #include <time.h>
 #include "dm.h"
@@ -51,9 +53,17 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 static atomic_int g_launcher;
 static _Atomic uint64_t g_last_nav[DM_PLAYERS];   // each player's buttons, the left stick folded into the D-pad
 static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
+// While no controller or phone holds player 1 in console mode (the picture on the TV, so the iPad's touch controls are not player 1 either), every player
+// has player 1's say: the launcher, the picker, the Players card and the Home menu take anyone's input as player 1's, so a game whose player 1 left is never
+// stuck with nobody able to run the menus or move someone to P1. The numbers stay as they are; handheld mode keeps the iPad as player 1
+int front_ios_console_mode(void);
+static int acting(int p) { return p > 0 && !shell_slot_held(0) && front_ios_console_mode() ? 0 : p; }   // main thread (the TV's window is UIKit's)
 static void home_press(int p) {   // any thread
-    NSDictionary *u = @{@"p": @(p + 1)};
-    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:u]; });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        int a = acting(p);
+        if (a != p) LOG("player %d's Home counts as player 1's: nobody holds player 1", p + 1);
+        [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1)}];
+    });
 }
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
@@ -79,13 +89,15 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         int on = (pressed >> keys[i].bit & 1) != 0;
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
-        NSDictionary *u = @{@"key": @(keys[i].key), @"on": @(on), @"p": @(p + 1)};
-        dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:u]; });
+        NSString *key = @(keys[i].key);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:@{@"key": key, @"on": @(on), @"p": @(acting(p) + 1)}];
+        });
     }
 }
 
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
-static void read_pad(GCController *c) {
+static void read_pad(GCController *c, bool layout_changed) {
     GCExtendedGamepad *g = c.extendedGamepad;
     int p = shell_slot_of((__bridge const void *)c); if (p < 0 || !g) return;
     dm_haptics_apple_controller(p, c);
@@ -100,6 +112,12 @@ static void read_pad(GCController *c) {
     #undef K
     int32_t lx = axis(g.leftThumbstick.xAxis.value), ly = axis(g.leftThumbstick.yAxis.value);
     dm_pad_set_player(p, m, lx, ly, axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+    if (layout_changed) {
+        // A held face button just acquired another label. This sample is a layout change, not a press.
+        const uint64_t face = (1ull << B_A) | (1ull << B_B) | (1ull << B_X) | (1ull << B_Y);
+        uint64_t old = atomic_load(&g_last_nav[p]);
+        atomic_store(&g_last_nav[p], (old & ~face) | (m & face));
+    }
     shell_slot_input(p, m, lx, ly);
 }
 
@@ -151,7 +169,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         if (p < 0) { LOG("controller connected: all %d players are taken, not used", DM_PLAYERS); continue; }
         [g_pads addObject:c];
         shell_slot_set_layout(p, wanted_layout(SHELL_SLOT_CONTROLLER, name, name));
-        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g.controller); };
+        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g.controller, false); };
         GCControllerButtonInput *home = c.extendedGamepad.buttonHome;   // the Xbox button, PlayStation's PS, the Pro Controller's Home: the app's menu, not the system's
         if (home) {
             home.preferredSystemGestureState = GCSystemGestureStateDisabled;
@@ -164,7 +182,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         }
         motion_on(c);
         LOG("controller '%s' connected: player %d", name, p + 1);
-        read_pad(c);
+        read_pad(c, false);
     }
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: the touch gamepad hides while a controller or phone plays
 }
@@ -175,7 +193,7 @@ static void on_moved(const void *owner, int from, int to) {
     GCController *c = pad_of(owner); if (!c) return;
     dm_haptics_apple_controller(from, nil);   // its new player's rumble from now on (read_pad registers it there)
     LOG("controller '%s' moved in the launcher: player %d -> %d", c.vendorName.UTF8String ?: "?", from + 1, to + 1);
-    read_pad(c);
+    read_pad(c, false);
 }
 static void on_kick(const void *owner) {
     GCController *c = pad_of(owner); if (!c) return;
@@ -185,7 +203,7 @@ static void on_kick(const void *owner) {
     stop_using(c, p);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];
 }
-static void on_layout(const void *owner, int xbox) { (void)xbox; GCController *c = pad_of(owner); if (c) read_pad(c); }
+static void on_layout(const void *owner, int xbox) { (void)xbox; GCController *c = pad_of(owner); if (c) read_pad(c, true); }
 static void on_identify(const void *owner) {   // the launcher's "which one is this?": a short rumble of its own (an engine apart from the game's, stopped after it)
     GCController *c = pad_of(owner); if (!c.haptics) return;
     CHHapticEngine *e = [c.haptics createEngineWithLocality:GCHapticsLocalityDefault]; NSError *err = nil;

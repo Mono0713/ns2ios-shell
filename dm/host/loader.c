@@ -531,6 +531,7 @@ int dm_shell_modules(const char **out, int max) {
                 if (l < 7 || strncmp(s->sectname, "__dm", 4) || l + sizeof(struct segment_command_64) > lc->cmdsize) continue;
                 if (s->sectname[l - 2] != 'x' || s->sectname[l - 1] != '0') continue;
                 size_t nl = l - 6; if (nl > 16) continue;
+                if (memchr(s->sectname + 4, '_', nl)) continue;   // __dm_nro_x0: the NROs' packed pieces (guest_nro.py, nro_pieces), not a module; no module name holds an underscore
                 int dup = 0; for (int j = 0; j < n; j++) if (!strncmp(ptrs[j], s->sectname + 4, nl) && !ptrs[j][nl]) dup = 1;
                 if (dup) continue;
                 memcpy(store[n], s->sectname + 4, nl); store[n][nl] = 0; ptrs[n] = store[n]; n++;

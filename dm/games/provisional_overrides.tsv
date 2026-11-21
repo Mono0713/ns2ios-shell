@@ -1,0 +1,36 @@
+# Rows the repository settles for games that still pack from a provisional profile (switchpad/make_provisional.py: a guess, no
+# profile folder of their own). nxn_pack.py writes them into the provisional game.tsv before anything reads it, on every pack
+# (apply_provisional_overrides). A game with a real profile in dm/games is never touched.
+# Format: title ID <TAB> game.tsv key <TAB> value. Say why above each game's rows (the log line, the code that needs it).
+
+# Clubhouse Games: 51 Worldwide Classics. No system resource, so nninitStartup (main+0x7c8b88) sets a heap of the pool − used
+# memory and opens nn::mem::StandardAllocator on it (up to 0xC7500000 − used). With the provisional 1 GB pool the allocator ran
+# dry while the game set up its archives' decoders: malloc(0xd0) (main+0xb937c0) returned 0 and main+0xb93ae0 read 0x8
+# (SIGSEGV right after the save mounted, iPad log 2026-11-18). The whole pool of a 4 GB Switch, as upstream profiles report.
+010047700D540000	app_pool	0xCD500000
+
+# Rabbids Party of Legends. The game's own page allocator (first malloc: main+0x734ac → main+0x2583ac) reserves a 12 GB address
+# region with nn::os::AllocateAddressRegion(0x300000000) and does not check the result: in the provisional alias region (4.375 GB
+# + 2 GB grown, less the SDK's ~1 GB node area) it got 0, committed pages at 0 + 0x200000000 and wrote there (SIGBUS
+# addr=0x20000ffff at main+0x258ad4 in main's init_array, iPad log 2026-11-18). A 16 GB alias region holds the node area, that
+# region and the small one before it; address space only, nothing is mapped until the game maps it. mem_reserve = alias + the
+# 256 MB in front + the 1 GB stack region + the 128 MB heap region (0x170000000 − 0x118000000 before).
+01008970149B0000	mem_alias	0x400000000
+01008970149B0000	mem_reserve	0x458000000
+# Its pool too: with the region fixed (art61) the game got to its intro movie at the provisional 1 GB pool, 0.82 GB of it used, and the
+# movie's track object read back as garbage (SIGSEGV addr=0x2b at subsdk1+0x2e9e2c, NuMediaExtractor::fetchTrackSamples, on the audio
+# read thread, iPad log 2026-11-21). The whole pool of a 4 GB Switch, as Clubhouse Games 51's.
+01008970149B0000	app_pool	0xCD500000
+
+# It Takes Two. Unreal Engine 4.26: its engine region is cut from 62 GB to 4064 MB and its FMallocBinned3 replaced by the host's
+# allocator (dm/games/010092A0172E4000/patches.py, hle_uemalloc.c), so it no longer needs the 64 GB alias region the guess gave
+# it (the iPad held 49 GB of it and the game hung in main's init_array, iPad log 2026-11-20). Pikmin 4's 5 GB block.
+010092A0172E4000	mem_reserve	0x140000000
+010092A0172E4000	mem_alias	0x118000000
+010092A0172E4000	mem_stack	0x10000000
+010092A0172E4000	app_pool	0xCD500000
+
+# Overcooked (0100F28011892000, Unity 2019.4). The provisional 1 GB pool ran out soon after the first picture: Unity's
+# MemoryManager::Reallocate (main+0x51fc90) got 0 for 320 bytes from a dynamic_array's growth (main+0x2a9130) and copied into it
+# (SIGSEGV addr=0 in the SDK's memcpy, pool 0.75 of 1.00 GB used, iPad log 2026-11-21). The whole pool of a 4 GB Switch.
+0100F28011892000	app_pool	0xCD500000

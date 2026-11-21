@@ -30,6 +30,12 @@ func controllerNotForUIKit(_ view: UIView) {
         view.addInteraction(i)
     }
 }
+// And iPadOS's focus never enters these screens at all: the interaction above did not keep it out everywhere (a row once tapped kept the focus, and A on a
+// player's row also pressed New empty save or Rename this save, which made a save each time or opened the keyboard). Every row here is reached with the
+// controller through DMLauncherInput, so the system's focus has nothing to do on them
+final class NoFocusHostingController<Content: View>: UIHostingController<Content> {
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool { false }
+}
 private let severalGames = Int(ProcessInfo.processInfo.environment["DM_SHELL_GAMES"] ?? "") ?? 0 > 1
 private func info(_ key: String) -> Any? {
     if gameRoot != nil, key == "CFBundleDisplayName", let n = gameInfo["name"] { return n }
@@ -77,7 +83,7 @@ private let zhText: [String: String] = [
     "Each phone on the same Wi-Fi becomes a controller of its own, after any connected controllers, up to player 8. A phone that reloads the page keeps its player.":
         "連接同一個 Wi-Fi 的手機都能成為獨立玩家，依連線順序取得下一個空的編號，最多 8 位。重新整理頁面會保留原本的玩家編號。",
     "Players": "玩家", "Controller": "手把", "Phone on Wi-Fi": "手機（Wi-Fi）", "phone": "手機", "Not playing": "未使用", "Add": "加入", "Remove": "移除",
-    "Move to": "換到", "Button layout": "按鍵配置",
+    "Move to": "換到", "On": "開", "Off": "關", "Switch mode": "切換模式", "Button layout": "按鍵配置",
     "No controller or phone yet. Connect a controller, or scan the QR code on the left with a phone.": "尚未連接手把或手機。可連接藍牙手把，或用手機掃描左側的 QR Code。",
     "The iPad's touch controls also play as player 1. Each player keeps its own button layout. A removed phone can join again from its page; a removed controller from here.":
         "沒有連接任何裝置時，iPad 觸控按鍵為 1P。每位玩家的按鍵配置會分別記住。已移除的手機可在手機頁面重新加入，手把則在這裡點「加入」。",
@@ -87,7 +93,12 @@ private let zhText: [String: String] = [
     "Saves": "存檔", "Save in use": "使用中的存檔", "New empty save": "新增空白存檔", "Copy this save": "複製目前的存檔",
     "Rename this save": "重新命名這份存檔", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
     "Save %d": "存檔 %d", "%@ (copy)": "%@（副本）", "Delete \"%@\"?": "要刪除「%@」嗎？",
-    "Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it.": "這份存檔會從 iPad 刪除。電腦上（Switch Pad）的存檔備份裡還找得到。",
+    "Create an empty save?": "要新增空白存檔嗎？",
+    "The new empty save will become the save in use. Your existing saves will be kept.": "新增的空白存檔會成為使用中的存檔。原有存檔會保留。",
+    "Copy \"%@\"?": "要複製「%@」嗎？",
+    "The copy will be saved separately. Your choice of save will stay the same.": "副本會另外保存，目前使用的存檔維持原選擇。",
+    "Create": "新增", "Copy": "複製",
+    "This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC.": "這份存檔會從 iPad 刪除。若已透過 PadSwitch 備份，可從電腦還原。",
     "Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along.":
         "每份存檔分開保存，遊戲讀的是「使用中的存檔」。新增空白存檔會從頭開始玩，其他存檔不會被動到。Switch Pad 備份存檔時每一份都會一起備份。",
     "Could not switch saves": "切換存檔失敗", "Could not add a save": "新增存檔失敗", "Could not copy the save": "複製存檔失敗",
@@ -167,12 +178,13 @@ final class ActivityModel: ObservableObject {
 private struct PlayerBadge: View {
     let player: Int
     @EnvironmentObject var activity: ActivityModel
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
     var body: some View {
         let on = activity.lit.contains(player), color = playerColors[(player - 1) % playerColors.count]
-        Text("P\(player)").font(.headline.weight(.heavy).monospacedDigit()).foregroundStyle(.black.opacity(0.85))
-            .frame(width: 44, height: 36).background(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).fill(color))
-            .overlay(RoundedRectangle(cornerRadius: DS.tileRadius, style: .continuous).stroke(Color.white, lineWidth: on ? 3 : 0))
-            .shadow(color: color, radius: on ? 12 : 0)
+        Text("P\(player)").font(.ds(.headline, .heavy, k: k).monospacedDigit()).foregroundStyle(.black.opacity(0.85)).minimumScaleFactor(0.5).lineLimit(1)
+            .frame(width: 44 * k, height: 36 * k).background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(color))
+            .overlay(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).stroke(Color.white, lineWidth: on ? 3 * k : 0))
+            .shadow(color: color, radius: on ? 12 * k : 0)
             .scaleEffect(on ? 1.15 : 1)
             .animation(.easeOut(duration: 0.15), value: on)
     }
@@ -188,10 +200,49 @@ func controllerIcon(_ label: String) -> String {
 
 private func playerTitle(_ p: PlayerRow) -> String { p.kind == 2 ? (zhHant ? "\(p.label) " + tr("phone") : "\(p.label) phone") : p.label }
 
+// Switch or Xbox button layout: two words in a rounded square, the picked one on white (a segmented control keeps its small type when the text grows)
+private struct LayoutSwitch: View {
+    let xbox: Bool
+    let set: (Bool) -> Void
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
+    @Namespace private var plate
+    var body: some View {
+        // two halves of one width at the row's chip height (36), the white plate sliding between them: the two words' own widths made it lopsided and
+        // shorter than the buttons beside it
+        HStack(spacing: 0) {
+            ForEach([false, true], id: \.self) { x in
+                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1).fixedSize()
+                    .foregroundStyle(x == xbox ? Color.black : Color.white.opacity(0.75))
+                    .frame(width: 64 * k, height: 30 * k)
+                    .background {
+                        if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white).matchedGeometryEffect(id: "plate", in: plate) }
+                    }
+                    .contentShape(Rectangle()).onTapGesture { if x != xbox { set(x) } }
+            }
+        }
+        .padding(3 * k)
+        .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
+        .animation(DS.spring, value: xbox)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tr("Button layout")).accessibilityValue(xbox ? "Xbox" : "Switch")
+        .accessibilityAdjustableAction { _ in set(!xbox) }
+    }
+}
+// A player row's small buttons: an icon (and Move to's words) on a rounded square plate, all the same height
+private extension View {
+    func chipButton(_ color: Color = .white, k: CGFloat) -> some View {
+        self.font(.ds(.subheadline, .semibold, k: k)).foregroundStyle(color)
+            .padding(.horizontal, 10 * k).frame(minWidth: 40 * k, minHeight: 36 * k)
+            .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
+    }
+}
+
 private struct PlayerRowView: View {
     let p: PlayerRow
     @ObservedObject var m: PlayersModel
     @EnvironmentObject var nav: NavModel
+    @Environment(\.tenFoot) private var tenFoot   // on a TV: no second line, Move to as its icon
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     private var phone: Bool { p.kind == 2 }
     private var title: String { playerTitle(p) }
@@ -201,23 +252,19 @@ private struct PlayerRowView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 12 * k) {
             PlayerBadge(player: p.player)
-            Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.title2).frame(width: 32)
+            Image(systemName: phone ? "iphone" : controllerIcon(p.label)).font(.ds(.title2, k: k)).frame(width: 32 * k)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(tr(phone ? "Phone on Wi-Fi" : "Controller")).font(.footnote).foregroundStyle(.secondary)
+                Text(title).lineLimit(1).minimumScaleFactor(0.7)
+                if !tenFoot { Text(tr(phone ? "Phone on Wi-Fi" : "Controller")).font(.footnote).foregroundStyle(.secondary) }
             }
-            Spacer()
-            Picker(tr("Button layout"), selection: Binding(get: { p.xbox }, set: { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) })) {
-                Text("Switch").tag(false)
-                Text("Xbox").tag(true)
-            }
-            .pickerStyle(.segmented).frame(width: 150)
+            Spacer(minLength: 8 * k)
+            LayoutSwitch(xbox: p.xbox) { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) }
             .modifier(NavPart(player: p.player, part: 0))
             Button { m.send(["op": "identify", "p": p.player]) } label: {
-                Image(systemName: "wave.3.right").font(.title3)
+                Image(systemName: "wave.3.right").chipButton(k: k)
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(tr("Identify"))
@@ -229,11 +276,16 @@ private struct PlayerRowView: View {
                 }
             } label: {   // while player 1 picks the number: "Move to 3P"
                 let n = nav.focus == "p\(p.player)" ? nav.moveTo : nil
-                Label(tr("Move to") + (n.map { " P\($0)" } ?? ""), systemImage: "arrow.left.arrow.right")
+                HStack(spacing: 6 * k) {
+                    Image(systemName: "arrow.left.arrow.right")
+                    if !tenFoot || n != nil { Text((tenFoot ? "" : tr("Move to")) + (n.map { (tenFoot ? "" : " ") + "P\($0)" } ?? "")).lineLimit(1) }
+                }
+                .chipButton(k: k)
             }
+            .accessibilityLabel(tr("Move to"))
             .modifier(NavPart(player: p.player, part: 2))
             Button(role: .destructive) { m.send(["op": "kick", "p": p.player]) } label: {
-                Image(systemName: "xmark.circle.fill").font(.title3)
+                Image(systemName: "xmark").chipButton(Color(red: 1, green: 0.271, blue: 0.227), k: k)   // #FF453A
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(tr("Remove"))
@@ -244,6 +296,7 @@ private struct PlayerRowView: View {
 
 private struct PlayersSection: View {
     @ObservedObject var m: PlayersModel   // the launcher's, which its controller navigation also uses
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     var body: some View {
         Section {
@@ -252,11 +305,11 @@ private struct PlayersSection: View {
             }
             ForEach(m.players) { PlayerRowView(p: $0, m: m).nav("p\($0.player)") }
             ForEach(m.removed) { r in
-                HStack(spacing: 12) {
-                    Image(systemName: controllerIcon(r.label)).font(.title2).frame(width: 44).foregroundStyle(.secondary)
+                HStack(spacing: 12 * k) {
+                    Image(systemName: controllerIcon(r.label)).font(.ds(.title2, k: k)).frame(width: 44 * k).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(r.label)
-                        Text(tr("Not playing")).font(.footnote).foregroundStyle(.secondary)
+                        Text(tr("Not playing")).font(.ds(.footnote, k: k)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button(tr("Add")) { m.send(["op": "add", "index": r.index]) }.buttonStyle(.borderless)
@@ -264,7 +317,7 @@ private struct PlayersSection: View {
                 .nav("r\(r.index)")
             }
         } header: {
-            Text(tr("Players"))
+            Text(tr("Players")).font(.ds(.footnote, .semibold, k: k))
         }
     }
 }
@@ -300,31 +353,33 @@ func qrImage(_ text: String) -> UIImage? {
 }
 
 private struct PhonePadsCard: View {   // under Play, in the launcher's left column
+    @Environment(\.tenFoot) private var tenFoot   // on a TV the code is larger: it is scanned from the sofa
     @State private var url = phonePadsURL()
     @State private var qr: UIImage?   // made once per address, not on every redraw
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 14 * k) {
             if let url, let qr {
-                Image(uiImage: qr).interpolation(.none).resizable().frame(width: 96, height: 96)
-                    .padding(8).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Image(uiImage: qr).interpolation(.none).resizable().frame(width: (tenFoot ? 150 : 96) * k, height: (tenFoot ? 150 : 96) * k)
+                    .padding(8 * k).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14 * k, style: .continuous))
                     .accessibilityLabel("QR code of \(url)")
             }
-            VStack(alignment: .leading, spacing: 6) {
-                Label(tr("Add players"), systemImage: "qrcode").font(.headline)
+            VStack(alignment: .leading, spacing: 6 * k) {
+                Label(tr("Add players"), systemImage: "qrcode").font(.ds(.headline, k: k))
                 if let url {
-                    Text(url).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                    Text(url).font(.ds(.footnote, design: .monospaced, k: k)).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.5)
+                        .padding(.horizontal, 8 * k).padding(.vertical, 3 * k)
+                        .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                 } else {
-                    Text(tr("Connect to Wi-Fi first")).font(.footnote).foregroundStyle(.secondary)
+                    Text(tr("Connect to Wi-Fi first")).font(.ds(.footnote, k: k)).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(12 * k)
         .frame(maxWidth: .infinity)
-        .glassCard(20)
+        .glassCard(20 * k)
         .task {
             while !Task.isCancelled {   // the Wi-Fi address can change while the launcher is shown
                 let now = phonePadsURL()
@@ -337,6 +392,26 @@ private struct PhonePadsCard: View {   // under Play, in the launcher's left col
 
 private extension LauncherModel {
     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
+}
+
+// On the TV a choice is its name and its value between arrows, on one line as on a console's settings (left and right change it; the TV is not touched).
+// A menu picker there stacks its value under the name once the text is this large, which made every row two lines tall
+private struct TVChoice: View {
+    let title: String, value: String
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
+    var body: some View {
+        HStack(spacing: 12 * k) {
+            Text(title).lineLimit(1).minimumScaleFactor(0.7)
+            Spacer(minLength: 12 * k)
+            HStack(spacing: 10 * k) {
+                Image(systemName: "chevron.left").font(.ds(.footnote, .bold, k: k)).foregroundStyle(.secondary)
+                Text(value).font(.ds(.body, .semibold, k: k)).lineLimit(1)
+                Image(systemName: "chevron.right").font(.ds(.footnote, .bold, k: k)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12 * k).padding(.vertical, 6 * k)
+            .background(RoundedRectangle(cornerRadius: DS.tileRadius * k, style: .continuous).fill(DS.chip))
+        }
+    }
 }
 
 private struct SettingRow: View {
@@ -391,16 +466,25 @@ private struct SettingRow: View {
         return (zhHant ? "打不開而且是記憶體造成的話，下次會自動換一個大小。" : "If the game fails to start for memory, the next start tries another size.", false)
     }
 
+    @Environment(\.tenFoot) private var tenFoot   // on a TV only the names: the notes are too small to read from the sofa
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(tr(s.label))
-            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            if !note.isEmpty && !tenFoot { Text(note).font(.footnote).foregroundStyle(.secondary) }
         }
     }
 
     var body: some View {
         Group {
             switch s.kind {
+            case "choice" where tenFoot:
+                let v = m.values[s.env] ?? s.def
+                TVChoice(title: tr(s.label), value: (s.options ?? []).first { $0[0] == v }.map { tr($0[1]) } ?? v)
+            // on the TV a slider or a switch is a value between arrows too: the controls themselves keep their small iPad size there
+            case "range" where tenFoot:
+                TVChoice(title: tr(s.label), value: percentage)
+            case "memory" where tenFoot:
+                TVChoice(title: tr(s.label), value: String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + memoryDefaultLabel : ""))
             case "choice":
                 Picker(selection: m.binding(s)) {
                     ForEach(s.options ?? [], id: \.[0]) { Text(tr($0[1])).tag($0[0]) }
@@ -435,8 +519,12 @@ private struct SettingRow: View {
                     if let n = memoryAutoNote { Text(n.text).font(.footnote).foregroundStyle(n.warn ? Color.orange : Color.secondary) }
                 }
             default:
-                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-                    settingLabel
+                if tenFoot {
+                    TVChoice(title: tr(s.label), value: (m.values[s.env] ?? s.def) == s.onValue ? tr("On") : tr("Off"))
+                } else {
+                    Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
+                        settingLabel
+                    }
                 }
             }
         }
@@ -477,11 +565,12 @@ private struct PressScale: ButtonStyle {
 private struct NavPart: ViewModifier {   // a ring around the player row's control player 1 picked
     let player, part: Int
     @EnvironmentObject var nav: NavModel
+    @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
     func body(content: Content) -> some View {
         content.overlay {
-            if nav.focus == "p\(player)" && nav.part == part { RoundedRectangle(cornerRadius: 10).stroke(Color.white, lineWidth: 2.5).padding(-5) }
+            if nav.focus == "p\(player)" && nav.part == part { RoundedRectangle(cornerRadius: 10 * k).stroke(Color.white, lineWidth: 2.5 * k).padding(-5 * k) }
             else if player > 1 && nav.own[player] == part {   // the player's own, in its colour
-                RoundedRectangle(cornerRadius: 10).stroke(playerColors[(player - 1) % playerColors.count], lineWidth: 2.5).padding(-5)
+                RoundedRectangle(cornerRadius: 10 * k).stroke(playerColors[(player - 1) % playerColors.count], lineWidth: 2.5 * k).padding(-5 * k)
             }
         }
     }
@@ -545,16 +634,25 @@ private final class ShellSettings: ObservableObject {
         fputs("launcher: motion controls \(gyro ? "on" : "off"), frame rate cap \(fps) fps, touch controls \(Int(touchOpacity * 100)) % opaque at \(Int(touchScale * 100)) % size\n", stderr)
     }
 }
-private func noteLabel(_ title: String, _ note: String) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-        Text(tr(title))
-        Text(tr(note)).font(.footnote).foregroundStyle(.secondary)
+private func noteLabel(_ title: String, _ note: String) -> some View { NoteLabel(title: title, note: note) }
+private struct NoteLabel: View {   // a setting's name and its note (left out on a TV, as SettingRow's)
+    let title: String, note: String
+    @Environment(\.tenFoot) private var tenFoot
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr(title))
+            if !tenFoot { Text(tr(note)).font(.footnote).foregroundStyle(.secondary) }
+        }
     }
 }
 // The rows: frame rate in the Game section, the rest in Controls
 private struct GyroRow: View {
     @ObservedObject var shell: ShellSettings
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
+        if tenFoot { TVChoice(title: tr("Motion controls"), value: shell.gyro ? tr("On") : tr("Off")) } else { toggle }
+    }
+    private var toggle: some View {
         Toggle(isOn: $shell.gyro) {
             noteLabel("Motion controls", "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.")
         }
@@ -563,7 +661,11 @@ private struct GyroRow: View {
 }
 private struct FpsRow: View {
     @ObservedObject var shell: ShellSettings
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
+        if tenFoot { TVChoice(title: tr("Frame rate cap"), value: "\(shell.fps) fps") } else { menu }
+    }
+    private var menu: some View {
         Picker(selection: $shell.fps) {
             Text("30 fps").tag(30)
             Text("60 fps").tag(60)
@@ -591,51 +693,107 @@ private struct TouchStyleRow: View {   // opacity or size of the touch controls,
     }
 }
 
-// Save slots (SaveSlots.swift): which save the game loads. Player 1's controller: left and right on the first row switch, A on New or Copy;
-// renaming and deleting are by touch (they need the keyboard or a confirmation)
+private enum SaveConfirmation: Equatable {
+    case create
+    case copy(SaveSlot)
+    case delete(SaveSlot)
+
+    var title: String {
+        switch self {
+        case .create: tr("Create an empty save?")
+        case .copy(let slot): tr("Copy \"%@\"?").replacingOccurrences(of: "%@", with: slot.name)
+        case .delete(let slot): tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: slot.name)
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .create: tr("The new empty save will become the save in use. Your existing saves will be kept.")
+        case .copy: tr("The copy will be saved separately. Your choice of save will stay the same.")
+        case .delete: tr("This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC.")
+        }
+    }
+
+    var action: String {
+        switch self {
+        case .create: tr("Create")
+        case .copy: tr("Copy")
+        case .delete: tr("Delete")
+        }
+    }
+
+    var role: ButtonRole? {
+        if case .delete = self { return .destructive }
+        return nil
+    }
+}
+
+// Player 1's launcher navigation and touch actions both request confirmation before creating a save.
 private struct SaveSlotsSection: View {
     @ObservedObject var s: SaveSlotsModel
+    let request: (SaveConfirmation) -> Void
     @State private var renaming = false
     @State private var newName = ""
-    @State private var deleting: SaveSlot?
+    @Environment(\.tenFoot) private var tenFoot   // on the TV: the controller's rows only, in white (renaming and deleting are by touch, on the iPad)
+    @Environment(\.uiK) private var k
 
     var body: some View {
         Section {
-            Picker(selection: Binding(get: { s.active }, set: { s.switchTo($0) })) {
-                ForEach(s.slots) { Text($0.name).tag($0.id) }
-            } label: {
-                Label(tr("Save in use"), systemImage: "externaldrive.fill")
+            if tenFoot {
+                TVChoice(title: tr("Save in use"), value: s.activeName).nav("slot")
+            } else {
+                Picker(selection: Binding(get: { s.active }, set: { s.switchTo($0) })) {
+                    ForEach(s.slots) { Text($0.name).tag($0.id) }
+                } label: {
+                    Label(tr("Save in use"), systemImage: "externaldrive.fill")
+                }
+                .pickerStyle(.menu)
+                .nav("slot")
             }
-            .pickerStyle(.menu)
-            .nav("slot")
-            Button { s.addEmpty() } label: { Label(tr("New empty save"), systemImage: "plus.circle") }
+            saveAction("New empty save", icon: "plus.circle") { request(.create) }
                 .nav("slotNew")
-            Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
+            saveAction("Copy this save", icon: "doc.on.doc") {
+                request(.copy(SaveSlot(id: s.active, name: s.activeName)))
+            }
                 .nav("slotCopy")
-            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil") }
+            if !tenFoot {
+            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil").padding(.vertical, 6) }
                 .listRowBackground(rowPlate)
-            if s.slots.count > 1 {
+            }
+            if s.slots.count > 1 && !tenFoot {
                 Menu {
-                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
-                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red) }
+                    ForEach(s.slots.filter { $0.id != s.active }) { slot in
+                        Button(slot.name, role: .destructive) { request(.delete(slot)) }
+                    }
+                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red).padding(.vertical, 6) }   // room for the icon: the menu lifts the label as it is drawn, and cut the trash can's top and bottom
                 .listRowBackground(rowPlate)
             }
         } header: {
-            Text(tr("Saves"))
+            Text(tr("Saves")).font(.ds(.footnote, .semibold, k: k))
         } footer: {
             if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
+        }
+        // B on the controller cancels renaming (the keyboard is used by touch).
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { n in
+            guard (n.userInfo?["key"] as? String) == "b", (n.userInfo?["on"] as? Int ?? 1) != 0 else { return }
+            if renaming { renaming = false }
         }
         .alert(tr("Rename this save"), isPresented: $renaming) {
             TextField(tr("Name"), text: $newName)
             Button(tr("Rename")) { s.rename(s.active, newName) }
             Button(tr("Cancel"), role: .cancel) {}
         }
-        .confirmationDialog(tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: deleting?.name ?? ""), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-            Button(tr("Delete"), role: .destructive) { if let d = deleting { s.delete(d.id) }; deleting = nil }
-            Button(tr("Cancel"), role: .cancel) { deleting = nil }
-        } message: {
-            Text(tr("Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it."))
-        }
+    }
+
+    private func saveAction(_ title: String, icon: String, perform: @escaping () -> Void) -> some View {
+        // UIKit can route a gamepad press to a List button whose row the launcher's controller does not select.
+        Label(tr(title), systemImage: icon)
+            .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: perform)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: Text(tr(title))) { perform() }
     }
 }
 
@@ -647,105 +805,160 @@ private func openGameFolder() {   // this app's Documents in the Files app (shar
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     @ObservedObject var shell: ShellSettings
+    @ObservedObject var nav: NavModel   // made by dm_show_launcher: the TV's copy in handheld mode follows the same highlight
     let play: () -> Void
     let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
     @StateObject private var players = PlayersModel()
-    @StateObject private var nav = NavModel()
+    @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
     @StateObject private var activity = ActivityModel()
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
+    @State private var saveConfirmation: SaveConfirmation?
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
-    @State private var shown = false   // the left column rises in once, as the picker's card does
+    @StateObject private var tv = TenFoot(native: true)   // GamePicker.swift: on the TV's window, laid out at its own size (sharp text)
 
     var body: some View {
         GeometryReader { geometry in
+            let k = tv.on ? TenFootStage.scale(geometry.size) : 1   // GamePicker.swift: the TV's size over 1920 x 1080 (the views inside get it as uiK)
             HStack(spacing: 0) {
-                VStack(spacing: 16) {
+                VStack(spacing: 16 * k) {
                     Spacer(minLength: 0)
                     if let icon = appIcon() {
-                        Image(uiImage: icon).resizable().interpolation(.high).frame(width: 128, height: 128)
-                            .clipShape(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
-                            .overlay(RoundedRectangle(cornerRadius: 128 * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.5), radius: 18, y: 10)
+                        let side: CGFloat = (tv.on ? 180 : 128) * k
+                        Image(uiImage: tv.on ? tvIcon(icon, key: "launcher:" + (gameRoot?.path ?? "")) : icon).resizable().interpolation(.high).frame(width: side, height: side)
+                            .clipShape(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous))   // the home screen's icon corner, as the picker's tiles
+                            .overlay(RoundedRectangle(cornerRadius: side * 0.2237, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.5), radius: 18 * k, y: 10 * k)
                             .accessibilityHidden(true)
                     }
                     Text((info("CFBundleDisplayName") as? String) ?? tr("Game"))
-                        .font(.title.weight(.bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
+                        .font(.ds(.title, .bold, k: k)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
                     if let v = info("CFBundleShortVersionString") as? String, !v.isEmpty {
-                        Text("v" + v).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
-                            .padding(.horizontal, 9).padding(.vertical, 4)
-                            .background(RoundedRectangle(cornerRadius: DS.chipRadius, style: .continuous).fill(DS.chip))
+                        Text("v" + v).font(.ds(.footnote, .semibold, k: k)).foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 9 * k).padding(.vertical, 4 * k)
+                            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                     }
-                    playButton.padding(.top, 6)
-                    Spacer(minLength: 8)
+                    playButton(k).padding(.top, 6 * k)
+                    // on the TV the code joins the game's card in the middle (an empty middle under Play otherwise); on the iPad it sits at the bottom
+                    if tv.on { Color.clear.frame(height: 24 * k) } else { Spacer(minLength: 8) }
                     if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
+                    if tv.on {
+                        Spacer(minLength: 0)
+                        KeyHint(key: "Home", text: tr("Switch mode"))   // GamePicker.swift; on the TV, the same in console and handheld mode
+                            .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
+                    }
                 }
-                .padding(20)
-                .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 24)
+                .padding(20 * k)
                 .frame(width: geometry.size.width / 3, height: geometry.size.height)
                 .overlay(alignment: .topLeading) {
+                    HStack(spacing: 0) {
                     if let back {
                         Button(action: back) {
-                            Label(tr("Game list"), systemImage: "chevron.left").font(.headline).foregroundStyle(.white)
-                                .padding(.horizontal, 14).padding(.vertical, 10)
-                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.chip))
+                            Label(tr("Game list"), systemImage: "chevron.left").font(.ds(.headline, k: k)).foregroundStyle(.white)
+                                .padding(.horizontal, 14 * k).padding(.vertical, 10 * k)
+                                .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
                         }
-                        .buttonStyle(.plain).padding(16)
-                        .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white, lineWidth: 3).padding(12) } }
+                        .buttonStyle(.plain).padding(16 * k)
+                        .overlay { if nav.focus == "back" { RoundedRectangle(cornerRadius: 16 * k, style: .continuous).stroke(Color.white, lineWidth: 3 * k).padding(12 * k) } }
+                    }
+                    BackToTVButton().padding(.vertical, 16 * k).padding(.leading, back == nil ? 16 * k : 0)   // GamePicker.swift: when the picture was moved to the iPad
                     }
                 }
                 ScrollViewReader { proxy in
                 List {
                     PlayersSection(m: players)
-                    if saves.available { SaveSlotsSection(s: saves) }
+                    if saves.available { SaveSlotsSection(s: saves, request: requestSaveConfirmation) }
                     ForEach(m.sections, id: \.self) { section in
-                        Section(tr(section)) {
+                        Section {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
                             ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m).nav("s:" + $0.env) }
                             if section == "Game" { FpsRow(shell: shell).nav("fps") }
                             if section == "Controls" {
                                 GyroRow(shell: shell).nav("gyro")
-                                TouchStyleRow(shell: shell, size: false).nav("touchOpacity")
-                                TouchStyleRow(shell: shell, size: true).nav("touchScale")
+                                if !tv.on {   // the touch controls are the iPad's, in handheld mode
+                                    TouchStyleRow(shell: shell, size: false).nav("touchOpacity")
+                                    TouchStyleRow(shell: shell, size: true).nav("touchScale")
+                                }
                             }
+                        } header: {
+                            Text(tr(section)).font(.ds(.footnote, .semibold, k: k))
                         }
                     }
                     Section {
                         Button { m.reset() } label: { Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise") }
+                            .foregroundStyle(tv.on ? Color.white : Color.accentColor)
                             .disabled(!m.changed)
                             .nav("reset")
-                        Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
-                            .nav("folder")
+                        if !tv.on {   // the Files app opens on the iPad, not on the TV
+                            Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
+                                .nav("folder")
+                        }
                     }
                 }
                 .listStyle(.insetGrouped)
+                .font(.ds(.body, k: k))   // the rows' text: Dynamic Type's on the iPad, the TV's size there
+                .environment(\.defaultMinListRowHeight, 44 * k)
                 .scrollContentBackground(.hidden)   // the game's blurred icon shows through, as in the picker
-                .contentMargins(.horizontal, 12, for: .scrollContent)
+                .contentMargins(.horizontal, 12 * k, for: .scrollContent)
                 .onChange(of: nav.focus) { _, id in withAnimation { proxy.scrollTo(id == "play" ? "p1" : id, anchor: .center) } }
                 }
                 .frame(width: geometry.size.width * 2 / 3)
             }
         }
         .background { backdrop }
+        .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // ten-foot: every text style grows together on a TV
+        .environment(\.tenFoot, tv.on)
         .environmentObject(nav)
         .environmentObject(activity)
         .preferredColorScheme(.dark)
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { navInput($0.userInfo) }
-        .onAppear { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) }
+        // The launcher owns the alert; an iPad popover in the scrolling list can pick a different anchor.
+        .alert(
+            saveConfirmation?.title ?? "",
+            isPresented: Binding(get: { saveConfirmation != nil }, set: { if !$0 { saveConfirmation = nil } }),
+            presenting: saveConfirmation
+        ) { confirmation in
+            Button(tr("Cancel"), role: .cancel) { saveConfirmation = nil }
+            Button(confirmation.action, role: confirmation.role) { confirmSaveAction(confirmation) }
+        } message: { confirmation in
+            Text(confirmation.message)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
+        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear {
             held?.task.cancel()
-            NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
+            if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
         }
-        .onAppear { withAnimation(DS.pop.delay(0.05)) { shown = true } }
+        .tenFoot(tv)
+        .settleOnArrival()   // GamePicker.swift: one plain fade in
+    }
+
+    private func requestSaveConfirmation(_ confirmation: SaveConfirmation) {
+        guard !mirror, saveConfirmation == nil else { return }
+        held?.task.cancel()
+        held = nil
+        saveConfirmation = confirmation
+    }
+
+    private func confirmSaveAction(_ confirmation: SaveConfirmation) {
+        saveConfirmation = nil
+        switch confirmation {
+        case .create:
+            saves.addEmpty()
+        case .copy(let slot):
+            guard saves.active == slot.id else { return }
+            saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: slot.name))
+        case .delete(let slot):
+            saves.delete(slot.id)
+        }
     }
 
     // The game's icon blurred over black, as behind the picker's row
     private var backdrop: some View {
         ZStack {
             Color.black
-            if let icon = appIcon() {
-                Image(uiImage: icon).resizable().scaledToFill()
+            if let icon = appIcon(), let soft = blurredIcon(icon, key: "launcher:" + (gameRoot?.path ?? "")) {   // GamePicker.swift: blurred once, not on every frame
+                Image(uiImage: soft).resizable().interpolation(.medium).scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .blur(radius: 60).scaleEffect(1.4).opacity(0.45)
+                    .scaleEffect(1.4).opacity(0.45)
             }
             LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
         }
@@ -753,16 +966,16 @@ private struct LauncherView: View {
     }
 
     // Play: a rounded rectangle in the accent colour (not a capsule), a white ring while player 1's highlight is on it; it gives a little when pressed
-    var playButton: some View {
+    func playButton(_ k: CGFloat) -> some View {
         let focused = nav.focus == "play"
         return Button(action: play) {
-            Label(tr("Play"), systemImage: "play.fill").font(.title3.weight(.semibold)).foregroundStyle(.white)
-                .frame(maxWidth: 240).frame(height: 54)
-                .background(RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous).fill(DS.accent))
-                .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: focused ? 16 : 10)
+            Label(tr("Play"), systemImage: "play.fill").font(.ds(.title3, .semibold, k: k)).foregroundStyle(.white)
+                .frame(maxWidth: 260 * k).frame(minHeight: 54 * k).padding(.vertical, 2 * k)
+                .background(RoundedRectangle(cornerRadius: DS.rowRadius * k, style: .continuous).fill(DS.accent))
+                .shadow(color: DS.accent.opacity(focused ? 0.6 : 0.35), radius: (focused ? 16 : 10) * k)
         }
         .buttonStyle(PressScale())
-        .overlay { if focused { RoundedRectangle(cornerRadius: DS.rowRadius + 6, style: .continuous).stroke(Color.white, lineWidth: 3).padding(-6) } }
+        .overlay { if focused { RoundedRectangle(cornerRadius: (DS.rowRadius + 6) * k, style: .continuous).stroke(Color.white, lineWidth: 3 * k).padding(-6 * k) } }
         .scaleEffect(focused ? 1.03 : 1)
         .animation(DS.spring, value: focused)
     }
@@ -782,8 +995,10 @@ private struct LauncherView: View {
         for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
         if saves.available {
             items.append(NavItem(id: "slot", slider: true, adjust: { saves.step($0) }))
-            items.append(NavItem(id: "slotNew", activate: { saves.addEmpty() }))
-            items.append(NavItem(id: "slotCopy", activate: { saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: saves.activeName)) }))
+            items.append(NavItem(id: "slotNew", activate: { requestSaveConfirmation(.create) }))
+            items.append(NavItem(id: "slotCopy", activate: {
+                requestSaveConfirmation(.copy(SaveSlot(id: saves.active, name: saves.activeName)))
+            }))
         }
         for section in m.sections {
             for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
@@ -797,12 +1012,12 @@ private struct LauncherView: View {
             }
             if section == "Controls" {
                 if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() })) }
-                items.append(NavItem(id: "touchOpacity", slider: true, adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
-                items.append(NavItem(id: "touchScale", slider: true, adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) }))
+                if !tv.on { items.append(NavItem(id: "touchOpacity", slider: true, adjust: { shell.touchOpacity = Swift.min(1, Swift.max(0.2, shell.touchOpacity + Double($0) * 0.05)) }))
+                items.append(NavItem(id: "touchScale", slider: true, adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) })) }
             }
         }
         items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
-        items.append(NavItem(id: "folder", activate: openGameFolder))
+        if !tv.on { items.append(NavItem(id: "folder", activate: openGameFolder)) }
         return items
     }
     private func navDirection(_ key: String) {
@@ -844,6 +1059,10 @@ private struct LauncherView: View {
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
         guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
+        if saveConfirmation != nil {
+            if key == "b", (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { saveConfirmation = nil }
+            return
+        }
         if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
         if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
         held?.task.cancel(); held = nil
@@ -893,11 +1112,12 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     guard let url = (gameRoot ?? Bundle.main.resourceURL)?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings()
+    let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings(), nav = NavModel()
     var host: UIViewController?
-    let view = LauncherView(m: model, shell: shell, play: {
+    let view = LauncherView(m: model, shell: shell, nav: nav, play: {
         guard let h = host else { return }
         host = nil
+        PregameStage.shared.clear()
         model.apply()
         shell.apply()
         if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
@@ -908,7 +1128,8 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         fputs("launcher: back to the game list\n", stderr)
         h.dismiss(animated: true) { frontIosBackToPicker() }
     } : nil)
-    let h = UIHostingController(rootView: view)
+    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
+    let h = NoFocusHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
