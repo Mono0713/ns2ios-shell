@@ -135,12 +135,21 @@ struct MemoryAuto {
                 fputs("launcher: automatic memory: the last run at \(Self.hex(p)) → \(o.rawValue) (marker \(chars[0])\(chars[1]))\n", stderr)
             }
         }
+        // A package whose size changed (a repack with a settled pool: Clubhouse Games 51 went from the provisional 1 GB to 0xCD500000) starts over from its own size:
+        // what earlier runs told was about the old package. Its last run at 1 GB crashed for want of heap, which the marker counted as not memory, so the launcher kept
+        // 1 GB and the new package crashed the same way. Choices kept before the package size was recorded start over only in that case: no size confirmed and a last size below the package's whose run did not fail for memory.
+        // After the marker is read, so the last run (at the old package's size) is dropped with the rest
+        let pkgWas = (d["package"] as? String).flatMap(Self.parse)
+        if pkgWas.map({ $0 != package }) ?? (ok == nil && lastPool.map { $0 < package && failed[$0] == nil } ?? false) {
+            fputs("launcher: automatic memory: the package's size is now \(Self.hex(package))\(pkgWas.map { " (was \(Self.hex($0)))" } ?? ""); earlier runs, the last one too, no longer count\n", stderr)
+            failed = [:]; ok = nil; lastPool = nil; last = nil
+        }
         if let ok { pick = ok; confirmed = true }
         else if let p = lastPool, let o = failed[p] {
             if let n = Self.next(after: p, smaller: o == .tooBig, candidates: cands, failed: Set(failed.keys)) { pick = n }
             else { pick = package; exhausted = true; failed = [:]; fputs("launcher: automatic memory: every size failed; back to the package's \(Self.hex(package))\n", stderr) }
         } else { pick = lastPool ?? package }
-        d["ok"] = ok.map(Self.hex); d["last"] = Self.hex(pick)
+        d["ok"] = ok.map(Self.hex); d["last"] = Self.hex(pick); d["package"] = Self.hex(package)
         d["failed"] = Dictionary(uniqueKeysWithValues: failed.map { (Self.hex($0.key), $0.value.rawValue) })
         store.set(d, forKey: Self.key)
     }
