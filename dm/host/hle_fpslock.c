@@ -63,7 +63,7 @@ static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field
     // (FPSLocker-Warehouse, patches/01004D300C5AE000/A6CE40DC3AEDB1BE.yaml; offsets found by Hazerou). The same config's dynamic-resolution timings are left alone (the iPad's GPU has room)
     { "a6ce40dc3aedb1becacd2f1ff4515307", "frame interval", 0xa76728, 0x50, UNLOCK_I32, 1 },
     // Kirby Star Allies 4.0.0a: the frame interval as vsyncs less one, an int32 at [main+0x54c5b0]+0, 1 (30 fps) as the game sets it; 0 = 60 fps. The game's own update of it
-    // (main+0x5a4c) is cut in its patches.py so the value stays. From masagrator's FPSLocker config for this build (FPSLocker-Warehouse, patches/01007E3006DDA000/D55608916FA56C18.yaml,
+    // (main+0x5a4c, the setter's store) is cut in its patches.py, so the constructor's 0 stays; the host writes 1 only for a 30 fps cap. From masagrator's FPSLocker config for this build (FPSLocker-Warehouse, patches/01007E3006DDA000/D55608916FA56C18.yaml,
     // interval offsets by Kirby567Fan); its triple-buffer patches are for the Switch's own queue, which the host's presents replace
     { "d55608916fa56c184f2a8fe80da0427c", "frame interval", 0x54c5b0, 0, VSYNCS_M1_I32, 1 },
 };

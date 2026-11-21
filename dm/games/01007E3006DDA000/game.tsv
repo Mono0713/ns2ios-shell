@@ -2,7 +2,7 @@
 # Format: see dm/games/README.md
 # HAL Laboratory's own engine on NintendoWare (G3d, Font, Ui2d, Vfx) with nn::atk sound, SDK 4.4.1, NVN; subsdk0 is the movie module (H.264 / AAC MP4 movies, decoded by the host).
 # The shaders are BNSH archives inside HAL's .cmp containers under gfx/, ptcl/ and lyt/, in the loose shader/ files and embedded in main (shader_split.py); no run met a shader missing from the map.
-# The game asks for present interval 1 and paces its stages at 30 fps itself
+# The game asks for present interval 1 and paces its stages at 30 fps itself (60 here: fps_target below)
 
 # ---- Identity ----
 title_id	01007E3006DDA000
@@ -15,6 +15,9 @@ ipa	KirbyStarAllies.ipa
 app_category	public.app-category.games
 # inline uniform updates end the render pass (no deferral), as for Super Mario Odyssey: on an iPad the textures flickered and shook (2026-11-20 report); DM_NVN_UB_DEFER=0 is what fixed the same look in Odyssey
 ub_defer	off
+# 60 fps (the stages at 30 on the Switch): the game's own switch to 30 is cut (patches.py) and the host keeps its frame pacing mode at 0; one logic update per vsync, so the game keeps
+# its speed. The launcher's 30 / 60 cap (DM_FPS_TARGET=30) writes the game's 30 back (hle_fpslock.c)
+fps_target	60
 
 # ---- Versions ----
 build	v393216	4.0.0a	main=d55608916fa56c184f2a8fe80da0427c	subsdk0=a4604a0a8b8af7ae0eac1add42a8b978	sdk=af7348498c7759b0f3f0396a8a36014c
