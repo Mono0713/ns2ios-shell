@@ -498,13 +498,19 @@ def scan_nsps(folder):
     The version still comes from the [vN] in the name: the ticket carries no display version, and it is only used to tell
     updates apart (a base game is v0)."""
     nsps = sorted(list(folder.glob('*.nsp')) + list(folder.glob('*.xci')))
+    # Some local dumps put add-ons in a separate "DLC" or "99 DLCs" directory.
+    # Limit the scan to add-on directories, so archived dumps and unpacked work do not replace the base or update.
+    dlc_dirs = sorted(p for p in folder.iterdir() if p.is_dir()
+                      and re.fullmatch(r'(?:[0-9]+[ _-]+)?dlcs?', p.name, re.IGNORECASE))
+    dlc_nsps = sorted(p for subdir in dlc_dirs for p in subdir.rglob('*')
+                      if p.is_file() and p.suffix.lower() == '.nsp')
     nsz = sorted(folder.glob('*.nsz'))
     if nsz:
         die('%d NSZ file(s) in %s: this reads NSP and XCI only.\n'
             '    Unpack them first:  nsz -D "%s"   (needs your prod.keys)' % (len(nsz), folder, nsz[0].name))
     if not nsps: die('no .nsp or .xci in %s' % folder)
     apps = {}
-    for p in nsps:
+    for p in nsps + dlc_nsps:
         if p.stat().st_size == 0: warn('skipping empty file %s' % p.name); continue
         meta = nsp_meta(p)
         if meta:
@@ -543,6 +549,8 @@ def scan_nsps(folder):
                 continue
             low = int(tid, 16) & 0xFFF
             kind = 'base' if low == 0 else ('update' if low == 0x800 else 'dlc')
+        if p.parent != folder and kind != 'dlc':
+            continue
         base_id = int(tid, 16) - (int(tid, 16) & 0xFFF)   # updates sit at +0x800, DLC above +0x1000
         if kind == 'dlc' and base_id & 0x1000:
             base_id -= 0x1000   # local fix: a DLC (…63001) belongs to the base …62000, not to a game …63000
