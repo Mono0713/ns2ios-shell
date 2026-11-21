@@ -59,7 +59,11 @@
 + .shell-base.txt
 + .shell-patches/                          # the diffs for the "~" entries below
 
++ dm/host/aoc_indices.h                # DLC index discovery for games with large add-on libraries
+
 # --- modified (patched onto upstream) ---
+
+~ dm/host/hle_misc.c                   # register all add-on indices from local game data
 
 ~ dm/host/loader.c              # module images from Frameworks/Guest.framework instead of the executable (+ dm_shell_modules); DM_GUEST names the chosen game's Guest_<title ID>.framework in a package of several games
 ~ dm/host/hle_svc.c             # memory layout overridable at run time (DM_MEM_*/DM_APP_POOL); profile mem_map_limit too (DM_MEM_MAP_LIMIT)

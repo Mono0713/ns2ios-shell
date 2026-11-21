@@ -357,6 +357,13 @@ jobs:
           xcrun clang -fobjc-arc -framework Foundation -I dm/ios/Sources dm/ios/tests/test_relaunch_ticket.m -o "$RUNNER_TEMP/test-relaunch-ticket"
           "$RUNNER_TEMP/test-relaunch-ticket"
 
+      - name: Check large add-on lists
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/fork"
+          xcrun clang -std=gnu11 -Wall -Wextra -Werror dm/host/tests/t_aoc_indices.c -o "$RUNNER_TEMP/test-aoc-indices"
+          "$RUNNER_TEMP/test-aoc-indices" "$RUNNER_TEMP/test-aoc-list"
+
       - name: Build the shell
         env:
           DM_ROOT: ${{ runner.temp }}/dm-work
