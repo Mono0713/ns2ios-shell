@@ -6,7 +6,7 @@ OBS = {
   # (OBS_TRACE, hle_sdk16.c: the registers and what they point at, the first 16 hits) on where that pointer is stored and where it is read
   '7e9f31f59e001cf5d9b546ffb233f480': [
     # right after bl 0x3310a0 (a gate goes at a function entry or after a bl): x23 = the source stored into the new TrackInfo by the stp x23, x21, [x22] next, x21 = the track index
-    (0x2e98ac, 22, '08008092', 'NuMediaExtractor::selectTrack: the source (x23) about to go into the new TrackInfo; orig mov x8, #-1'),
-    (0x2e9b10, 22, 'ff8304d1', 'NuMediaExtractor::fetchTrackSamples entry: x0 = the extractor (tracks: Vector at +0x68, storage +0x70, count +0x78); orig sub sp, sp, #0x120'),
+    (0x2e98ac, 22, '92800008', 'NuMediaExtractor::selectTrack: the source (x23) about to go into the new TrackInfo; orig mov x8, #-1'),
+    (0x2e9b10, 22, 'd10483ff', 'NuMediaExtractor::fetchTrackSamples entry: x0 = the extractor (tracks: Vector at +0x68, storage +0x70, count +0x78); orig sub sp, sp, #0x120'),
   ],
 }

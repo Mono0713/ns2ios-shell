@@ -549,12 +549,12 @@ def scan_nsps(folder):
                 continue
             low = int(tid, 16) & 0xFFF
             kind = 'base' if low == 0 else ('update' if low == 0x800 else 'dlc')
-        if p.parent != folder and kind != 'dlc':
-            continue
         base_id = int(tid, 16) - (int(tid, 16) & 0xFFF)   # updates sit at +0x800, DLC above +0x1000
         if kind == 'dlc' and base_id & 0x1000:
             base_id -= 0x1000   # local fix: a DLC (…63001) belongs to the base …62000, not to a game …63000
         key = '%016X' % base_id
+        if p.parent != folder and (kind != 'dlc' or key not in apps):
+            continue
         a = apps.setdefault(key, {'base': None, 'updates': {}, 'dlc': [], 'all': []})
         a['all'].append((kind, ver, p))
         if kind == 'base': a['base'] = p
@@ -1949,7 +1949,8 @@ def main():
             nx = build_nx_extract(dotnet, probed, tools_dir)
             tid = probe_xci(nx, keys, xcis[0], probed / 'extract', a.allow_damaged)
             if tid:
-                apps = {tid: {'base': xcis[0], 'updates': {}, 'dlc': [], 'all': [('base', 'v0', xcis[0])]}}
+                # probe_xci records the title ID; a new scan can now attach this cartridge's nested add-ons.
+                apps = scan_nsps(folder) or {tid: {'base': xcis[0], 'updates': {}, 'dlc': [], 'all': [('base', 'v0', xcis[0])]}}
     if not apps:
         die('no game could be identified in %s.\n'
             '    An .nsp is read from the package itself; an .xci is read by extracting it, which needs prod.keys that match '
@@ -2295,12 +2296,14 @@ def main():
         for t, (_, p) in sorted(best.items()):
             idx = t - base_id - 0x1000
             out = A / 'aoc' / str(idx)
+            log = work / 'logs' / ('aoc_%d.log' % idx)
             try:
-                run([nx, keys, '--aoc', p, out], log=work / 'logs' / ('aoc_%d.log' % idx),
-                    what='extracting DLC %d (%s)' % (idx, p.name))
+                run([nx, keys, '--aoc', p, out], log=log, what='extracting DLC %d (%s)' % (idx, p.name), hint=key_hint(keys))
             except SystemExit:
+                if 'no data NCA in the DLC NSP' not in log.read_text(encoding='utf-8', errors='replace'):
+                    raise
                 out.mkdir(parents=True, exist_ok=True)
-                warn('DLC %d (%s): no content extracted, packed as owned with an empty folder' % (idx, p.name))
+                warn('DLC %d (%s): licence-only add-on, with no files to extract' % (idx, p.name))
         say('DLC: %d packed into aoc/' % len(best))
     step_pack(A, out_ipa, rows, work)
     say('done: %s (%.0f MB)' % (out_ipa, out_ipa.stat().st_size / 1048576))
