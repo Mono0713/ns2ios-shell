@@ -1,7 +1,7 @@
 diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 --- a/dm/ios/Sources/Launcher.swift
 +++ b/dm/ios/Sources/Launcher.swift
-@@ -3,13 +3,410 @@
+@@ -3,13 +3,415 @@
  // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
  // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
  import SwiftUI
@@ -96,6 +96,11 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    "Saves": "存檔", "Save in use": "使用中的存檔", "New empty save": "新增空白存檔", "Copy this save": "複製目前的存檔",
 +    "Rename this save": "重新命名這份存檔", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
 +    "Save %d": "存檔 %d", "%@ (copy)": "%@（副本）", "Delete \"%@\"?": "要刪除「%@」嗎？",
++    "Create an empty save?": "要新增空白存檔嗎？",
++    "The new empty save will become the save in use. Your existing saves will be kept.": "新增的空白存檔會成為使用中的存檔。原有存檔會保留。",
++    "Copy \"%@\"?": "要複製「%@」嗎？",
++    "The copy will be saved separately. Your choice of save will stay the same.": "副本會另外保存，目前使用的存檔維持原選擇。",
++    "Create": "新增", "Copy": "複製",
 +    "This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC.": "這份存檔會從 iPad 刪除。若已透過 PadSwitch 備份，可從電腦還原。",
 +    "Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along.":
 +        "每份存檔分開保存，遊戲讀的是「使用中的存檔」。新增空白存檔會從頭開始玩，其他存檔不會被動到。Switch Pad 備份存檔時每一份都會一起備份。",
@@ -413,7 +418,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
  }
  
  private struct SettingRow: View {
-@@ -18,27 +415,74 @@
+@@ -18,27 +420,74 @@
  
      private var locked: Bool { m.fromFile.contains(s.env) }
      private var note: String {
@@ -493,7 +498,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
                  } label: {
                      settingLabel
                  }
-@@ -51,81 +495,543 @@
+@@ -51,81 +500,604 @@
                          Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                      }
                      Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -693,11 +698,45 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +}
 +
-+// Save slots (SaveSlots.swift): which save the game loads. Player 1's controller: left and right on the first row switch, A on New or Copy;
-+// renaming and deleting are by touch (they need the keyboard or a confirmation)
++private enum SaveConfirmation: Equatable {
++    case create
++    case copy(SaveSlot)
++    case delete(SaveSlot)
++
++    var title: String {
++        switch self {
++        case .create: tr("Create an empty save?")
++        case .copy(let slot): tr("Copy \"%@\"?").replacingOccurrences(of: "%@", with: slot.name)
++        case .delete(let slot): tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: slot.name)
++        }
++    }
++
++    var message: String {
++        switch self {
++        case .create: tr("The new empty save will become the save in use. Your existing saves will be kept.")
++        case .copy: tr("The copy will be saved separately. Your choice of save will stay the same.")
++        case .delete: tr("This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC.")
++        }
++    }
++
++    var action: String {
++        switch self {
++        case .create: tr("Create")
++        case .copy: tr("Copy")
++        case .delete: tr("Delete")
++        }
++    }
++
++    var role: ButtonRole? {
++        if case .delete = self { return .destructive }
++        return nil
++    }
++}
++
++// Player 1's launcher navigation and touch actions both request confirmation before creating a save.
 +private struct SaveSlotsSection: View {
 +    @ObservedObject var s: SaveSlotsModel
-+    @Binding var deleting: SaveSlot?
++    let request: (SaveConfirmation) -> Void
 +    @State private var renaming = false
 +    @State private var newName = ""
 +    @Environment(\.tenFoot) private var tenFoot   // on the TV: the controller's rows only, in white (renaming and deleting are by touch, on the iPad)
@@ -716,18 +755,11 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                .pickerStyle(.menu)
 +                .nav("slot")
 +            }
-+            // UIKit can still activate a List button from a gamepad press even when our controller focus
-+            // is on a player action. Use a touch gesture here; the controller uses the explicit slotNew action.
-+            Label(tr("New empty save"), systemImage: "plus.circle")
-+                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
-+                .frame(maxWidth: .infinity, alignment: .leading)
-+                .contentShape(Rectangle())
-+                .onTapGesture { s.addEmpty() }
-+                .accessibilityAddTraits(.isButton)
-+                .accessibilityAction(named: Text(tr("New empty save"))) { s.addEmpty() }
++            saveAction("New empty save", icon: "plus.circle") { request(.create) }
 +                .nav("slotNew")
-+            Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
-+                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
++            saveAction("Copy this save", icon: "doc.on.doc") {
++                request(.copy(SaveSlot(id: s.active, name: s.activeName)))
++            }
 +                .nav("slotCopy")
 +            if !tenFoot {
 +            Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil").padding(.vertical, 6) }
@@ -735,7 +767,9 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            }
 +            if s.slots.count > 1 && !tenFoot {
 +                Menu {
-+                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
++                    ForEach(s.slots.filter { $0.id != s.active }) { slot in
++                        Button(slot.name, role: .destructive) { request(.delete(slot)) }
++                    }
 +                } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red).padding(.vertical, 6) }   // room for the icon: the menu lifts the label as it is drawn, and cut the trash can's top and bottom
 +                .listRowBackground(rowPlate)
 +            }
@@ -755,6 +789,17 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +            Button(tr("Cancel"), role: .cancel) {}
 +        }
 +    }
++
++    private func saveAction(_ title: String, icon: String, perform: @escaping () -> Void) -> some View {
++        // UIKit can route a gamepad press to a List button whose row the launcher's controller does not select.
++        Label(tr(title), systemImage: icon)
++            .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
++            .frame(maxWidth: .infinity, alignment: .leading)
++            .contentShape(Rectangle())
++            .onTapGesture(perform: perform)
++            .accessibilityAddTraits(.isButton)
++            .accessibilityAction(named: Text(tr(title))) { perform() }
++    }
 +}
 +
 +private func openGameFolder() {   // this app's Documents in the Files app (shareddocuments: scheme)
@@ -773,7 +818,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
 +    @StateObject private var activity = ActivityModel()
 +    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
-+    @State private var deleting: SaveSlot?
++    @State private var saveConfirmation: SaveConfirmation?
 +    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
 +    @StateObject private var tv = TenFoot(native: true)   // GamePicker.swift: on the TV's window, laid out at its own size (sharp text)
  
@@ -837,7 +882,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +                ScrollViewReader { proxy in
                  List {
 +                    PlayersSection(m: players)
-+                    if saves.available { SaveSlotsSection(s: saves, deleting: $deleting) }
++                    if saves.available { SaveSlotsSection(s: saves, request: requestSaveConfirmation) }
                      ForEach(m.sections, id: \.self) { section in
 -                        Section(section) {
 -                            ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
@@ -906,16 +951,15 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 -        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
 +        // The launcher owns the alert; an iPad popover in the scrolling list can pick a different anchor.
 +        .alert(
-+            tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: deleting?.name ?? ""),
-+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-+            presenting: deleting
-+        ) { slot in
-+            Button(tr("Cancel"), role: .cancel) { deleting = nil }
-+            Button(tr("Delete"), role: .destructive) { saves.delete(slot.id) }
-+        } message: { _ in
-+            Text(tr("This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC."))
++            saveConfirmation?.title ?? "",
++            isPresented: Binding(get: { saveConfirmation != nil }, set: { if !$0 { saveConfirmation = nil } }),
++            presenting: saveConfirmation
++        ) { confirmation in
++            Button(tr("Cancel"), role: .cancel) { saveConfirmation = nil }
++            Button(confirmation.action, role: confirmation.role) { confirmSaveAction(confirmation) }
++        } message: { confirmation in
++            Text(confirmation.message)
 +        }
-+        .onChange(of: deleting) { _, _ in held?.task.cancel(); held = nil }
 +        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
 +        .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
 +        .onDisappear {
@@ -924,6 +968,26 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        }
 +        .tenFoot(tv)
 +        .settleOnArrival()   // GamePicker.swift: one plain fade in
++    }
++
++    private func requestSaveConfirmation(_ confirmation: SaveConfirmation) {
++        guard !mirror, saveConfirmation == nil else { return }
++        held?.task.cancel()
++        held = nil
++        saveConfirmation = confirmation
++    }
++
++    private func confirmSaveAction(_ confirmation: SaveConfirmation) {
++        saveConfirmation = nil
++        switch confirmation {
++        case .create:
++            saves.addEmpty()
++        case .copy(let slot):
++            guard saves.active == slot.id else { return }
++            saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: slot.name))
++        case .delete(let slot):
++            saves.delete(slot.id)
++        }
 +    }
 +
 +    // The game's icon blurred over black, as behind the picker's row
@@ -970,8 +1034,10 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +        for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
 +        if saves.available {
 +            items.append(NavItem(id: "slot", slider: true, adjust: { saves.step($0) }))
-+            items.append(NavItem(id: "slotNew", activate: { saves.addEmpty() }))
-+            items.append(NavItem(id: "slotCopy", activate: { saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: saves.activeName)) }))
++            items.append(NavItem(id: "slotNew", activate: { requestSaveConfirmation(.create) }))
++            items.append(NavItem(id: "slotCopy", activate: {
++                requestSaveConfirmation(.copy(SaveSlot(id: saves.active, name: saves.activeName)))
++            }))
 +        }
 +        for section in m.sections {
 +            for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
@@ -1032,8 +1098,8 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
 +    }
 +    private func navInput(_ u: [AnyHashable: Any]?) {
 +        guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
-+        if deleting != nil {
-+            if key == "b", (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { deleting = nil }
++        if saveConfirmation != nil {
++            if key == "b", (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { saveConfirmation = nil }
 +            return
 +        }
 +        if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
@@ -1074,7 +1140,7 @@ diff --git a/dm/ios/Sources/Launcher.swift b/dm/ios/Sources/Launcher.swift
          if let i = UIImage(named: "AppIcon") { return i }
          guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
                let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-@@ -137,21 +1043,32 @@
+@@ -137,21 +1109,32 @@
  @_cdecl("dm_show_launcher")
  public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
      if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
