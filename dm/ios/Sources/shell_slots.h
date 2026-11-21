@@ -9,6 +9,8 @@ enum { SHELL_SLOT_NONE = 0, SHELL_SLOT_CONTROLLER = 1, SHELL_SLOT_PHONE = 2, SHE
 typedef struct { int kind, xbox; char label[64], name[64]; } shell_slot_info;   // xbox: the holder's buttons go by Xbox labels (A bottom); name: its identity (pad_slots.h)
 
 int shell_slot_take(const void *owner, const char *name, int kind, const char *label);   // the slot (player - 1) owner holds, taking one if it holds none (pad_slot_take's order); -1 when all are held
+int shell_slot_take_phone(const void *owner, const char *name, const char *label, int joyright);
+int shell_slot_set_joyright(const void *owner, int joyright);   // returns the phone's current slot, or -1
 int shell_slot_free(const void *owner);   // frees owner's slot and returns it, -1 when it held none; the caller releases that player's input
 int shell_slot_of(const void *owner);
 int shell_slot_held(int p);   // 1 while a controller or a phone holds player p + 1

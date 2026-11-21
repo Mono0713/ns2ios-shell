@@ -88,14 +88,15 @@ on the phone.
 - **On a TV** (USB-C to HDMI), the game fills the TV once it starts, and the iPad shows the QR code and the players. The menu's
   *Picture output* and *Sound output* move either one back to the iPad (pick the iPad's speaker when the screen has none; the
   first time, iOS asks for the microphone, which is only how it lets sound play from the speaker while HDMI is connected).
-- **Changing games** ends the app: one process can load only one game, and iOS lets no app reopen itself. SwitchPad has a
-  Shortcuts action, **SwitchPad 要重開嗎？** ("Should SwitchPad reopen?"), which is true right after *Change games* closed it,
-  so an automation can bring the app straight back to the game picker without touching its files:
+- **Changing games** ends the app so the next game can use a fresh process. Open SwitchPad again to return to the picker.
+  To make this automatic on iPadOS 26:
   1. Shortcuts → Automation → New → **App** → SwitchPad → **Is Closed** → **Run Immediately**.
-  2. Action **SwitchPad 要重開嗎？**
-  3. **If** its result **is true** → **Open App** SwitchPad.
+  2. Add only **重開 SwitchPad（換遊戲後）** ("Reopen SwitchPad after Change games"). If updating an existing automation,
+     replace its **If / Open App** steps and turn off any duplicate automation for that same trigger.
 
-  Without it, tap the SwitchPad icon after the app closes. *Close the game* leaves no file, so the app stays closed.
+  The App Is Closed trigger also runs when you switch away from SwitchPad. Turn this automation off during installation
+  or if it interrupts a test. iPadOS can refuse to launch SwitchPad while it is installing, closing or locked. In that case,
+  open it from the Home Screen when it is available. *Close the game* leaves the app closed.
 
 ## Requirements
 
@@ -244,6 +245,8 @@ supported list packs and plays from its own files.
   `DM_PHONE_PADS_PORT=<port>` moves it off 8080.
   On Android the first tap goes full screen (no address bar); on iPhone, add the page to the Home Screen and open it from there.
   **Layout** on the phone lets you drag each control and change its size (kept on that phone).
+  For games that ask for a single Joy-Con, choose **Right Joy-Con** on the phone and hold it upright. Choose **Motion: gyro**
+  and allow motion access when the game needs it. The page supplies the right stick, ABXY, R/ZR and the SL/SR rail buttons. Choose **Standard pad** to switch back.
 - **Players.** The top of the settings screen lists who plays which player: each controller and phone with its icon. Swap a
   player with another, remove one (a removed phone can join again from its page), and pick each one's button layout: Switch
   (by position) or Xbox (as printed, A at the bottom). A phone's page moves its buttons to match and shows the Xbox colours.
@@ -292,6 +295,8 @@ step in `shell_build.sh`) is written for this fork; no code was copied.
 `nx_extract` uses **[LibHac](https://github.com/Thealexbarney/LibHac)**; the shader translator embeds Ryujinx's shader library;
 shaders are translated with **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**; `zstd.exe` in the tools zip is
 Meta's **[zstd](https://github.com/facebook/zstd)** CLI v1.5.7, redistributed unmodified under its BSD licence.
+`oodle_serve.exe` in the tools zip is built from Powzix's **[ooz](https://github.com/powzix/ooz)** Oodle decoder and is
+GPL-3.0, as ooz is ([dm/tools/oodle_serve](dm/tools/oodle_serve/README.md)); the packer only runs it as a separate program.
 
 **License: MIT**, the same as upstream. [LICENSE](LICENSE) is upstream's own file and carries the original copyright notice
 (© 2026 jhaizhou — nxnative kept it from d2r-mobile, whose generic parts it started from). If you redistribute this fork or a

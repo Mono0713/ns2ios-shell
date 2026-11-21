@@ -63,8 +63,25 @@ static void mem_init_once(void) {
         g_mem_stack > RESERVE - 0x10000000 - g_mem_alias ||
         ((RESERVE | g_mem_alias | g_mem_stack) & (pg - 1)))
         die("guest address-space profile has invalid native boundaries");
-    g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (g_as == MAP_FAILED) die("reserve guest AS");
+    // Automatic room for a guessed profile (DM_MEM_PROVISIONAL, which the packer writes for a profile profile_guess.py made and nobody settled): a game with virtual
+    // address memory maps what it needs in the alias region itself, and the guessed 4.375 GB ran out in SUPER BOMBERMAN R 2 and All You Need Is Help (Unity's allocator
+    // got no address and the game crashed after its title screen; 5.375 GB fixed both by hand). Such a game gets up to DM_MEM_ALIAS_GROW more (2 GB unless set) at the
+    // end of its alias region, as much as the device lets one reservation be: address space only, nothing is mapped until the game maps it. A settled profile keeps its layout.
+    // And for every game: when the device refuses the reservation, the alias region shrinks 256 MB at a time (down to 1 GB) instead of ending the run at once
+    uint64_t grow = 0;
+    { const char *pv = getenv("DM_MEM_PROVISIONAL");
+      if (pv && atoi(pv) && sys_resource()) grow = env_u64("DM_MEM_ALIAS_GROW", 0x80000000) & ~(uint64_t)0xfffffff; }
+    uint64_t shrunk = 0;
+    for (;;) {
+        g_as = mmap(NULL, RESERVE + grow, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (g_as != MAP_FAILED) break;
+        if (grow) { grow -= 0x10000000; continue; }
+        if (g_mem_alias < 0x50000000) die("reserve guest AS (%#llx bytes)", (unsigned long long)RESERVE);
+        g_mem_alias -= 0x10000000; g_reserve -= 0x10000000; shrunk += 0x10000000;
+    }
+    if (grow) { g_reserve += grow; g_mem_alias += grow;
+        LOG("[mem] provisional profile with virtual address memory: alias region grown by %.2f GB to %.2f GB (DM_MEM_ALIAS_GROW)", grow / 1073741824.0, g_mem_alias / 1073741824.0); }
+    if (shrunk) LOG("[RED] [mem] the device refused the guest address space as profiled: alias region shrunk by %.2f GB to %.2f GB", shrunk / 1073741824.0, g_mem_alias / 1073741824.0);
     // Fixed partition (all inside the reserved block): alias 2.875 GB, stack 256 MB, heap the remaining 1.625 GB.
     // In newer SDKs the AddressRegionManager always takes 0x3fe00000 (~1 GB) at the start of the alias region as its node area (sdk 0x134728) before handing out regions; with a 512 MB alias region the very first AllocateAddressRegion fails (0x1803).
     // SMBW also defines a 1792000 KB (1.75 GB) VirtualAddressMemory in HeapDef (System/HeapSize): it is subtracted from the memory pool before the heap is opened (SetHeapSize asks for only 0x5be00000),
@@ -281,11 +298,13 @@ static void *alias_windows_thread(void *arg) {
 }
 
 int svc_thread(int num, uint64_t *regs);   // hle_thread.c: thread and synchronization kind
+__attribute__((weak)) int sf_svc(int num, uint64_t *regs);   // hle_sf.c (weak: the memory unit tests link this file alone)
 
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT: svc counts by number
     mem_init();
     if (svc_thread(num, regs)) return regs[0];
+    if (sf_svc && sf_svc(num, regs)) return regs[0];   // hle_sf.c: sm and the services behind it, answered by the host (success, zeroed output)
     switch (num) {
     case 0x01: {  // SetHeapSize(out_addr*, size)  → x1 = heap base
         size_t size = regs[1];

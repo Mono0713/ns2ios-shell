@@ -3,12 +3,14 @@
 #import <UIKit/UIKit.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <os/proc.h>          // os_proc_available_memory: the line at boot saying whether the memory entitlement took effect
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
+#include "relaunch_ticket.h"
 
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 #ifdef DM_SHELL
@@ -106,6 +108,20 @@ static void game_log_keep(NSString *doc) {
     [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     [fm removeItemAtPath:prev error:nil]; [fm moveItemAtPath:cur toPath:prev error:nil];
     [d writeToFile:cur atomically:YES];
+    // A run that crashed is also kept as <title ID>.crash.txt (and the crash before it as .crash.prev.txt), which later runs that went well do not push out: the
+    // log someone reporting a crash needs is still there however often the game was opened since. Crashed = a host crash (CRASH), a fatal host error (FATAL), the
+    // watchdog's hang exit, or the game's own abort (Break without the notification bit 31)
+    BOOL crashed = [txt containsString:@"[dm] CRASH"] || [txt containsString:@"[dm] FATAL "] || [txt containsString:@"watchdog: no progress"];
+    if (!crashed) {
+        NSRegularExpression *br = [NSRegularExpression regularExpressionWithPattern:@"Break#[0-9]+ reason=(0x[0-9A-Fa-f]+|0) " options:0 error:nil];
+        for (NSTextCheckingResult *b in [br matchesInString:txt options:0 range:NSMakeRange(0, txt.length)])
+            if (!(strtoull([txt substringWithRange:[b rangeAtIndex:1]].UTF8String, NULL, 0) & 0x80000000ull)) { crashed = YES; break; }
+    }
+    if (crashed) {
+        NSString *cc = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".crash.txt"]], *cp = [dir stringByAppendingPathComponent:[gid stringByAppendingString:@".crash.prev.txt"]];
+        [fm removeItemAtPath:cp error:nil]; [fm moveItemAtPath:cc toPath:cp error:nil];
+        [d writeToFile:cc atomically:YES];
+    }
 }
 
 // Log: the host only writes to stderr; redirect it to Documents/log.txt (the previous one is kept as log.prev.txt), retrieve it from the Files app when something goes wrong
@@ -265,6 +281,8 @@ int shell_game_unchoose(void) {
 }
 @end
 
+static _Atomic int shell_was_active;
+static _Atomic(NSTimeInterval) g_relaunch_time;
 // Scene lifecycle: create the window + hand focus events to front_ios.m
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -278,19 +296,27 @@ int shell_game_unchoose(void) {
 - (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
 - (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
 - (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
-- (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
+- (void)sceneDidBecomeActive:(UIScene *)s {
+    atomic_store(&shell_was_active, 1);
+    atomic_store(&g_relaunch_time, 0);
+    front_ios_focus_event(3);
+}
 @end
 
-// Change games left its flag: this process was started right after (ReopenIntent.swift answers a Shortcuts automation with it, so the automation needs no
-// access to the app's files, which iOS asks about again and again)
-static int g_relaunch;
-int shell_relaunch_requested(void) { return g_relaunch; }
+// Shortcuts can reopen a fresh process only after the deliberate Change games action.
+int shell_relaunch_requested(void) {
+    NSTimeInterval issued = atomic_exchange(&g_relaunch_time, 0);
+    return dm_relaunch_allowed(issued, NSDate.date.timeIntervalSince1970, atomic_load(&shell_was_active) != 0);
+}
 
 int main(int argc, char **argv) {
     @autoreleasepool {
         boot_log();
-        { NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];   // the Home menu's Change games flag (front_ios.m): this launch is the relaunch it asked for
-          if ([NSFileManager.defaultManager removeItemAtPath:[doc stringByAppendingPathComponent:@"relaunch.txt"] error:nil]) { g_relaunch = 1; fprintf(stderr, "boot: relaunched after Change games\n"); } }
+        NSTimeInterval issued = dm_take_relaunch_ticket(dm_relaunch_ticket_url());
+        if (dm_relaunch_allowed(issued, NSDate.date.timeIntervalSince1970, NO)) {
+            atomic_store(&g_relaunch_time, issued);
+            fprintf(stderr, "boot: fresh Change games request\n");
+        }
         g_game_root = NSBundle.mainBundle.resourcePath;
         NSArray<NSString *> *ids = shell_game_ids();
         setenv("DM_SHELL_GAMES", @(ids.count).stringValue.UTF8String, 1);   // the launcher offers to change games when there is more than one
