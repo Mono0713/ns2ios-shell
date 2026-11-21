@@ -4,17 +4,8 @@
 import AppIntents
 import UIKit
 
-@_silgen_name("shell_relaunch_requested") private func shellRelaunchRequested() -> Int32   // yes once (main.m): later closes answer no
-@_silgen_name("shell_ever_active") private func shellEverActive() -> Int32
-
-// Started in the background only to answer (never on screen): end the process, so Open App starts SwitchPad fresh and a plain close leaves nothing
-// running. A process that has been on screen is the user's, gone to the Home Screen with its game: left alone
-@MainActor private func endIfOnlyAnswering() {
-    if shellEverActive() != 0 { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-        if UIApplication.shared.applicationState == .background && shellEverActive() == 0 { fflush(stderr); exit(0) }
-    }
-}
+// The app may be opening as a shortcut finishes. Return the result and let iPadOS manage the process.
+@_silgen_name("shell_relaunch_requested") private func shellRelaunchRequested() -> Int32
 
 struct ShouldReopenIntent: AppIntent {
     static var title: LocalizedStringResource = "SwitchPad 要重開嗎？"
@@ -23,8 +14,7 @@ struct ShouldReopenIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
-        let yes = shellRelaunchRequested() != 0
-        if !yes { endIfOnlyAnswering() }
+        let yes = shellRelaunchRequested() != 0 && UIApplication.shared.isProtectedDataAvailable
         return .result(value: yes)
     }
 }
@@ -39,11 +29,18 @@ struct ReopenAfterChangeIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        if shellRelaunchRequested() != 0 && systemContext.currentMode.canContinueInForeground {
-            try await continueInForeground(alwaysConfirm: false)
-            return .result()
+        if shellRelaunchRequested() != 0 {
+            if systemContext.currentMode == .foreground { return .result() }
+            if UIApplication.shared.isProtectedDataAvailable && systemContext.currentMode.canContinueInForeground {
+                do {
+                    try await continueInForeground(alwaysConfirm: false)
+                    return .result()
+                } catch {
+                    // The device can lock after the availability check. Let Shortcuts finish quietly.
+                    fputs("shortcuts: iPadOS declined to bring SwitchPad to the foreground\n", stderr)
+                }
+            }
         }
-        endIfOnlyAnswering()   // a plain close: nothing to do, and nothing left running
         return .result()
     }
 }

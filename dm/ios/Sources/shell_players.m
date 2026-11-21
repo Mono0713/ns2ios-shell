@@ -25,6 +25,7 @@
 #import <CoreHaptics/CoreHaptics.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <string.h>
 #include <time.h>
 #include "dm.h"
@@ -96,7 +97,7 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
 }
 
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
-static void read_pad(GCController *c) {
+static void read_pad(GCController *c, bool layout_changed) {
     GCExtendedGamepad *g = c.extendedGamepad;
     int p = shell_slot_of((__bridge const void *)c); if (p < 0 || !g) return;
     dm_haptics_apple_controller(p, c);
@@ -111,6 +112,12 @@ static void read_pad(GCController *c) {
     #undef K
     int32_t lx = axis(g.leftThumbstick.xAxis.value), ly = axis(g.leftThumbstick.yAxis.value);
     dm_pad_set_player(p, m, lx, ly, axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+    if (layout_changed) {
+        // A held face button just acquired another label. This sample is a layout change, not a press.
+        const uint64_t face = (1ull << B_A) | (1ull << B_B) | (1ull << B_X) | (1ull << B_Y);
+        uint64_t old = atomic_load(&g_last_nav[p]);
+        atomic_store(&g_last_nav[p], (old & ~face) | (m & face));
+    }
     shell_slot_input(p, m, lx, ly);
 }
 
@@ -162,7 +169,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         if (p < 0) { LOG("controller connected: all %d players are taken, not used", DM_PLAYERS); continue; }
         [g_pads addObject:c];
         shell_slot_set_layout(p, wanted_layout(SHELL_SLOT_CONTROLLER, name, name));
-        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g.controller); };
+        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g.controller, false); };
         GCControllerButtonInput *home = c.extendedGamepad.buttonHome;   // the Xbox button, PlayStation's PS, the Pro Controller's Home: the app's menu, not the system's
         if (home) {
             home.preferredSystemGestureState = GCSystemGestureStateDisabled;
@@ -175,7 +182,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
         }
         motion_on(c);
         LOG("controller '%s' connected: player %d", name, p + 1);
-        read_pad(c);
+        read_pad(c, false);
     }
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: the touch gamepad hides while a controller or phone plays
 }
@@ -186,7 +193,7 @@ static void on_moved(const void *owner, int from, int to) {
     GCController *c = pad_of(owner); if (!c) return;
     dm_haptics_apple_controller(from, nil);   // its new player's rumble from now on (read_pad registers it there)
     LOG("controller '%s' moved in the launcher: player %d -> %d", c.vendorName.UTF8String ?: "?", from + 1, to + 1);
-    read_pad(c);
+    read_pad(c, false);
 }
 static void on_kick(const void *owner) {
     GCController *c = pad_of(owner); if (!c) return;
@@ -196,7 +203,7 @@ static void on_kick(const void *owner) {
     stop_using(c, p);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];
 }
-static void on_layout(const void *owner, int xbox) { (void)xbox; GCController *c = pad_of(owner); if (c) read_pad(c); }
+static void on_layout(const void *owner, int xbox) { (void)xbox; GCController *c = pad_of(owner); if (c) read_pad(c, true); }
 static void on_identify(const void *owner) {   // the launcher's "which one is this?": a short rumble of its own (an engine apart from the game's, stopped after it)
     GCController *c = pad_of(owner); if (!c.haptics) return;
     CHHapticEngine *e = [c.haptics createEngineWithLocality:GCHapticsLocalityDefault]; NSError *err = nil;

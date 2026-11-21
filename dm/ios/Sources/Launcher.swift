@@ -93,7 +93,12 @@ private let zhText: [String: String] = [
     "Saves": "存檔", "Save in use": "使用中的存檔", "New empty save": "新增空白存檔", "Copy this save": "複製目前的存檔",
     "Rename this save": "重新命名這份存檔", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
     "Save %d": "存檔 %d", "%@ (copy)": "%@（副本）", "Delete \"%@\"?": "要刪除「%@」嗎？",
-    "Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it.": "這份存檔會從 iPad 刪除。電腦上（Switch Pad）的存檔備份裡還找得到。",
+    "Create an empty save?": "要新增空白存檔嗎？",
+    "The new empty save will become the save in use. Your existing saves will be kept.": "新增的空白存檔會成為使用中的存檔。原有存檔會保留。",
+    "Copy \"%@\"?": "要複製「%@」嗎？",
+    "The copy will be saved separately. Your choice of save will stay the same.": "副本會另外保存，目前使用的存檔維持原選擇。",
+    "Create": "新增", "Copy": "複製",
+    "This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC.": "這份存檔會從 iPad 刪除。若已透過 PadSwitch 備份，可從電腦還原。",
     "Each save is kept apart. The game loads the one in use; a new empty save starts the game from the beginning, and the others stay as they are. Switch Pad's save backups take every save along.":
         "每份存檔分開保存，遊戲讀的是「使用中的存檔」。新增空白存檔會從頭開始玩，其他存檔不會被動到。Switch Pad 備份存檔時每一份都會一起備份。",
     "Could not switch saves": "切換存檔失敗", "Could not add a save": "新增存檔失敗", "Could not copy the save": "複製存檔失敗",
@@ -688,13 +693,47 @@ private struct TouchStyleRow: View {   // opacity or size of the touch controls,
     }
 }
 
-// Save slots (SaveSlots.swift): which save the game loads. Player 1's controller: left and right on the first row switch, A on New or Copy;
-// renaming and deleting are by touch (they need the keyboard or a confirmation)
+private enum SaveConfirmation: Equatable {
+    case create
+    case copy(SaveSlot)
+    case delete(SaveSlot)
+
+    var title: String {
+        switch self {
+        case .create: tr("Create an empty save?")
+        case .copy(let slot): tr("Copy \"%@\"?").replacingOccurrences(of: "%@", with: slot.name)
+        case .delete(let slot): tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: slot.name)
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .create: tr("The new empty save will become the save in use. Your existing saves will be kept.")
+        case .copy: tr("The copy will be saved separately. Your choice of save will stay the same.")
+        case .delete: tr("This save will be deleted from the iPad. If you backed it up with PadSwitch, you can restore it from your PC.")
+        }
+    }
+
+    var action: String {
+        switch self {
+        case .create: tr("Create")
+        case .copy: tr("Copy")
+        case .delete: tr("Delete")
+        }
+    }
+
+    var role: ButtonRole? {
+        if case .delete = self { return .destructive }
+        return nil
+    }
+}
+
+// Player 1's launcher navigation and touch actions both request confirmation before creating a save.
 private struct SaveSlotsSection: View {
     @ObservedObject var s: SaveSlotsModel
+    let request: (SaveConfirmation) -> Void
     @State private var renaming = false
     @State private var newName = ""
-    @State private var deleting: SaveSlot?
     @Environment(\.tenFoot) private var tenFoot   // on the TV: the controller's rows only, in white (renaming and deleting are by touch, on the iPad)
     @Environment(\.uiK) private var k
 
@@ -711,11 +750,11 @@ private struct SaveSlotsSection: View {
                 .pickerStyle(.menu)
                 .nav("slot")
             }
-            Button { s.addEmpty() } label: { Label(tr("New empty save"), systemImage: "plus.circle") }
-                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
+            saveAction("New empty save", icon: "plus.circle") { request(.create) }
                 .nav("slotNew")
-            Button { s.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: s.activeName)) } label: { Label(tr("Copy this save"), systemImage: "doc.on.doc") }
-                .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
+            saveAction("Copy this save", icon: "doc.on.doc") {
+                request(.copy(SaveSlot(id: s.active, name: s.activeName)))
+            }
                 .nav("slotCopy")
             if !tenFoot {
             Button { newName = s.activeName; renaming = true } label: { Label(tr("Rename this save"), systemImage: "pencil").padding(.vertical, 6) }
@@ -723,7 +762,9 @@ private struct SaveSlotsSection: View {
             }
             if s.slots.count > 1 && !tenFoot {
                 Menu {
-                    ForEach(s.slots.filter { $0.id != s.active }) { slot in Button(slot.name, role: .destructive) { deleting = slot } }
+                    ForEach(s.slots.filter { $0.id != s.active }) { slot in
+                        Button(slot.name, role: .destructive) { request(.delete(slot)) }
+                    }
                 } label: { Label(tr("Delete a save"), systemImage: "trash").foregroundStyle(.red).padding(.vertical, 6) }   // room for the icon: the menu lifts the label as it is drawn, and cut the trash can's top and bottom
                 .listRowBackground(rowPlate)
             }
@@ -732,23 +773,27 @@ private struct SaveSlotsSection: View {
         } footer: {
             if let p = s.problem { Text(tr(p.what) + ": " + p.detail).foregroundStyle(.red) }
         }
-        // B on the controller cancels them (renaming types on the keyboard, by touch; the controller cannot reach the alert's buttons)
+        // B on the controller cancels renaming (the keyboard is used by touch).
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { n in
             guard (n.userInfo?["key"] as? String) == "b", (n.userInfo?["on"] as? Int ?? 1) != 0 else { return }
             if renaming { renaming = false }
-            if deleting != nil { deleting = nil }
         }
         .alert(tr("Rename this save"), isPresented: $renaming) {
             TextField(tr("Name"), text: $newName)
             Button(tr("Rename")) { s.rename(s.active, newName) }
             Button(tr("Cancel"), role: .cancel) {}
         }
-        .confirmationDialog(tr("Delete \"%@\"?").replacingOccurrences(of: "%@", with: deleting?.name ?? ""), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-            Button(tr("Delete"), role: .destructive) { if let d = deleting { s.delete(d.id) }; deleting = nil }
-            Button(tr("Cancel"), role: .cancel) { deleting = nil }
-        } message: {
-            Text(tr("Its files are deleted from the iPad. A backup on the PC (Switch Pad) still has it."))
-        }
+    }
+
+    private func saveAction(_ title: String, icon: String, perform: @escaping () -> Void) -> some View {
+        // UIKit can route a gamepad press to a List button whose row the launcher's controller does not select.
+        Label(tr(title), systemImage: icon)
+            .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: perform)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: Text(tr(title))) { perform() }
     }
 }
 
@@ -767,6 +812,7 @@ private struct LauncherView: View {
     @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
     @StateObject private var activity = ActivityModel()
     @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
+    @State private var saveConfirmation: SaveConfirmation?
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
     @StateObject private var tv = TenFoot(native: true)   // GamePicker.swift: on the TV's window, laid out at its own size (sharp text)
 
@@ -820,7 +866,7 @@ private struct LauncherView: View {
                 ScrollViewReader { proxy in
                 List {
                     PlayersSection(m: players)
-                    if saves.available { SaveSlotsSection(s: saves) }
+                    if saves.available { SaveSlotsSection(s: saves, request: requestSaveConfirmation) }
                     ForEach(m.sections, id: \.self) { section in
                         Section {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
@@ -864,6 +910,17 @@ private struct LauncherView: View {
         .environmentObject(nav)
         .environmentObject(activity)
         .preferredColorScheme(.dark)
+        // The launcher owns the alert; an iPad popover in the scrolling list can pick a different anchor.
+        .alert(
+            saveConfirmation?.title ?? "",
+            isPresented: Binding(get: { saveConfirmation != nil }, set: { if !$0 { saveConfirmation = nil } }),
+            presenting: saveConfirmation
+        ) { confirmation in
+            Button(tr("Cancel"), role: .cancel) { saveConfirmation = nil }
+            Button(confirmation.action, role: confirmation.role) { confirmSaveAction(confirmation) }
+        } message: { confirmation in
+            Text(confirmation.message)
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
         .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear {
@@ -872,6 +929,26 @@ private struct LauncherView: View {
         }
         .tenFoot(tv)
         .settleOnArrival()   // GamePicker.swift: one plain fade in
+    }
+
+    private func requestSaveConfirmation(_ confirmation: SaveConfirmation) {
+        guard !mirror, saveConfirmation == nil else { return }
+        held?.task.cancel()
+        held = nil
+        saveConfirmation = confirmation
+    }
+
+    private func confirmSaveAction(_ confirmation: SaveConfirmation) {
+        saveConfirmation = nil
+        switch confirmation {
+        case .create:
+            saves.addEmpty()
+        case .copy(let slot):
+            guard saves.active == slot.id else { return }
+            saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: slot.name))
+        case .delete(let slot):
+            saves.delete(slot.id)
+        }
     }
 
     // The game's icon blurred over black, as behind the picker's row
@@ -918,8 +995,10 @@ private struct LauncherView: View {
         for r in players.removed { items.append(NavItem(id: "r\(r.index)", activate: { players.send(["op": "add", "index": r.index]) })) }
         if saves.available {
             items.append(NavItem(id: "slot", slider: true, adjust: { saves.step($0) }))
-            items.append(NavItem(id: "slotNew", activate: { saves.addEmpty() }))
-            items.append(NavItem(id: "slotCopy", activate: { saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: saves.activeName)) }))
+            items.append(NavItem(id: "slotNew", activate: { requestSaveConfirmation(.create) }))
+            items.append(NavItem(id: "slotCopy", activate: {
+                requestSaveConfirmation(.copy(SaveSlot(id: saves.active, name: saves.activeName)))
+            }))
         }
         for section in m.sections {
             for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
@@ -980,6 +1059,10 @@ private struct LauncherView: View {
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
         guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
+        if saveConfirmation != nil {
+            if key == "b", (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { saveConfirmation = nil }
+            return
+        }
         if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
         if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
         held?.task.cancel(); held = nil

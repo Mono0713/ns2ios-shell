@@ -88,14 +88,15 @@ on the phone.
 - **On a TV** (USB-C to HDMI), the game fills the TV once it starts, and the iPad shows the QR code and the players. The menu's
   *Picture output* and *Sound output* move either one back to the iPad (pick the iPad's speaker when the screen has none; the
   first time, iOS asks for the microphone, which is only how it lets sound play from the speaker while HDMI is connected).
-- **Changing games** ends the app: one process can load only one game, and iOS lets no app reopen itself. SwitchPad has a
-  Shortcuts action, **SwitchPad 要重開嗎？** ("Should SwitchPad reopen?"), which is true right after *Change games* closed it,
-  so an automation can bring the app straight back to the game picker without touching its files:
+- **Changing games** ends the app so the next game can use a fresh process. Open SwitchPad again to return to the picker.
+  To make this automatic on iPadOS 26:
   1. Shortcuts → Automation → New → **App** → SwitchPad → **Is Closed** → **Run Immediately**.
-  2. Action **SwitchPad 要重開嗎？**
-  3. **If** its result **is true** → **Open App** SwitchPad.
+  2. Add only **重開 SwitchPad（換遊戲後）** ("Reopen SwitchPad after Change games"). If updating an existing automation,
+     replace its **If / Open App** steps and turn off any duplicate automation for that same trigger.
 
-  Without it, tap the SwitchPad icon after the app closes. *Close the game* leaves no file, so the app stays closed.
+  The App Is Closed trigger also runs when you switch away from SwitchPad. Turn this automation off during installation
+  or if it interrupts a test. iPadOS can refuse to launch SwitchPad while it is installing, closing or locked. In that case,
+  open it from the Home Screen when it is available. *Close the game* leaves the app closed.
 
 ## Requirements
 

@@ -192,8 +192,7 @@ public func dmPregameMirrorMake() -> UnsafeMutableRawPointer {   // a retained U
     return Unmanaged.passRetained(h as UIViewController).toOpaque()
 }
 
-// A screen arriving (the picker back from the launcher, the launcher from the picker) comes in as one plain fade, the presentation's: for its first moment
-// no part of it animates on its own (sizes settling, the row taking its place, a button appearing)
+// On the settings screen, let the initial list layout settle during the presentation fade.
 private struct Settle: ViewModifier {
     @State private var settled = false
     func body(content: Content) -> some View {
@@ -269,10 +268,11 @@ private struct FocusRing: ViewModifier {
         content
             .overlay {
                 RoundedRectangle(cornerRadius: tileRadius(side) + 7 * k, style: .continuous)
-                    .stroke(focused ? Color.white.opacity(0.95) : .clear, lineWidth: 4 * k).padding(-8 * k)
+                    .strokeBorder(focused ? Color.white.opacity(0.95) : .clear, lineWidth: 4 * k)
+                    .padding((grid ? -6 : -10) * k)
             }
             .shadow(color: .black.opacity(focused ? 0.55 : 0.4), radius: (focused ? 22 : 8) * k, y: (focused ? 14 : 4) * k)
-            .scaleEffect(focused ? (grid ? 1.06 : 1) : (grid ? 1 : 0.84))
+            .scaleEffect(focused || grid ? 1 : 0.84)
             .opacity(focused || grid ? 1 : 0.6)
             .animation(.spring(response: 0.35, dampingFraction: 0.82), value: focused)
     }
@@ -720,7 +720,7 @@ private struct GameGrid: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(side), spacing: gap), count: cols), spacing: 26 * k) {
                     ForEach(Array(m.games.enumerated()), id: \.element.id) { i, g in
                         let on = m.focus == i + 1
-                        VStack(spacing: 10 * k) {
+                        VStack(spacing: 14 * k) {
                             GameTile(game: g, focused: on, side: side, grid: true)
                             Text(g.name).font(.ds(.footnote, on ? .bold : .semibold, k: k)).lineLimit(1).truncationMode(.tail)
                                 .foregroundStyle(.white.opacity(on ? 1 : 0.65)).frame(width: side + gap * 0.8)
@@ -740,6 +740,7 @@ private struct GameGrid: View {
             .onChange(of: m.pos) { _, _ in if let id = m.game(m.focus)?.id { withAnimation(DS.spring) { proxy.scrollTo(id, anchor: .center) } } }
             .onAppear { if let id = m.game(m.focus)?.id { proxy.scrollTo(id, anchor: .center) } }
         }
+        .clipped()
         .onChange(of: cols, initial: true) { _, c in m.gridCols = c }
     }
 }
@@ -763,6 +764,7 @@ private struct PickerView: View {
             ZStack {
                 VStack(spacing: 0) {
                     header(k).padding(.horizontal, 32 * k).padding(.top, 22 * k)
+                        .padding(.bottom, m.gridOpen ? 12 * k : 0)
                     if m.gridOpen {
                         GameGrid(m: m, width: g.size.width, cols: tv.on ? 6 : g.size.width > g.size.height ? 7 : 5)
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
@@ -776,6 +778,7 @@ private struct PickerView: View {
                         .transition(.opacity)
                     }
                     footer(k).padding(.horizontal, 32 * k).padding(.bottom, 22 * k)
+                        .padding(.top, m.gridOpen ? 12 * k : 0)
                 }
                 .animation(DS.pop, value: m.gridOpen)
                 if m.padsOpen {
@@ -800,7 +803,6 @@ private struct PickerView: View {
         .onDisappear { held?.task.cancel() }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
         .tenFoot(tv)
-        .settleOnArrival()   // one plain fade in
     }
 
     // The tiles, the chosen one in the middle of the screen; a swipe moves by as many tiles as it throws
@@ -844,13 +846,18 @@ private struct PickerView: View {
 
     private func backdrop(_ game: PickerGame?) -> some View {
         ZStack {
-            Color.black
             if let game, let icon = game.icon, let soft = blurredIcon(icon, key: game.id) {
                 Image(uiImage: soft).resizable().interpolation(.medium).scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .scaleEffect(1.4).opacity(0.55)
+                    .scaleEffect(1.4)
                     .id(game.id).transition(.opacity)
             }
+        }
+        // The outgoing image stays above the black fill until SwiftUI finishes fading it out.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opacity(0.55)
+        .background(.black)
+        .overlay {
             LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
         }
         .ignoresSafeArea()
@@ -867,7 +874,7 @@ private struct PickerView: View {
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text(appName).font(.ds(.subheadline, .semibold, k: k)).foregroundStyle(.white.opacity(0.55))
-                HStack(alignment: .firstTextBaseline, spacing: 12 * k) {
+                HStack(spacing: 12 * k) {
                     Text(m.gridOpen ? tr("所有遊戲", "All games") : tr("選擇遊戲", "Choose a game")).font(.ds(.largeTitle, .bold, k: k)).contentTransition(.opacity)
                     if m.gridOpen { Chip(text: tr("\(m.games.count) 款", "\(m.games.count)")).transition(.opacity) }
                 }
@@ -954,6 +961,7 @@ private struct PickerView: View {
         guard let key = u?["key"] as? String, (u?["p"] as? Int ?? 1) == 1 else { return }   // player 1 drives it, as in the launcher
         if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
         held?.task.cancel(); held = nil
+        guard !m.starting else { return }
         if m.padsOpen { cardInput(key); return }
         switch key {
         case "y": m.padsOpen = true
@@ -985,9 +993,12 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     PregameStage.shared.showPicker({ AnyView(PickerView(m: model)) }, fresh: fresh)   // the TV's copy in handheld mode
     // The blurred backdrops and, with a TV, the enlarged icons made ahead, off the main thread: the TV's copy (built again on the way back from the
     // launcher) had to make them all as it appeared, and came in well after the iPad
-    let games = model.games, tvToo = UIApplication.shared.connectedScenes.contains { $0.session.role == .windowExternalDisplayNonInteractive }
-    DispatchQueue.global(qos: .userInitiated).async {
-        for g in games { if let i = g.icon { _ = blurredIcon(i, key: g.id); if tvToo { _ = tvIcon(i, key: g.id) } } }
+    if fresh {
+        let games = model.games
+        let tvToo = UIApplication.shared.connectedScenes.contains { $0.session.role == .windowExternalDisplayNonInteractive }
+        DispatchQueue.global(qos: .userInitiated).async {
+            for g in games { if let i = g.icon { _ = blurredIcon(i, key: g.id); if tvToo { _ = tvIcon(i, key: g.id) } } }
+        }
     }
     controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen

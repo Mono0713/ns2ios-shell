@@ -21,6 +21,7 @@
 #include "haptics_apple.h"
 #include "dm_input.h"
 #include "shell_slots.h"
+#include "relaunch_ticket.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
@@ -1148,13 +1149,8 @@ static void home_menu_close(void) {
     resume_when_released(g_menu_gen, 0);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the TV panel's Pause / Continue
 }
-// Change games leaves Documents/relaunch.txt behind; the next launch takes it (main.m) and the Shortcuts action "SwitchPad 要重開嗎？" (ReopenIntent.swift) answers yes, so an automation on "SwitchPad is closed"
-// brings the app straight back to the picker with nobody touching the iPad; Close the game leaves none, and the next launch removes it (main.m)
+// Closing from the Home menu is deliberate. Only Change games grants the next process a one-shot relaunch request.
 static void home_menu_quit(int relaunch) {
-    if (relaunch) {
-        NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-        [@"change games\n" writeToFile:[doc stringByAppendingPathComponent:@"relaunch.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    }
     BOOL z = zh_ui();
     for (UIView *card in g_menu_cards) {
         UIView *keep = [card viewWithTag:1];
@@ -1168,11 +1164,18 @@ static void home_menu_quit(int relaunch) {
             [card addSubview:l];
         } completion:nil];
     }
-    LOG("front end: Home menu: closing the app to change games");
+    LOG("front end: Home menu: user confirmed %s", relaunch ? "Change games" : "Close the game");
     fflush(stderr);
-    // iOS lets no app open itself again, and a process cannot load a second game (its program sits at fixed addresses), so the app ends here and the next
-    // launch shows the picker; 2 s for the line above
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ fflush(stderr); exit(0); });
+    // The next game needs a fresh process. Leave the request just before exiting, after the closing animation.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (relaunch) {
+            NSError *error = nil;
+            if (!dm_write_relaunch_ticket(dm_relaunch_ticket_url(), &error))
+                LOG("front end: cannot save Change games request: %s", error.localizedDescription.UTF8String ?: "unknown error");
+        }
+        fflush(stderr);
+        exit(0);
+    });
 }
 static void players_cmd(NSDictionary *u) { [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:u]; }
 static void menu_refresh(int sel) {   // the same page drawn again (a value changed): no slide, the pill moves from where it was
