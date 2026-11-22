@@ -150,7 +150,7 @@ static BOOL volume_adjust(int dir) {
 @implementation DmVolumeSlider
 - (void)accessibilityIncrement { volume_adjust(1); }
 - (void)accessibilityDecrement { volume_adjust(-1); }
-- (BOOL)beginTracking:(UITouch *)touch withEvent:(UIEvent *)event {
+- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     volume_hold_stop();
     CGRect track = [self trackRectForBounds:self.bounds];
     CGRect low = [self thumbRectForBounds:self.bounds trackRect:track value:self.minimumValue];
@@ -162,7 +162,7 @@ static BOOL volume_adjust(int dir) {
         self.value = volume_quantized((point.x - CGRectGetMidX(low)) / span);
         [self sendActionsForControlEvents:UIControlEventValueChanged];
     }
-    return [super beginTracking:touch withEvent:event];
+    return [super beginTrackingWithTouch:touch withEvent:event];
 }
 @end
 
