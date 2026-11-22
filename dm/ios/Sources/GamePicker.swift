@@ -571,6 +571,7 @@ private struct PadsCard: View {
     @Environment(\.tenFoot) private var tenFoot
     // its places have fixed sizes: its text a size smaller than the rest of the TV layout (Dynamic Type's xLarge, as before), the boxes k times
     private var t: CGFloat { tenFoot ? k * 0.68 : 1 }
+    @ScaledMetric(relativeTo: .title2) private var addressSize: CGFloat = 24
     @State private var frames: [Int: CGRect] = [:]   // each place, in the grid's space: where a dragged player lands
     @State private var dragging: Int?
     @State private var dragOffset: CGSize = .zero
@@ -596,7 +597,10 @@ private struct PadsCard: View {
                     .frame(width: 230 * k, height: 230 * k).clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
                     if let url = pads.url {
                         // what a phone's browser takes typed in (it adds http:// itself), as wide as the code above it and in the card's own type
-                        Text(shortURL(url)).font(.ds(.title3, .semibold, k: t)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                        Text(shortURL(url))
+                            .font(.system(size: addressSize * k, weight: .semibold).monospacedDigit())
+                            .lineLimit(1).minimumScaleFactor(0.5)
+                            .padding(.horizontal, 10 * k)
                             .frame(width: 230 * k).padding(.vertical, 8 * k)
                             .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
                             .accessibilityLabel(url)
@@ -640,10 +644,14 @@ private struct PadsCard: View {
                 Text(padName(p)).font(.ds(.headline, k: t)).lineLimit(1).minimumScaleFactor(0.7)
                 Spacer(minLength: 4 * k)
                 Button { players.send(["op": "layout", "p": n, "xbox": p.xbox ? 0 : 1]) } label: {
-                    Text((p.xbox ? "Xbox" : "Switch") + " ⇄").font(.ds(.footnote, .semibold, k: t)).padding(.horizontal, 9 * k).padding(.vertical, 4 * k)
+                    Text((p.xbox ? "Xbox" : "Switch") + " ⇄")
+                        .font(.ds(.footnote, .semibold, k: t))
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .padding(.horizontal, 9 * k).padding(.vertical, 4 * k)
                         .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                 }
                 .buttonStyle(.plain).accessibilityLabel(tr("切換配置", "Button layout"))
+                .layoutPriority(1)
                 Button { players.send(["op": "kick", "p": n]) } label: {
                     Image(systemName: "xmark").font(.ds(.footnote, .bold, k: t)).frame(width: 30 * k, height: 30 * k).background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
                 }

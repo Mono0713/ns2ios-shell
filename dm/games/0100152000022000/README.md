@@ -66,3 +66,7 @@ General host changes first needed here; each applies to every game:
 ## Open
 
 - Mii heads draw nothing: the host ships no MiiModel firmware data (the player README notes "no Mii heads").
+
+### Local multiplayer character selection on iPad
+
+On 4.0.1 (main build ID 158c0c7399aabd7bf83795c2ef3484c7), the two-player picker looks frozen, including the character animations. The host continues presenting frames with a steady drawing workload. A Control Center focus round trip restores the picker. The guest receives the two-player result at main+0x86105c. In the focus notification handler at main+0x8da04c, message 15 in focus state 1 clears the focus flags and requests a controller refresh. See [Foreground controller applet completion](../../../docs/reference/services.md#foreground-controller-applet-completion). Resuming animation, accepting both controllers and entering a race still need an iPad test of the new host.

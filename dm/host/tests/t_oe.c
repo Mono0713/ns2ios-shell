@@ -10,6 +10,7 @@ uint64_t now_ns(void) { return 0; }
 void dm_audio_suspend(int on) { (void)on; }   // stubs for the bg item of DM_OE_SCRIPT (hle_audio.c / hle_os.c / hle_nvn.c)
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }
 void dm_gfx_suspend(int on) { (void)on; }
+void dm_thread_native_wait(int entering) { (void)entering; }
 // The notification event (hle_thread.c binds a kernel event): the unit test only tracks whether it is signalled
 static int ev_bound, ev_sig;
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; ev_bound = 1; }
@@ -122,5 +123,15 @@ int main(void) {
     CHECK(pop_is(15) && empty(), "focus mode 2: focus notification 15");
     h_oe_SetFocusMode(1); dm_focus_set(2);
     CHECK(pop_is(15) && empty(), "focus mode 1: focus notification 15");
+    dm_focus_return_from_applet();
+    CHECK(empty() && dm_focus_now() == 2, "applet completion cannot take focus from the front end");
+    dm_focus_set(1); CHECK(pop_is(15), "front-end activation remains independent");
+    dm_focus_return_from_applet(); dm_focus_return_from_applet();
+    CHECK(pop_is(15) && empty() && dm_focus_now() == 1, "applet completion refreshes focus once without an artificial transition");
+    h_oe_SetFocusMode(3);
+    dm_focus_return_from_applet();
+    CHECK(empty(), "applet completion respects the game's focus notification mode");
+    reset(); dm_focus_return_from_applet();
+    CHECK(empty(), "applet completion requires an explicit focus notification mode");
     printf("== oe %d checks, %d failed ==\n", checks, fails); return fails != 0;
 }

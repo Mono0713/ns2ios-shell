@@ -13,6 +13,8 @@ static time_t rumble_second = 1;
 static int hid_clock_gettime(clockid_t clock, struct timespec *ts) { (void)clock; *ts = (struct timespec){.tv_sec = rumble_second}; return 0; }
 #define CHECK(c, msg) do { checks++; if (!(c)) { fails++; fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); } } while (0)
 int dm_opmode(void) { return g_mode; }
+static int applet_returns;
+void dm_focus_return_from_applet(void) { applet_returns++; }
 uint64_t guest_ns(void) { return 1000000000ull; }
 uint64_t now_ns(void) { return 1000000000ull; }
 uint64_t dm_guest_frame(void) { return 0; }
@@ -81,6 +83,8 @@ static void t_npads(void) {
     CHECK(h_hid_Led(&(uint32_t){0}) == 0x1 && h_hid_Led(&(uint32_t){1}) == 0x3 && h_hid_Led(&(uint32_t){7}) == 0x6, "player LED patterns");
     int32_t info[2]; int8_t arg[8] = {1, 4};
     CHECK(h_hid_ShowCtrl(info, arg) == RES_OK && info[0] == 2 && info[1] == 0, "the controller applet reports two players, player 1 selected");
+    CHECK(applet_returns == 1, "completing the controller applet reports the return to the foreground");
+    CHECK(h_hid_ShowCtrl0(arg) == RES_OK && applet_returns == 2, "the overload without a result also reports the return");
     arg[1] = 1; h_hid_ShowCtrl(info, arg);
     CHECK(info[0] == 1, "the applet's count is capped at the game's maximum");
     CHECK(six_player(0x0100 | 0) == 1 && six_player(0x0200 | 0) < 0, "player 2 has a six-axis sensor, No3 none");

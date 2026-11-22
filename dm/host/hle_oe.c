@@ -72,6 +72,17 @@ void dm_focus_set(int st) {
     LOG("oe focus state → %d", st);
     if (focus_notifies()) mq_push(MSG_FOCUS);
 }
+
+void dm_focus_return_from_applet(void) {
+    // Focus invalidation normally follows a foreground library applet. Completing
+    // an applet synchronously leaves the actual front-end focus state unchanged.
+    int mode = atomic_load(&g_focus_mode);
+    if (dm_focus_now() == 1 && (mode == 1 || mode == 2)) {
+        LOG("oe: focus notification after controller applet completion");
+        mq_push(MSG_FOCUS);
+    }
+}
+
 static int opmode(void) { return dm_opmode(); }
 
 // Screenshot / video recording switches: the host has no system screenshot service, no-op

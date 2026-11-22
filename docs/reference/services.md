@@ -387,6 +387,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** `oe::IsCpuOverclockEnabled` is hooked; for `SetCpuOverclockEnabled` the host keeps the flag and the query reports it (`hle_oe.c`); it does not scale clocks.
 - **Found on:** [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md) (SDK 11: `IsCpuOverclockEnabled`); [Taiko Risshiden V DX](../../dm/games/0100346017304000/README.md) (SDK 12.3.3: `SetCpuOverclockEnabled`).
 
+### Foreground controller applet completion
+
+- **Symptom:** both controllers join, but the local character picker remains unresponsive until the app loses and regains focus.
+- **Cause:** the foreground controller applet is answered synchronously by the host, which used to return the player count without notifying the guest that it had regained focus.
+- **Fix:** send the focus invalidation on controller applet completion while the host is currently focused and the guest opted into focus notifications. Background transitions remain owned by the front end.
+- **Found on:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md#local-multiplayer-character-selection-on-ipad).
+
 ### Focus handling mode decides whether focus changes are notified
 
 - **Symptom:** the game freezes after switching apps and back, picture still, sound on; the main loop waits in its pause handshake (`main+0x5d10d4` / `main+0x5cea68`). Mac repro `DM_OE_SCRIPT=bg=1@20,bg=0@25`.
