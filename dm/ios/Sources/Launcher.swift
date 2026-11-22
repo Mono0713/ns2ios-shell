@@ -206,15 +206,18 @@ private struct LayoutSwitch: View {
     let xbox: Bool
     let set: (Bool) -> Void
     @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
+    @Environment(\.tenFoot) private var tenFoot
     @Namespace private var plate
     var body: some View {
         // two halves of one width at the row's chip height (36), the white plate sliding between them: the two words' own widths made it lopsided and
         // shorter than the buttons beside it
         HStack(spacing: 0) {
             ForEach([false, true], id: \.self) { x in
-                Text(x ? "Xbox" : "Switch").font(.ds(.subheadline, .semibold, k: k)).lineLimit(1).fixedSize()
+                Text(x ? "Xbox" : "Switch")
+                    .font(tenFoot ? .system(size: 19 * k, weight: .semibold) : .ds(.subheadline, .semibold, k: k))
+                    .lineLimit(1).minimumScaleFactor(0.75)
                     .foregroundStyle(x == xbox ? Color.black : Color.white.opacity(0.75))
-                    .frame(width: 64 * k, height: 30 * k)
+                    .frame(width: (tenFoot ? 72 : 64) * k, height: (tenFoot ? 34 : 30) * k)
                     .background {
                         if x == xbox { RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white).matchedGeometryEffect(id: "plate", in: plate) }
                     }
@@ -264,6 +267,7 @@ private struct PlayerRowView: View {
             Spacer(minLength: 8 * k)
             LayoutSwitch(xbox: p.xbox) { m.send(["op": "layout", "p": p.player, "xbox": $0 ? 1 : 0]) }
             .modifier(NavPart(player: p.player, part: 0))
+            .layoutPriority(1)
             Button { m.send(["op": "identify", "p": p.player]) } label: {
                 Image(systemName: "wave.3.right").chipButton(k: k)
             }
@@ -360,23 +364,20 @@ private struct PhonePadsCard: View {   // under Play, in the launcher's left col
     @Environment(\.uiK) private var k   // GamePicker.swift: on a TV every size is its ten-foot size times k (laid out at the TV's own size)
 
     var body: some View {
-        HStack(spacing: 14 * k) {
-            if let url, let qr {
-                Image(uiImage: qr).interpolation(.none).resizable().frame(width: (tenFoot ? 150 : 96) * k, height: (tenFoot ? 150 : 96) * k)
-                    .padding(8 * k).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 14 * k, style: .continuous))
-                    .accessibilityLabel("QR code of \(url)")
-            }
-            VStack(alignment: .leading, spacing: 6 * k) {
-                Label(tr("Add players"), systemImage: "qrcode").font(.ds(.headline, k: k))
-                if let url {
-                    Text(url).font(.ds(.footnote, design: .monospaced, k: k)).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.5)
-                        .padding(.horizontal, 8 * k).padding(.vertical, 3 * k)
-                        .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
-                } else {
-                    Text(tr("Connect to Wi-Fi first")).font(.ds(.footnote, k: k)).foregroundStyle(.secondary)
+        Group {
+            if tenFoot {
+                VStack(spacing: 8 * k) {
+                    qrTile(side: 168 * k)
+                    joinDetails.frame(maxWidth: .infinity)
+                }
+                .multilineTextAlignment(.center)
+            } else {
+                HStack(spacing: 14 * k) {
+                    qrTile(side: 96 * k)
+                    joinDetails
+                    Spacer(minLength: 0)
                 }
             }
-            Spacer(minLength: 0)
         }
         .padding(12 * k)
         .frame(maxWidth: .infinity)
@@ -386,6 +387,31 @@ private struct PhonePadsCard: View {   // under Play, in the launcher's left col
                 let now = phonePadsURL()
                 if now != url || (qr == nil && now != nil) { url = now; qr = now.flatMap(qrImage) }
                 try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    @ViewBuilder private func qrTile(side: CGFloat) -> some View {
+        if let url, let qr {
+            Image(uiImage: qr).interpolation(.none).resizable().scaledToFit()
+                .frame(width: side, height: side)
+                .padding(side * 0.14).background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14 * k, style: .continuous))
+                .accessibilityLabel("QR code of \(url)")
+        }
+    }
+
+    private var joinDetails: some View {
+        VStack(alignment: tenFoot ? .center : .leading, spacing: 6 * k) {
+            Label(tr("Add players"), systemImage: "qrcode").font(.ds(.headline, k: k))
+            if let url {
+                Text(url).font(.ds(.footnote, design: .monospaced, k: k))
+                    .foregroundStyle(.white.opacity(0.75)).textSelection(.enabled)
+                    .lineLimit(tenFoot ? 2 : 1).minimumScaleFactor(tenFoot ? 0.78 : 0.5)
+                    .padding(.horizontal, 8 * k).padding(.vertical, 4 * k)
+                    .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(DS.chip))
+            } else {
+                Text(tr("Connect to Wi-Fi first")).font(.ds(.footnote, k: k)).foregroundStyle(.secondary)
             }
         }
     }
@@ -762,9 +788,10 @@ private struct SaveSlotsSection: View {
     var body: some View {
         Section {
             HStack {
-                Label(tr("Switch saves"), systemImage: "externaldrive.fill")
+                saveLabel("Switch saves", icon: "externaldrive.fill")
+                    .layoutPriority(1)
                 Spacer()
-                Text(s.activeName).foregroundStyle(.secondary)
+                Text(s.activeName).foregroundStyle(.secondary).lineLimit(1)
             }
             .saveTap(tr("Switch saves")) { choose(.use) }
             .nav("slot")
@@ -779,7 +806,7 @@ private struct SaveSlotsSection: View {
             }
             .nav("slotRename")
             if s.slots.count > 1 {
-                Label(tr("Delete a save"), systemImage: "trash")
+                saveLabel("Delete a save", icon: "trash")
                     .foregroundStyle(.red)
                     .saveTap(tr("Delete a save")) { choose(.delete) }
                     .nav("slotDelete")
@@ -792,9 +819,24 @@ private struct SaveSlotsSection: View {
     }
 
     private func saveAction(_ title: String, icon: String, perform: @escaping () -> Void) -> some View {
-        Label(tr(title), systemImage: icon)
+        saveLabel(title, icon: icon)
             .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
             .saveTap(tr(title), perform: perform)
+    }
+
+    @ViewBuilder private func saveLabel(_ title: String, icon: String) -> some View {
+        if tenFoot {
+            HStack(spacing: 10 * k) {
+                Image(systemName: icon).font(.system(size: 22 * k, weight: .medium))
+                    .frame(width: 36 * k, height: 36 * k)
+                    .accessibilityHidden(true)
+                Text(tr(title))
+            }
+            .padding(.leading, 6 * k)
+            .padding(.vertical, 4 * k)
+        } else {
+            Label(tr(title), systemImage: icon)
+        }
     }
 }
 
@@ -818,7 +860,17 @@ private struct LauncherView: View {
     @State private var selectedSaveID: Int?
     @State private var newSaveName = ""
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
-    @StateObject private var tv = TenFoot(native: true)   // GamePicker.swift: on the TV's window, laid out at its own size (sharp text)
+    @StateObject private var tv: TenFoot
+
+    init(m: LauncherModel, shell: ShellSettings, nav: NavModel, play: @escaping () -> Void,
+         back: (() -> Void)?, onTV: Bool, screenScale: CGFloat = 1) {
+        self.m = m
+        self.shell = shell
+        self.nav = nav
+        self.play = play
+        self.back = back
+        _tv = StateObject(wrappedValue: TenFoot(native: true, onTV: onTV, screenScale: screenScale))
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1210,6 +1262,8 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings(), nav = NavModel()
     var host: UIViewController?
+    let scene = parent.view.window?.windowScene
+    let onTV = scene?.session.role == .windowExternalDisplayNonInteractive
     let view = LauncherView(m: model, shell: shell, nav: nav, play: {
         guard let h = host else { return }
         host = nil
@@ -1217,20 +1271,25 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         model.apply()
         shell.apply()
         if let path = model.runMarker() { path.withCString { dmRunMarkOpen($0) } }
-        h.dismiss(animated: true) { done() }
+        let covered = frontIosPickerCoverBegin()
+        h.dismiss(animated: !covered) { done() }
     }, back: severalGames ? {
         guard let h = host else { return }
         host = nil
         fputs("launcher: back to the game list\n", stderr)
-        h.dismiss(animated: true) { frontIosBackToPicker() }
-    } : nil)
-    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil)) }   // the TV's copy in handheld mode
+        let covered = frontIosPickerCoverBegin()
+        h.dismiss(animated: !covered) { frontIosBackToPicker() }
+    } : nil, onTV: onTV, screenScale: scene?.screen.scale ?? 1)
+    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil, onTV: true)) }   // the TV's copy in handheld mode
     let h = NoFocusHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // a fade from and to the game picker of a package of several games, and into the loading screen
     host = h
-    parent.present(h, animated: true)
+    parent.present(h, animated: !frontIosPickerCoverActive()) {
+        h.view.layoutIfNeeded()
+        frontIosPickerCoverEnd()
+    }
     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
     return true
 }

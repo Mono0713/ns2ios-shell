@@ -58,18 +58,18 @@ static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row l
 // stuck with nobody able to run the menus or move someone to P1. The numbers stay as they are; handheld mode keeps the iPad as player 1
 int front_ios_console_mode(void);
 static int acting(int p) { return p > 0 && !shell_slot_held(0) && front_ios_console_mode() ? 0 : p; }   // main thread (the TV's window is UIKit's)
-static void home_press(int p) {   // any thread
+static void home_input(int p, BOOL shortcut) {   // any thread
     dispatch_async(dispatch_get_main_queue(), ^{
         int a = acting(p);
         if (a != p) LOG("player %d's Home counts as player 1's: nobody holds player 1", p + 1);
-        [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1)}];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1), @"shortcut": @(shortcut)}];
     });
 }
+static void home_press(int p) { home_input(p, NO); }
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
     // − and + pressed together: Home, for a controller with no Home button the app gets (and a phone, besides its page's own button)
     const uint64_t pm = 1ull << B_PLUS | 1ull << B_MINUS;
-    if ((buttons & pm) == pm && (atomic_load(&g_last_nav[p]) & pm) != pm) { LOG("player %d pressed - and + together: Home", p + 1); home_press(p); }
     if (atomic_load(&g_launcher) && (buttons || abs(lx) > t || abs(ly) > t)) {   // any player's input lights its row, so each one sees which player it is
         uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         if (now - atomic_load(&g_last_active[p]) > 150000000) {
@@ -83,9 +83,13 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     if (ly > t) buttons |= 1ull << B_UP;
     if (ly < -t) buttons |= 1ull << B_DOWN;
     uint64_t old = atomic_exchange(&g_last_nav[p], buttons), pressed = buttons & ~old, released = old & ~buttons;
+    if ((buttons & pm) == pm) {
+        if ((old & pm) != pm) home_input(p, YES);
+        pressed &= ~pm;
+    }
     if (!atomic_load(&g_launcher) || !(pressed | released)) return;
     static const struct { int bit, held; const char *key; } keys[] = {
-        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_X, 0, "x"}, {B_Y, 0, "y"}, {B_PLUS, 0, "plus"}, {B_MINUS, 0, "minus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
+        {B_A, 0, "a"}, {B_B, 0, "b"}, {B_X, 0, "x"}, {B_Y, 0, "y"}, {B_PLUS, 1, "plus"}, {B_MINUS, 1, "minus"}, {B_UP, 1, "up"}, {B_DOWN, 1, "down"}, {B_LEFT, 1, "left"}, {B_RIGHT, 1, "right"}};
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         int on = (pressed >> keys[i].bit & 1) != 0;
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held

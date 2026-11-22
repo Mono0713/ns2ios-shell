@@ -12,7 +12,10 @@
   :root { --bg:#000; --btn:#1c1c1e; --btn-on:#0a84ff; --fg:#f5f5f7; --dim:#8e8e93; --line:rgba(255,255,255,.1); --glass:rgba(28,28,30,.72); --pc:#0a84ff; }
   * { box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px -apple-system,system-ui,sans-serif; overflow:hidden; touch-action:none; overscroll-behavior:none; }
-  #pad { position:fixed; inset:0; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #pad { position:fixed; inset:0; container-type:size; }
+  body:not(.designer) #pad:not(.fitted) {
+    inset:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
   .piece { position:absolute; inset:0; pointer-events:none; }
   .piece > * { pointer-events:auto; }
   /* Xbox layout (the iPad picks it per phone): A bottom, B right, X left, Y top, each button in its Xbox colour (lit in full while pressed) */
@@ -29,7 +32,7 @@
   .arm { position:absolute; width:33.3%; height:33.3%; display:flex; align-items:center; justify-content:center; background:var(--btn); box-shadow:inset 0 0 0 1px var(--line);
          border-radius:14px; font-weight:600; font-size:16px; color:#c7c7cc; transition:transform .08s ease-out, background-color .08s; }
   .arm.on { background:var(--btn-on); color:#fff; transform:scale(.94); }
-  .stick { position:absolute; width:34dvh; height:34dvh; border-radius:50%; background:#111113; box-shadow:inset 0 0 0 1px var(--line), inset 0 6px 18px rgba(0,0,0,.6); }
+  .stick { position:absolute; width:34cqh; height:34cqh; border-radius:50%; background:#111113; box-shadow:inset 0 0 0 1px var(--line), inset 0 6px 18px rgba(0,0,0,.6); }
   .knob { position:absolute; left:50%; top:50%; width:40%; height:40%; margin:-20% 0 0 -20%; border-radius:50%; background:#2c2c2e;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.12), 0 4px 12px rgba(0,0,0,.5); transition:background-color .1s; }
   .stick.on .knob { background:var(--btn-on); }
@@ -76,50 +79,62 @@
   #flash { position:fixed; inset:0; background:var(--pc); opacity:0; pointer-events:none; z-index:10; }
   #flash.on { animation:flash .8s ease-out; }
   @keyframes flash { 0%, 30% { opacity:.75; } 100% { opacity:0; } }
-  #rotate { display:none; position:fixed; inset:0; background:var(--bg); flex-direction:column; align-items:center; justify-content:center; gap:14px; font-size:18px; font-weight:600; color:var(--dim); z-index:9; }
-  #rotate .phone { width:46px; height:80px; border-radius:12px; box-shadow:inset 0 0 0 3px var(--fg); animation:turn 1.6s ease-in-out infinite; }
-  @keyframes turn { 0%, 25% { transform:rotate(0); } 55%, 100% { transform:rotate(-90deg); } }
-  .joyright-only { display:none; }
-  body.joyright :is([data-k="ls"], [data-k="dpad"], [data-k="l"], [data-k="zl"], [data-k="minus"], #face, #edit) { display:none; }
+  .joyright-only, #designer { display:none; }
+  body.joyright :is([data-k="ls"], [data-k="dpad"], [data-k="l"], [data-k="zl"], [data-k="minus"], [data-k="abxy"], #face) { display:none; }
   body.joyright .joyright-only { display:block; }
-  body.joyright .joy-rails { position:absolute; left:50%; bottom:max(18px, env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:12px; }
-  .joy-rails .b { position:relative; min-width:54px; min-height:48px; }
-  @media (orientation:portrait) {
-    body:not(.joyright):not(.kicked):not(.asking) #rotate { display:flex; }
-    body.joyright #top { gap:4px; max-width:calc(100% - 12px); white-space:nowrap; }
-    body.joyright #top .tb { padding:7px 8px; }
-    body.joyright #pad { --joy-button:clamp(42px, 14dvw, 64px); }
-    body.joyright #rs { left:50%; top:23dvh; width:min(22dvh, 52dvw) !important; height:min(22dvh, 52dvw) !important; transform:translateX(-50%); }
-    body.joyright .piece[data-k="abxy"] .b { width:var(--joy-button) !important; height:var(--joy-button) !important; }
-    body.joyright .piece[data-k="abxy"] [data-bit="2"] { left:calc(50% - var(--joy-button) / 2); top:47dvh !important; }
-    body.joyright .piece[data-k="abxy"] [data-bit="3"] { left:calc(50% - 1.5 * var(--joy-button)); top:calc(47dvh + var(--joy-button)) !important; }
-    body.joyright .piece[data-k="abxy"] [data-bit="0"] { left:calc(50% + var(--joy-button) / 2); top:calc(47dvh + var(--joy-button)) !important; }
-    body.joyright .piece[data-k="abxy"] [data-bit="1"] { left:calc(50% - var(--joy-button) / 2); top:calc(47dvh + 2 * var(--joy-button)) !important; }
-    body.joyright .piece[data-k="plus"] .b { left:5dvw; top:calc(20dvh + 8px) !important; width:48px !important; height:48px !important; }
-    body.joyright .piece[data-k="r"] .b { left:5dvw; top:9dvh !important; }
-    body.joyright .piece[data-k="zr"] .b { top:9dvh !important; }
-    body.joyright .piece[data-k="rs-click"] .b { top:calc(20dvh + 8px); }
+  body.joyright #top, body.editing #bar { max-width:calc(100% - 12px); flex-wrap:wrap; justify-content:center; }
+  body.joyright #top { width:max-content; box-sizing:border-box; }
+  :where(body.joyright) #top .tb { padding:7px 8px; }
+  @media (max-width:390px), (orientation:landscape) and (max-width:700px) {
+    #top { gap:4px; padding:3px; }
+    #top .tb { font-size:12px; padding:7px 5px; }
+    #top .tb[data-compact] { font-size:0; }
+    #top .tb[data-compact]::after { content:attr(data-compact); font-size:12px; }
+    #status { gap:5px; padding:0 2px; }
+    #player { min-width:36px; padding-inline:6px; }
   }
+  #pad { --joy-button:clamp(28px, 14cqw, 64px); }
+  body.joyright #rs { top:23cqh; left:calc(50% - min(11cqh, 26cqw)); right:auto !important; bottom:auto !important; width:min(22cqh, 52cqw) !important; height:min(22cqh, 52cqw) !important; }
+  .joy-face .b { width:var(--joy-button); height:var(--joy-button); }
+  .joy-face [data-bit="2"] { left:calc(50% - var(--joy-button) / 2); top:47cqh; }
+  .joy-face [data-bit="3"] { left:calc(50% - 1.5 * var(--joy-button)); top:calc(47cqh + var(--joy-button)); }
+  .joy-face [data-bit="0"] { left:calc(50% + var(--joy-button) / 2); top:calc(47cqh + var(--joy-button)); }
+  .joy-face [data-bit="1"] { left:calc(50% - var(--joy-button) / 2); top:calc(47cqh + 2 * var(--joy-button)); }
+  body.joyright [data-k="plus"] .b { left:5cqw; top:calc(20cqh + 8px) !important; width:42px !important; height:42px !important; }
+  body.joyright [data-k="r"] .b { left:5cqw; top:9cqh !important; }
+  body.joyright [data-k="zr"] .b { top:9cqh !important; }
+  body.joyright [data-k="rs-click"] .b { top:calc(20cqh + 8px); }
+  .rail { width:clamp(40px, 17cqw, 90px); height:clamp(34px, 8cqh, 64px); bottom:3cqh; }
+  #pad.fitted { inset:50% auto auto 50%; width:min(100dvw, calc(100dvh * var(--aspect)));
+    height:min(100dvh, calc(100dvw / var(--aspect))); transform:translate(-50%, -50%); }
+  body.designer #designer { position:fixed; inset:0 0 auto; z-index:6; display:flex; flex-wrap:wrap; align-items:center;
+    justify-content:center; gap:6px; padding:10px; background:#17171a; border-bottom:1px solid var(--line); }
+  body.designer #designer strong { margin-right:8px; }
+  body.designer #bar { top:auto; bottom:10px; }
+  body.designer #done, body.designer #top { display:none; }
+  body.designer #pad { top:50%; width:min(calc(100dvw - 24px), calc(max(100px, 100dvh - 155px) * var(--aspect)));
+    height:min(calc(max(100px, 100dvh - 155px)), calc((100dvw - 24px) / var(--aspect)));
+    background:#09090b; outline:1px solid #363639; border-radius:18px; }
+  @media (max-width:520px) { body.editing #bar [data-t="drag"], #bar [data-t="size"] { display:none; } }
 </style>
 </head>
 <body>
 <div id="flash"></div>
-<div id="rotate"><div class="phone"></div><div data-t="rotate">Turn your phone sideways</div><button class="tb" id="joy-portrait" data-t="joyright">Right Joy-Con</button></div>
 <div id="pad">
   <!-- Each piece is a layer over the whole pad holding one control (or one group): the layout editor moves and scales the piece, never its controls -->
-  <div class="piece" data-k="zl"><div class="b sh" data-bit="8" style="left:2dvw;top:2dvh;width:16dvw;height:11dvh">ZL</div></div>
-  <div class="piece" data-k="l"><div class="b sh" data-bit="6" style="left:2dvw;top:15dvh;width:16dvw;height:11dvh">L</div></div>
-  <div class="piece" data-k="zr"><div class="b sh" data-bit="9" style="right:2dvw;top:2dvh;width:16dvw;height:11dvh">ZR</div></div>
-  <div class="piece" data-k="r"><div class="b sh" data-bit="7" style="right:2dvw;top:15dvh;width:16dvw;height:11dvh">R</div></div>
-  <div class="piece" data-k="minus"><div class="b" data-bit="11" style="left:38dvw;top:22dvh;width:9dvh;height:9dvh">−</div></div>
-  <div class="piece" data-k="plus"><div class="b" data-bit="10" style="right:38dvw;top:22dvh;width:9dvh;height:9dvh">+</div></div>
+  <div class="piece" data-k="zl"><div class="b sh" data-bit="8" style="left:2cqw;top:2cqh;width:16cqw;height:11cqh">ZL</div></div>
+  <div class="piece" data-k="l"><div class="b sh" data-bit="6" style="left:2cqw;top:15cqh;width:16cqw;height:11cqh">L</div></div>
+  <div class="piece" data-k="zr"><div class="b sh" data-bit="9" style="right:2cqw;top:2cqh;width:16cqw;height:11cqh">ZR</div></div>
+  <div class="piece" data-k="r"><div class="b sh" data-bit="7" style="right:2cqw;top:15cqh;width:16cqw;height:11cqh">R</div></div>
+  <div class="piece" data-k="minus"><div class="b" data-bit="11" style="left:38cqw;top:22cqh;width:9cqh;height:9cqh">−</div></div>
+  <div class="piece" data-k="plus"><div class="b" data-bit="10" style="right:38cqw;top:22cqh;width:9cqh;height:9cqh">+</div></div>
 
   <!-- Left stick -->
-  <div class="piece" data-k="ls"><div class="stick" id="ls" style="left:4dvw;top:30dvh"><div class="knob"></div></div></div>
+  <div class="piece" data-k="ls"><div class="stick" id="ls" style="left:4cqw;top:30cqh"><div class="knob"></div></div></div>
 
   <!-- D-pad: one 8-way control (a finger on it rocks it like a real D-pad: a diagonal holds two directions) -->
   <div class="piece" data-k="dpad">
-    <div class="dpad" id="dp" style="left:30dvw;top:58dvh;width:27dvh;height:27dvh">
+    <div class="dpad" id="dp" style="left:30cqw;top:58cqh;width:27cqh;height:27cqh">
       <div class="arm" data-arm="13" style="left:33.4%;top:0">▲</div>
       <div class="arm" data-arm="15" style="left:33.4%;top:66.6%">▼</div>
       <div class="arm" data-arm="12" style="left:0;top:33.4%">◀</div>
@@ -129,16 +144,21 @@
 
   <!-- ABXY in Switch positions: X top, B bottom, Y left, A right -->
   <div class="piece" data-k="abxy">
-    <div class="b" data-bit="2" style="right:calc(4dvw + 13dvh);top:30dvh;width:13dvh;height:13dvh">X</div>
-    <div class="b" data-bit="1" style="right:calc(4dvw + 13dvh);top:56dvh;width:13dvh;height:13dvh">B</div>
-    <div class="b" data-bit="3" style="right:calc(4dvw + 26dvh);top:43dvh;width:13dvh;height:13dvh">Y</div>
-    <div class="b" data-bit="0" style="right:4dvw;top:43dvh;width:13dvh;height:13dvh">A</div>
+    <div class="b" data-bit="2" style="right:calc(4cqw + 13cqh);top:30cqh;width:13cqh;height:13cqh">X</div>
+    <div class="b" data-bit="1" style="right:calc(4cqw + 13cqh);top:56cqh;width:13cqh;height:13cqh">B</div>
+    <div class="b" data-bit="3" style="right:calc(4cqw + 26cqh);top:43cqh;width:13cqh;height:13cqh">Y</div>
+    <div class="b" data-bit="0" style="right:4cqw;top:43cqh;width:13cqh;height:13cqh">A</div>
   </div>
 
   <!-- Right stick (smaller) -->
-  <div class="piece" data-k="rs"><div class="stick" id="rs" style="right:30dvw;bottom:4dvh;width:26dvh;height:26dvh"><div class="knob"></div></div></div>
-  <div class="piece joyright-only" data-k="rails"><div class="joy-rails"><div class="b sh" data-bit="6">SL</div><div class="b sh" data-bit="8">SR</div></div></div>
-  <div class="piece joyright-only" data-k="rs-click"><div class="b sh" data-bit="5" style="right:5dvw;bottom:8dvh;width:48px;height:44px">R3</div></div>
+  <div class="piece" data-k="rs"><div class="stick" id="rs" style="right:30cqw;bottom:4cqh;width:26cqh;height:26cqh"><div class="knob"></div></div></div>
+  <div class="piece joyright-only" data-k="sl"><div class="b sh rail" data-bit="6" style="right:52%">SL</div></div>
+  <div class="piece joyright-only" data-k="sr"><div class="b sh rail" data-bit="8" style="left:52%">SR</div></div>
+  <div class="piece joyright-only joy-face" data-k="a"><div class="b" data-bit="0">A</div></div>
+  <div class="piece joyright-only joy-face" data-k="b"><div class="b" data-bit="1">B</div></div>
+  <div class="piece joyright-only joy-face" data-k="x"><div class="b" data-bit="2">X</div></div>
+  <div class="piece joyright-only joy-face" data-k="y"><div class="b" data-bit="3">Y</div></div>
+  <div class="piece joyright-only" data-k="rs-click"><div class="b sh" data-bit="5" style="right:5cqw;bottom:8cqh;width:48px;height:44px">R3</div></div>
 </div>
 
 <!-- Outside the pad, so its taps are ordinary clicks: the player, the full-screen and layout buttons, the layout editor's bar, and the removed notice -->
@@ -146,15 +166,23 @@
   <button class="tb" id="fs" aria-label="Full screen">⛶</button>
   <div id="status"><div id="player" class="none">--</div><div id="conn"></div></div>
   <button class="tb" id="face" aria-label="Button layout">Switch</button>
-  <button class="tb" id="type" aria-pressed="false">Joy-Con</button>
+  <button class="tb" id="orientation" aria-pressed="false" data-t="unlock">Lock orientation</button>
   <button class="tb" id="motion" aria-label="Motion">Motion</button>
   <button class="tb" id="edit" data-t="layout">Layout</button>
   <button class="tb" id="home" aria-label="Menu">⌂</button>
+</div>
+<div id="designer">
+  <strong data-t="designer">SwitchPad layout editor</strong>
+  <button class="tb" id="design-joy" data-t="joyright">Right Joy-Con</button>
+  <button class="tb" id="design-pro" data-t="pro">Standard pad</button>
 </div>
 <div id="bar">
   <span data-t="drag">Drag to move, pinch to resize</span>
   <button class="tb" id="smaller" aria-label="Smaller">−</button><span data-t="size">Size</span><button class="tb" id="bigger" aria-label="Bigger">+</button>
   <button class="tb" id="reset" data-t="reset">Reset</button>
+  <button class="tb" id="import" data-t="bring">Import</button>
+  <button class="tb" id="export" data-t="export">Export</button>
+  <input id="preset-file" type="file" accept=".json,application/json" hidden>
   <button class="tb on" id="done" data-t="done">Done</button>
 </div>
 <div id="toast"></div>
@@ -166,22 +194,27 @@
 (() => {
   const $ = s => document.querySelector(s);
   // Page text: Traditional Chinese when the phone's language is Chinese, English otherwise
-  const zh = /^zh/i.test(navigator.language || '');
-  const T = zh ? { rotate: '請把手機橫過來', connecting: '連線中…', connected: '已連線', full: '玩家已滿（最多 8 人）', lost: '已斷線，重新連線中…',
+  const designer = location.protocol === 'file:';
+  const zh = designer || /^zh/i.test(navigator.language || '');
+  const T = zh ? { connecting: '連線中…', connected: '已連線', full: '玩家已滿（最多 8 人）', lost: '已斷線，重新連線中…',
                    layout: '版面', drag: '拖曳移動，兩指縮放', size: '大小', reset: '還原', done: '完成',
                    kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入', replaced: '這支手機的手把在另一個頁面（或瀏覽器）使用中', useHere: '改用這個頁面',
                    ios: 'iPhone 沒辦法讓網頁全螢幕：按 Safari 的「分享」→「加入主畫面」，再從主畫面打開，就不會有網址列。',
-                   joyright: '右 Joy-Con', pro: '一般手把',
+                   joyright: '右 Joy-Con', pro: '一般手把', designer: 'SwitchPad 手把版面編輯器',
+                   unlock: '鎖定方向', locked: '解除方向鎖', bring: '匯入', export: '匯出', badPreset: '無法讀取這份版面預設',
+                   imported: '已套用版面預設', lockedHelp: '已鎖定目前的手把方向',
                    motion: '體感', mOff: '體感 關', mGyro: '體感 陀螺儀', mTilt: '體感 方向盤',
                    tGyro: '陀螺儀：手機的轉動會傳給遊戲（支援體感的遊戲用得到）', tTilt: '方向盤：左右傾斜手機就是左搖桿，適合賽車', tOff: '體感已關閉',
                    goSecure: '手機只在安全連線（HTTPS）下才給網頁陀螺儀', goNote: '接著會出現「此連線不是私人連線」：點「顯示詳細資訊」→「瀏覽此網站」（Android：「進階」→「繼續前往」）。這是 iPad 自己的憑證，只要信任一次。', goOk: '前往',
                    allow: '讓這個頁面使用手機的動作感測器', allowNote: '按下後在跳出的視窗選「允許」', allowOk: '開啟體感',
                    noSensor: '這支手機或瀏覽器沒有提供陀螺儀', denied: '沒有取得動作感測器的權限：要重新允許，請關掉這個分頁再打開' }
-               : { rotate: 'Turn your phone sideways', connecting: 'Connecting…', connected: 'Connected', full: 'All 8 players are taken', lost: 'Disconnected, reconnecting…',
+               : { connecting: 'Connecting…', connected: 'Connected', full: 'All 8 players are taken', lost: 'Disconnected, reconnecting…',
                    layout: 'Layout', drag: 'Drag to move, pinch to resize', size: 'Size', reset: 'Reset', done: 'Done',
                    kicked: 'This phone was removed on the iPad', rejoin: 'Join again', replaced: 'This phone\'s controller is in use on another page (or browser)', useHere: 'Use this page',
                    ios: 'iPhone cannot show a web page full screen: tap Share, then Add to Home Screen in Safari, and open it from the Home Screen for no address bar.',
-                   joyright: 'Right Joy-Con', pro: 'Standard pad',
+                   joyright: 'Right Joy-Con', pro: 'Standard pad', designer: 'SwitchPad layout editor',
+                   unlock: 'Lock orientation', locked: 'Unlock orientation', bring: 'Import', export: 'Export', badPreset: 'Could not read this layout preset',
+                   imported: 'Layout preset applied', lockedHelp: 'Controller orientation locked',
                    motion: 'Motion', mOff: 'Motion off', mGyro: 'Motion: gyro', mTilt: 'Motion: wheel',
                    tGyro: 'Gyro: the phone\'s turning goes to the game (for games with motion controls)', tTilt: 'Wheel: tilt the phone left and right as the left stick, for racing', tOff: 'Motion is off',
                    goSecure: 'Phones give a page their gyroscope only over a secure connection (HTTPS)', goNote: 'A "connection is not private" warning comes next: tap Show Details, then visit this website (Android: Advanced, then Proceed). It is the iPad\'s own certificate: trust it once.', goOk: 'Go',
@@ -203,13 +236,16 @@
   // Device id: a reconnecting phone gets its player back
   let id;
   const params = new URLSearchParams(location.search);
-  let controllerMode = params.get('type');
-  try { controllerMode ??= localStorage.getItem('padType'); } catch (e) {}
-  controllerMode = controllerMode === 'joyright' ? 'joyright' : 'pro';
-  const rememberControllerMode = () => {
-    try { localStorage.setItem('padType', controllerMode); } catch (e) {}
-  };
-  rememberControllerMode();
+  const portrait = matchMedia('(orientation: portrait)');
+  function readStorage(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+  function writeStorage(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+  const automaticMode = () => portrait.matches ? 'joyright' : 'pro';
+  const savedLock = params.get('lock') || readStorage('padOrientation');
+  let lockedMode = ['joyright', 'pro'].includes(savedLock) ? savedLock : null;
+  let controllerMode = designer ? 'joyright' : lockedMode || automaticMode();
+  let viewportMode = automaticMode();
+  let lockedAspect = null;
+  document.body.classList.toggle('designer', designer);
   try { id = params.get('id') || localStorage.getItem('padId'); if (params.get('id')) localStorage.setItem('padId', id); } catch (e) {}
   if (!id) {
     id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -268,7 +304,8 @@
   function message(m) {
     if (m.t === 'assign') {
       replaced = false; document.body.classList.remove('kicked'); showPlayer(m.player); conn('ok'); dirty = true;
-      faceLayout(controllerMode === 'pro' && m.layout === 'xbox');
+      preferredXbox = m.layout === 'xbox';
+      faceLayout(controllerMode === 'pro' && preferredXbox);
     }
     else if (m.t === 'full') { showPlayer(0); conn('full'); toast(T.full); }
     else if (m.t === 'kicked') { showPlayer(0); $('#kickmsg').textContent = T.kicked; $('#rejoin').textContent = T.rejoin; document.body.classList.add('kicked'); release(); }
@@ -285,6 +322,7 @@
   // Reconnecting: only while the page is in front, and not after the iPad said another page of this phone took over. Otherwise a second page (a background tab,
   // the Home Screen copy, another browser) and this one would keep taking the player from each other, both flickering between connected and disconnected
   function connect() {
+    if (designer) return;
     clearTimeout(retry);
     if (replaced || document.hidden || postUp || (ws && ws.readyState < 2)) return;
     conn('wait');
@@ -364,7 +402,13 @@
   if (!availableMotion().includes(motionMode) || !window.isSecureContext) motionMode = 'off';   // kept by the https page only
   let tiltX = null, listening = false, mseq = 0, lastMotion = 0;
   let gSign = 0, gVotes = 0, rotScale = 1, fitNum = 0, fitDen = 0, fitMoved = 0, prevG = null, prevT = 0;
-  function motionLabel() { $('#motion').textContent = { off: T.mOff, gyro: T.mGyro, tilt: T.mTilt }[motionMode]; $('#motion').classList.toggle('on', motionMode !== 'off'); }
+  function motionLabel() {
+    const button = $('#motion');
+    button.textContent = { off: T.mOff, gyro: T.mGyro, tilt: T.mTilt }[motionMode];
+    button.setAttribute('aria-label', button.textContent);
+    button.dataset.compact = { off: T.motion, gyro: zh ? '陀螺儀' : 'Gyro', tilt: zh ? '方向盤' : 'Wheel' }[motionMode];
+    button.classList.toggle('on', motionMode !== 'off');
+  }
   function ask(msg, note, ok, then) {
     $('#askmsg').textContent = msg; $('#asknote').textContent = note; $('#askok').textContent = ok;
     $('#askok').onclick = () => { document.body.classList.remove('asking'); then(); };
@@ -377,7 +421,8 @@
     if (m === 'off') { toast(T.tOff); return; }
     if (!window.isSecureContext) {   // over http: to https, with the device id and the mode
       motionMode = 'off'; motionLabel();
-      const query = new URLSearchParams({ id, motion: m, type: controllerMode });
+      const query = new URLSearchParams({ id, motion: m });
+      if (lockedMode) query.set("lock", lockedMode);
       ask(T.goSecure, T.goNote, T.goOk, () => { location.href = 'https://' + location.host + '/?' + query; });
       return;
     }
@@ -438,7 +483,7 @@
     put(buf);
   }
   motionLabel();
-  if (motionMode !== 'off' && window.isSecureContext) startSensors(false);
+  if (!designer && motionMode !== 'off' && window.isSecureContext) startSensors(false);
 
   // ---- Full screen ----
   // Android: any tap on the pad while not full screen goes full screen (a browser only allows it from a tap), which hides the address bar, and keeps the phone sideways.
@@ -452,15 +497,22 @@
     if (!canFull) { if (!standalone) toast(T.ios); return; }
     if (document.fullscreenElement) return;
     document.documentElement.requestFullscreen({ navigationUI: 'hide' })
-      .then(() => controllerMode === 'pro' && screen.orientation?.lock?.('landscape')).catch(() => {});
+      .then(applyScreenLock).catch(() => {});
+  }
+  function applyScreenLock() {
+    if (!lockedMode || !screen.orientation?.lock) return;
+    const type = screen.orientation.type;
+    const aspect = lockedMode === 'joyright' ? 'portrait' : 'landscape';
+    return screen.orientation.lock(type?.startsWith(aspect) ? type : aspect).catch(() => {});
   }
   if (standalone) $('#fs').style.display = 'none';
   document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && triedFull) note('left full screen'); });
   $('#fs').addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else goFull(); });
 
   // ---- Button layout: where A, B, X and Y sit (each button keeps its own letter and sends that button) ----
-  const places = { top: ['calc(4dvw + 13dvh)', '30dvh'], bottom: ['calc(4dvw + 13dvh)', '56dvh'], left: ['calc(4dvw + 26dvh)', '43dvh'], right: ['4dvw', '43dvh'] };
+  const places = { top: ['calc(4cqw + 13cqh)', '30cqh'], bottom: ['calc(4cqw + 13cqh)', '56cqh'], left: ['calc(4cqw + 26cqh)', '43cqh'], right: ['4cqw', '43cqh'] };
   const faces = { switch: { 0: 'right', 1: 'bottom', 2: 'top', 3: 'left' }, xbox: { 0: 'bottom', 1: 'right', 2: 'left', 3: 'top' } };
+  let preferredXbox = false;
   function faceLayout(xbox) {
     $('#face').textContent = xbox ? 'Xbox' : 'Switch';
     if (document.body.classList.contains('xbox') === xbox) return;
@@ -474,38 +526,146 @@
   // Each piece (a control or a group) may be moved and scaled; kept per phone in localStorage as {key: {x, y, s}}, x and y as fractions of the pad's size
   const pad = $('#pad');
   const pieces = [...document.querySelectorAll('.piece')];
-  let layout = {};
-  try { layout = JSON.parse(localStorage.getItem('padLayout') || '{}') || {}; } catch (e) { layout = {}; }
-  function applyPiece(p) {
-    const l = layout[p.dataset.k] || { x: 0, y: 0, s: 1 };
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;   // the controls' box, untransformed: the piece scales about its centre
-    for (const c of p.children) { x0 = Math.min(x0, c.offsetLeft); y0 = Math.min(y0, c.offsetTop); x1 = Math.max(x1, c.offsetLeft + c.offsetWidth); y1 = Math.max(y1, c.offsetTop + c.offsetHeight); }
-    p.style.transformOrigin = `${(x0 + x1) / 2}px ${(y0 + y1) / 2}px`;
-    p.style.transform = `translate(${l.x * pad.clientWidth}px,${l.y * pad.clientHeight}px) scale(${l.s})`;
+  const byKey = new Map(pieces.map(p => [p.dataset.k, p]));
+  const storageKey = 'padLayoutsV1';
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const layoutKinds = ['pro', 'joyright'];
+  const defaultLayouts = {
+    pro: {
+      ls: { x: 0.031, y: 0.13, s: 1 },
+      abxy: { x: -0.020, y: 0.105, s: 1 },
+      rs: { x: -0.002, y: -0.115, s: 1 }
+    },
+    joyright: {
+      plus: { x: 0.565, y: -0.1336, s: 1 },
+      'rs-click': { x: 0.008, y: -0.135, s: 1 },
+      zr: { x: -0.014, y: 0.076, s: 1 },
+      r: { x: 0.756, y: 0.202, s: 1 },
+      rs: { x: 0.095, y: 0.089, s: 0.7513 },
+      a: { x: 0.095, y: 0.074, s: 1 },
+      b: { x: 0.095, y: 0.074, s: 1 },
+      x: { x: 0.095, y: 0.074, s: 1 },
+      y: { x: 0.095, y: 0.074, s: 1 },
+      sr: { x: 0.281, y: -0.187, s: 1 },
+      sl: { x: 0.491, y: -0.083, s: 1 }
+    }
+  };
+  function parseJSON(text) { try { return JSON.parse(text); } catch (e) { return null; } }
+  function cleanLayout(value) {
+    const result = {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+    for (const [key, v] of Object.entries(value)) {
+      if (!byKey.has(key) || !v || ![v.x, v.y, v.s].every(Number.isFinite)) continue;
+      result[key] = { x: clamp(v.x, -1, 1), y: clamp(v.y, -1, 1), s: clamp(v.s, 0.4, 2.5) };
+    }
+    return result;
   }
-  function applyLayout() {
-    if (controllerMode === 'joyright') pieces.forEach(p => { p.style.transform = ''; });
-    else pieces.forEach(applyPiece);
+  function presetLayouts(preset) {
+    if (preset?.format !== 'switchpad-layout' || preset.version !== 1 || !preset.layouts ||
+        !layoutKinds.every(k => preset.layouts[k] && typeof preset.layouts[k] === 'object' && !Array.isArray(preset.layouts[k]))) return null;
+    return Object.fromEntries(layoutKinds.map(k => [k, cleanLayout(preset.layouts[k])]));
   }
-  function saveLayout() { try { localStorage.setItem('padLayout', JSON.stringify(layout)); } catch (e) {} }
-  addEventListener('resize', applyLayout);
-  applyLayout();
-
+  const localKey = designer ? 'padDesignerV1' : storageKey;
+  const legacyPro = designer ? {} : cleanLayout(parseJSON(readStorage('padLayout')));
+  let layouts = presetLayouts(parseJSON(readStorage(localKey))) ||
+    { pro: Object.keys(legacyPro).length ? legacyPro : cleanLayout(defaultLayouts.pro), joyright: cleanLayout(defaultLayouts.joyright) };
   let editing = false, sel = null, drag = null, pinch = null;
   const editTouches = new Map();
-  function spread() { const [a, b] = [...editTouches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)); }
+  const current = () => layouts[controllerMode];
+  const visible = p => p.offsetWidth > 0 && p.offsetHeight > 0;
+  const preset = () => ({ format: 'switchpad-layout', version: 1, layouts });
+  function values(p) {
+    const key = p.dataset.k;
+    return current()[key] || (current()[key] = { x: 0, y: 0, s: 1 });
+  }
+  function applyPiece(p) {
+    if (!visible(p)) { p.style.transform = ''; return; }
+    const l = current()[p.dataset.k] || { x: 0, y: 0, s: 1 };
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const c of p.children) {
+      x0 = Math.min(x0, c.offsetLeft); y0 = Math.min(y0, c.offsetTop);
+      x1 = Math.max(x1, c.offsetLeft + c.offsetWidth); y1 = Math.max(y1, c.offsetTop + c.offsetHeight);
+    }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    // Preserve a usable hit area after resizing the screen, even for a preset made on another phone.
+    const scale = Math.min(l.s, pad.clientWidth / (x1 - x0), pad.clientHeight / (y1 - y0));
+    const halfW = (x1 - x0) * scale / 2, halfH = (y1 - y0) * scale / 2;
+    const tx = clamp(l.x * pad.clientWidth, halfW - (x0 + x1) / 2, pad.clientWidth - halfW - (x0 + x1) / 2);
+    const ty = clamp(l.y * pad.clientHeight, halfH - cy, pad.clientHeight - halfH - cy);
+    p.style.transformOrigin = cx + 'px ' + cy + 'px';
+    p.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+  }
+  function applyLayout() {
+    const fitted = designer || controllerMode !== automaticMode();
+    pad.classList.toggle('fitted', fitted);
+    pad.style.setProperty('--aspect', String(lockedAspect || (controllerMode === 'joyright' ? 9 / 20 : 20 / 9)));
+    pieces.forEach(applyPiece);
+  }
+  function saveLayout() { writeStorage(localKey, JSON.stringify(preset())); }
   function select(p) { pieces.forEach(q => q.classList.toggle('sel', q === p)); sel = p; }
-  function scaleSel(f) {
-    if (!sel) return;
-    const l = layout[sel.dataset.k] || (layout[sel.dataset.k] = { x: 0, y: 0, s: 1 });
-    l.s = Math.min(2.5, Math.max(0.4, Math.round(l.s * f * 100) / 100));
+  function clearEditInput() { editTouches.clear(); pinch = drag = null; }
+  function beginEdit() {
+    clearEditInput(); release(); editing = true; document.body.classList.add('editing');
+    select(pieces.find(visible)); applyLayout();
+  }
+  function scaleSel(f) { if (sel) { const l = values(sel); l.s = clamp(l.s * f, 0.4, 2.5); applyPiece(sel); saveLayout(); } }
+  function startDrag(id, x, y) {
+    const p = document.elementFromPoint(x, y)?.closest('.piece');
+    if (!p || !visible(p)) return false;
+    select(p);
+    const l = values(p);
+    drag = { id, x, y, lx: l.x, ly: l.y };
+    return true;
+  }
+  function moveDrag(id, x, y) {
+    if (!drag || drag.id !== id || !sel) return;
+    const l = values(sel);
+    l.x = clamp(drag.lx + (x - drag.x) / pad.clientWidth, -1, 1);
+    l.y = clamp(drag.ly + (y - drag.y) / pad.clientHeight, -1, 1);
     applyPiece(sel);
   }
-  $('#edit').addEventListener('click', () => { editTouches.clear(); pinch = drag = null; editing = true; release(); document.body.classList.add('editing'); select(pieces[0]); });
-  $('#done').addEventListener('click', () => { editing = false; select(null); document.body.classList.remove('editing'); saveLayout(); });
-  $('#reset').addEventListener('click', () => { layout = {}; applyLayout(); saveLayout(); });
+  function spread() { const [a, b] = [...editTouches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)); }
+  $('#edit').addEventListener('click', beginEdit);
+  $('#done').addEventListener('click', () => {
+    editing = false; clearEditInput(); select(null); document.body.classList.remove('editing'); saveLayout(); syncOrientation();
+  });
+  $('#reset').addEventListener('click', () => { layouts[controllerMode] = cleanLayout(defaultLayouts[controllerMode]); applyLayout(); saveLayout(); });
   $('#smaller').addEventListener('click', () => scaleSel(1 / 1.1));
   $('#bigger').addEventListener('click', () => scaleSel(1.1));
+  $('#import').addEventListener('click', () => $('#preset-file').click());
+  $('#preset-file').addEventListener('change', async e => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    try {
+      const next = file.size <= 65536 && presetLayouts(parseJSON(await file.text()));
+      if (!next) throw new Error();
+      layouts = next; applyLayout(); saveLayout(); toast(T.imported);
+    } catch (error) { toast(T.badPreset); }
+  });
+  $('#export').addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(preset(), null, 2) + '\n'], { type: 'application/json' }));
+    const download = document.createElement('a');
+    download.href = url; download.download = 'SwitchPad-layout.json';
+    document.body.append(download); download.click(); download.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  pad.addEventListener('pointerdown', e => {
+    if (!editing || e.pointerType === 'touch' || !startDrag(e.pointerId, e.clientX, e.clientY)) return;
+    e.preventDefault(); pad.setPointerCapture(e.pointerId);
+  });
+  pad.addEventListener('pointermove', e => {
+    if (editing && e.pointerType !== 'touch') moveDrag(e.pointerId, e.clientX, e.clientY);
+  });
+  const endPointer = e => { if (drag?.id === e.pointerId && e.pointerType !== 'touch') { drag = null; saveLayout(); } };
+  pad.addEventListener('pointerup', endPointer); pad.addEventListener('pointercancel', endPointer);
+  document.addEventListener('keydown', e => {
+    const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (!editing || !sel || !step || e.target.matches('input, textarea, select')) return;
+    e.preventDefault();
+    const l = values(sel), amount = e.shiftKey ? 0.03 : 0.005;
+    l.x = clamp(l.x + step[0] * amount, -1, 1); l.y = clamp(l.y + step[1] * amount, -1, 1);
+    applyPiece(sel); saveLayout();
+  });
 
   // ---- Multi-touch ----
   // Each finger keeps what it landed on: a stick stays held by that finger; on buttons the finger may slide to a neighbour
@@ -580,12 +740,9 @@
     e.preventDefault();
     if (editing) {   // the editor: a finger on a control picks its piece and drags it; a second finger anywhere pinches it larger or smaller
       for (const tp of e.changedTouches) editTouches.set(tp.identifier, { x: tp.clientX, y: tp.clientY });
-      if (editTouches.size >= 2 && sel) { drag = null; pinch = { d: spread(), s: (layout[sel.dataset.k] || { s: 1 }).s }; return; }
-      const tp = e.changedTouches[0], el = document.elementFromPoint(tp.clientX, tp.clientY), p = el && el.closest('.piece');
-      if (!p) return;
-      select(p);
-      const l = layout[p.dataset.k] || (layout[p.dataset.k] = { x: 0, y: 0, s: 1 });
-      drag = { id: tp.identifier, x: tp.clientX, y: tp.clientY, lx: l.x, ly: l.y };
+      if (editTouches.size >= 2 && sel) { drag = null; pinch = { d: spread(), s: values(sel).s }; return; }
+      const tp = e.changedTouches[0];
+      startDrag(tp.identifier, tp.clientX, tp.clientY);
       return;
     }
     for (const tp of e.changedTouches) {
@@ -603,17 +760,12 @@
     if (editing) {
       for (const tp of e.changedTouches) if (editTouches.has(tp.identifier)) editTouches.set(tp.identifier, { x: tp.clientX, y: tp.clientY });
       if (pinch && sel && editTouches.size >= 2) {
-        const l = layout[sel.dataset.k] || (layout[sel.dataset.k] = { x: 0, y: 0, s: 1 });
-        l.s = Math.min(2.5, Math.max(0.4, pinch.s * spread() / pinch.d));
+        const l = values(sel);
+        l.s = clamp(pinch.s * spread() / pinch.d, 0.4, 2.5);
         applyPiece(sel);
         return;
       }
-      for (const tp of e.changedTouches) if (drag && tp.identifier === drag.id && sel) {
-        const l = layout[sel.dataset.k];
-        l.x = Math.max(-1, Math.min(1, drag.lx + (tp.clientX - drag.x) / pad.clientWidth));
-        l.y = Math.max(-1, Math.min(1, drag.ly + (tp.clientY - drag.y) / pad.clientHeight));
-        applyPiece(sel);
-      }
+      for (const tp of e.changedTouches) moveDrag(tp.identifier, tp.clientX, tp.clientY);
       return;
     }
     for (const tp of e.changedTouches) {
@@ -631,7 +783,7 @@
     if (editing) {
       for (const tp of e.changedTouches) editTouches.delete(tp.identifier);
       drag = null; if (editTouches.size < 2) pinch = null;
-      return;
+      saveLayout(); return;
     }
     for (const tp of e.changedTouches) {
       const t = touches.get(tp.identifier);
@@ -659,32 +811,65 @@
   function showControllerMode() {
     const single = controllerMode === 'joyright';
     document.body.classList.toggle('joyright', single);
-    $('#type').textContent = single ? T.pro : T.joyright;
-    $('#type').setAttribute('aria-pressed', String(single));
-    if (single) faceLayout(false);
+    const orientation = $('#orientation');
+    orientation.textContent = lockedMode ? T.locked : T.unlock;
+    orientation.setAttribute('aria-label', orientation.textContent);
+    orientation.dataset.compact = lockedMode ? (zh ? '解鎖' : 'Unlock') : (zh ? '鎖定' : 'Lock');
+    orientation.setAttribute('aria-pressed', String(!!lockedMode));
+    $('#design-joy').classList.toggle('on', single);
+    $('#design-pro').classList.toggle('on', !single);
+    $('#design-joy').setAttribute('aria-pressed', String(single));
+    $('#design-pro').setAttribute('aria-pressed', String(!single));
+    faceLayout(!single && preferredXbox);
     applyLayout();
   }
-  function changeControllerMode() {
-    release();
-    controllerMode = controllerMode === 'joyright' ? 'pro' : 'joyright';
-    rememberControllerMode();
-    // A motion link may include the previous choice so it can cross from HTTP to HTTPS. Clear it after the user changes mode.
-    if (params.has('type')) {
-      params.delete('type');
-      history.replaceState(null, '', location.pathname + (params.size ? '?' + params : ''));
-    }
+  function changeControllerMode(mode) {
+    if (mode === controllerMode) { applyLayout(); return; }
+    clearEditInput(); release(); if (!designer) send();
+    controllerMode = mode;
+    if (mode === 'joyright' && motionMode === 'tilt') setMode('off');
     showControllerMode();
-    if (up()) put(JSON.stringify({ t: 'padtype', mode: controllerMode }));
-    if (controllerMode === 'joyright') {
-      screen.orientation?.unlock?.();
-      if (motionMode === 'tilt') setMode('off');
-    }
+    if (editing) select(pieces.find(visible));
+    if (!designer && up()) put(JSON.stringify({ t: 'padtype', mode }));
   }
-  $('#type').addEventListener('click', changeControllerMode);
-  $('#joy-portrait').addEventListener('click', changeControllerMode);
+  function syncOrientation() {
+    const nextViewport = automaticMode();
+    if (!designer && nextViewport !== viewportMode) {
+      viewportMode = nextViewport;
+      if (editing || lockedMode) { clearEditInput(); release(); send(); }
+    }
+    if (designer || editing) { applyLayout(); return; }
+    changeControllerMode(lockedMode || nextViewport);
+  }
+  $('#orientation').addEventListener('click', () => {
+    if (lockedMode) {
+      lockedMode = null; lockedAspect = null;
+      if (params.has('lock')) {
+        params.delete('lock');
+        history.replaceState(null, '', location.pathname + (params.size ? '?' + params : ''));
+      }
+      try { screen.orientation?.unlock?.(); } catch (e) {}
+    } else {
+      lockedMode = controllerMode;
+      lockedAspect = pad.clientWidth / pad.clientHeight;
+      applyScreenLock();
+      toast(T.lockedHelp);
+    }
+    writeStorage('padOrientation', lockedMode || '');
+    showControllerMode(); syncOrientation();
+  });
+  $('#design-joy').addEventListener('click', () => changeControllerMode('joyright'));
+  $('#design-pro').addEventListener('click', () => changeControllerMode('pro'));
+  addEventListener('resize', syncOrientation);
+  portrait.addEventListener?.('change', syncOrientation);
   showControllerMode();
-  connect();
-  tick();
+  if (designer) {
+    document.title = T.designer;
+    beginEdit();
+  } else {
+    connect();
+    tick();
+  }
 })();
 </script>
 </body>

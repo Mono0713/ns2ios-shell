@@ -3,7 +3,7 @@
 // Styled like Switch Pad on the PC: the package's icon and name at the top left, app-icon corners, a white focus ring, small rounded chips.
 // Touch: swipe the row to move through it, tap a tile to start that game. Player 1's controller or phone (shell_players.m, the launcher's DMLauncherInput):
 // left and right move, A or + starts, X shows every game at once (a grid: the arrows move, A opens the game's settings, B goes back). The games keep the
-// order set on the PC (Documents/game-order.json), else by name; the highlight starts on the phones' QR code, and the row goes round (after the last game, the QR code again).
+// order set on the iPad, then the PC's synced order, then by name. The highlight starts on the phones' QR code, and the row wraps back to it.
 // The first tile is the phones' QR code (phone_pads.c, started at launch for the picker), with a dot for each player that has joined; choosing it (or Y)
 // opens the players card: eight places, each lighting up as its player presses something, with Identify (tap or A), the button layout (− ) and Remove (X).
 // Choosing calls main.m's shell_game_choose, which reads that game's files; then the launcher follows as for a package of one game, and its
@@ -15,6 +15,14 @@ import Network
 import CoreImage.CIFilterBuiltins
 
 @_silgen_name("shell_game_choose") private func shellGameChoose(_ gid: UnsafePointer<CChar>)
+@_silgen_name("front_ios_picker_cover_begin") func frontIosPickerCoverBegin() -> Bool
+@_silgen_name("front_ios_picker_cover_active") func frontIosPickerCoverActive() -> Bool
+@_silgen_name("front_ios_picker_cover_end") func frontIosPickerCoverEnd()
+@_silgen_name("front_ios_picker_volume") private func pickerVolume() -> Float
+@_silgen_name("front_ios_picker_set_volume") private func setPickerVolume(_ value: Float)
+@_silgen_name("front_ios_picker_adjust_volume") private func adjustPickerVolume(_ direction: Int32) -> Bool
+@_silgen_name("front_ios_picker_outputs") private func pickerOutputs() -> Int32
+@_silgen_name("front_ios_picker_action") private func pickerAction(_ action: Int32)
 
 private let zhHant: Bool = {
     let l = (Locale.preferredLanguages.first ?? "").lowercased()
@@ -43,8 +51,10 @@ final class TenFoot: ObservableObject {
     @Published private(set) var on = false
     @Published fileprivate(set) var screenScale: CGFloat = 1
     let native: Bool   // laid out at the window's own size with sizes times k (the picker), not on the 1920 x 1080 canvas scaled (the launcher)
-    init(native: Bool = false) {
+    init(native: Bool = false, onTV: Bool = false, screenScale: CGFloat = 1) {
         self.native = native
+        self.onTV = onTV
+        self.screenScale = screenScale
         token = NotificationCenter.default.addObserver(forName: Notification.Name("DMShellChanged"), object: nil, queue: .main) { [weak self] _ in self?.refresh() }
         refresh()
     }
@@ -74,12 +84,13 @@ private struct TenFootProbe: UIViewRepresentable {
             let scale = w.windowScene?.screen.scale ?? 1
             let u = now ? TenFootStage.scale(w.bounds.size) : 1
             let t = tv
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self, weak w] in
+                guard let self, let w, self.window === w else { return }
                 if let t {
                     if t.screenScale != scale { t.screenScale = scale }
                     if t.onTV != now { t.onTV = now }
                 }
-                guard let self, let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
+                guard let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
                 let sharp = now && u > 1.01 && t?.native != true ? scale * u : 0
                 if sharp == self.applied { return }
                 if sharp > 0 { vc.traitOverrides.displayScale = sharp } else { vc.traitOverrides.remove(UITraitDisplayScale.self) }
@@ -175,7 +186,7 @@ private struct PregameMirrorView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let picker = stage.picker { picker().id(stage.pickerGen).opacity(stage.launcher == nil ? 1 : 0) }
+            if let picker = stage.picker { picker().id(stage.pickerGen).accessibilityHidden(stage.launcher != nil) }
             if let launcher = stage.launcher { launcher().id(stage.launcherGen).transition(.opacity) }
         }
         .animation(.easeInOut(duration: 0.25), value: stage.launcherGen)
@@ -294,6 +305,7 @@ private struct PickerGame: Identifiable {
     let icon: UIImage?
     let played: Date?
 }
+private let pickerOrderKey = "picker.gameOrder"
 
 // The game's icon: dm/icon.jpg is the game's own (256 px, nxn_pack.py), icon.png the app icon made from it (180 px) for packages made before
 private func gameIcon(_ dir: URL) -> UIImage? {
@@ -310,9 +322,9 @@ private func loadGames() -> [PickerGame] {
         return PickerGame(id: id, name: j["name"] as? String ?? id, version: j["version"] as? String ?? "", icon: gameIcon(dir),
                           played: UserDefaults.standard.object(forKey: "picker.played." + id) as? Date)
     }
-    // The order set on the PC (PadSwitch writes Documents/game-order.json on each sync: title IDs, first to last); games it does not list follow by name,
-    // and without the file the order is by name
-    let rank = Dictionary(gameOrder().enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+    let desktop = gameOrder()
+    let local = localGameOrder(desktop: desktop)
+    let rank = Dictionary((local + desktop).enumerated().map { ($1.uppercased(), $0) }, uniquingKeysWith: { a, _ in a })
     return list.sorted {
         switch (rank[$0.id.uppercased()], rank[$1.id.uppercased()]) {
         case let (a?, b?): return a < b
@@ -327,14 +339,34 @@ private func gameOrder() -> [String] {
     guard let doc = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
           let data = (try? Data(contentsOf: doc.appendingPathComponent("\u{7CFB}\u{7D71}/game-order.json"))) ?? (try? Data(contentsOf: doc.appendingPathComponent("game-order.json"))),
           let ids = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { return [] }
-    return ids.compactMap { ($0 as? String)?.uppercased() }
+    var seen = Set<String>()
+    return ids.compactMap { id in
+        guard let title = (id as? String)?.uppercased(), seen.insert(title).inserted else { return nil }
+        return title
+    }
+}
+private func localGameOrder(desktop: [String]) -> [String] {
+    // A routine sync can add or remove games, but should keep the iPad's order.
+    // A different order of the same titles indicates a desktop edit.
+    let defaults = UserDefaults.standard
+    guard let saved = defaults.dictionary(forKey: pickerOrderKey), let local = saved["local"] as? [String],
+          let previous = saved["desktop"] as? [String] else { return [] }
+    if desktop != previous && !desktop.isEmpty {
+        let common = Set(desktop).intersection(previous)
+        if desktop.filter(common.contains) != previous.filter(common.contains) {
+            defaults.removeObject(forKey: pickerOrderKey)
+            return []
+        }
+        defaults.set(["local": local, "desktop": desktop], forKey: pickerOrderKey)
+    }
+    return local
 }
 
 // The row: the phones' tile at 0, then the games (game i at i + 1). It goes round: after the last game comes the phones' tile again, so the
 // row is a ring and pos counts places along it without end (focus is the item there). It opens on the phones' tile, whose QR code is what a
 // player needs first
 private final class PickerModel: ObservableObject {
-    let games: [PickerGame]
+    @Published private(set) var games: [PickerGame]
     @Published var pos = 0
     static var lastPicked: String?   // the game chosen last: coming back from its launcher, the row stands on it again (not on Add players)
     static var kept: PickerModel?    // one model for the process: the picker shown again (back from a launcher) keeps its place, and the TV's copy its view
@@ -346,7 +378,11 @@ private final class PickerModel: ObservableObject {
     func item(_ v: Int) -> Int { ((v % count) + count) % count }
     @Published var starting = false
     @Published var padsOpen = false
+    @Published var settingsOpen = false
+    @Published var setting = 0
+    @Published var confirmingExit = false
     @Published var gridOpen = false   // every game at once (X, or the button at the top); kept while a game's launcher is over the picker
+    var reorderingGames = false
     var gridCols = 6                  // the grid's columns, as laid out (the arrows move by them)
     @Published var sel = 0   // the highlighted place on the players card (player sel + 1)
     @Published var picked: Int?   // a player picked up to move to another number (A or a tap, then A or a tap on the place; or dragged there)
@@ -355,13 +391,13 @@ private final class PickerModel: ObservableObject {
     var start: (PickerGame) -> Void = { _ in }
     func move(_ d: Int) { if !starting { pos += d } }
     func showGrid(_ on: Bool) {
-        guard !starting, !games.isEmpty, on != gridOpen else { return }
+        guard !starting, !reorderingGames, !games.isEmpty, on != gridOpen else { return }
         if on && focus == 0 { pos += 1 }   // on the phones' tile: the first game
         gridOpen = on
     }
     // In the grid: left and right go one game (on to the next row), up and down a row; the last row's gap takes down to the last game
     func gridMove(_ key: String) {
-        guard !starting, !games.isEmpty else { return }
+        guard !starting, !reorderingGames, !games.isEmpty else { return }
         let n = games.count, c = max(1, gridCols), i = max(0, focus - 1)
         var j = i
         switch key {
@@ -374,8 +410,21 @@ private final class PickerModel: ObservableObject {
         guard j >= 0, j < n, j != i || focus == 0 else { return }
         pos += j + 1 - focus
     }
+    func reorderGame(from source: Int, to destination: Int) {
+        guard games.indices.contains(source), games.indices.contains(destination), source != destination else { return }
+        let oldFocus = focus
+        let focusedID = game(oldFocus)?.id
+        var ordered = games
+        let game = ordered.remove(at: source)
+        ordered.insert(game, at: destination)
+        UserDefaults.standard.set(["local": ordered.map(\.id), "desktop": gameOrder()], forKey: pickerOrderKey)
+        games = ordered
+        if let focusedID, let index = ordered.firstIndex(where: { $0.id == focusedID }) {
+            pos += index + 1 - oldFocus
+        }
+    }
     func choose(at v: Int? = nil) {   // the item at place v of the ring (the focused one when nil)
-        guard !starting else { return }
+        guard !starting, !reorderingGames else { return }
         if let v { pos = v }
         if let g = game(focus) { starting = true; start(g) } else { padsOpen = true }
     }
@@ -514,17 +563,20 @@ private struct GameTile: View {
     }
 }
 
-private struct PadsTile: View {   // the QR code itself, a short bar in each joined player's colour
+private struct PadsTile: View {
     let qr: UIImage?
-    let joined: Int
+    let joined: [Int]
     let focused: Bool
     let side: CGFloat
     @Environment(\.uiK) private var k
     var body: some View {
+        let mark = side * 0.032
         ZStack {
             Color.white
             if let qr {
-                Image(uiImage: qr).interpolation(.none).resizable().frame(width: side * 0.8, height: side * 0.8)
+                Image(uiImage: qr).interpolation(.none).resizable().scaledToFit()
+                    .frame(width: side * 0.74, height: side * 0.74)
+                    .offset(y: joined.isEmpty ? 0 : -side * 0.028)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "wifi.slash").font(.system(size: side * 0.18))
@@ -532,8 +584,13 @@ private struct PadsTile: View {   // the QR code itself, a short bar in each joi
                 }
                 .foregroundStyle(.black.opacity(0.55))
             }
-            HStack(spacing: 5 * k) { ForEach(0..<joined, id: \.self) { i in RoundedRectangle(cornerRadius: 3 * k, style: .continuous).fill(playerColors[i % playerColors.count]).frame(width: 14 * k, height: 6 * k) } }
-                .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, side * 0.04)
+            HStack(spacing: mark * 0.42) {
+                ForEach(joined.sorted(), id: \.self) { player in
+                    RoundedRectangle(cornerRadius: mark * 0.22, style: .continuous)
+                        .fill(playerColors[(player - 1) % playerColors.count]).frame(width: mark, height: mark)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, side * 0.047)
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous))
@@ -554,32 +611,26 @@ private struct PlaceFrames: PreferenceKey {
     static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) { value.merge(nextValue()) { $1 } }
 }
 
-private func shortURL(_ url: String) -> String {   // http://192.168.0.152:8080/ -> 192.168.0.152:8080
-    var u = url
-    if u.hasPrefix("http://") { u.removeFirst(7) }
-    if u.hasSuffix("/") { u.removeLast() }
-    return u
-}
-
 // The players card: the QR code and address on the left, the eight places on the right (two columns of four, so it keeps its size)
 private struct PadsCard: View {
     @ObservedObject var m: PickerModel
     @ObservedObject var pads: PadsModel
     @ObservedObject var players: PlayersModel
+    let viewport: CGSize
     @EnvironmentObject var activity: ActivityModel
     @Environment(\.uiK) private var k
     @Environment(\.tenFoot) private var tenFoot
-    // its places have fixed sizes: its text a size smaller than the rest of the TV layout (Dynamic Type's xLarge, as before), the boxes k times
-    private var t: CGFloat { tenFoot ? k * 0.68 : 1 }
+    private var t: CGFloat { tenFoot ? k * 0.85 : 1 }
+    private var cardWidth: CGFloat { tenFoot ? min(1280 * k, 0.86 * viewport.width) : 980 * k }
+    private var qrSide: CGFloat { tenFoot ? min(280 * k, cardWidth * 0.25, viewport.height * 0.34) : 230 * k }
     @ScaledMetric(relativeTo: .title2) private var addressSize: CGFloat = 24
     @State private var frames: [Int: CGRect] = [:]   // each place, in the grid's space: where a dragged player lands
     @State private var dragging: Int?
     @State private var dragOffset: CGSize = .zero
     @State private var dropOn: Int?
-    private func place(at p: CGPoint) -> Int? { frames.first { $0.value.contains(p) }?.key }
-    // Only player 1 moves players, as with a controller: by touch only while the iPad is player 1 (handheld mode, its touch controls, with no
-    // controller or phone holding P1); otherwise the card shows the numbers and player 1's controller or phone moves them
-    private var touchMoves: Bool { !tenFoot && !players.players.contains { $0.player == 1 } }
+    private func place(at p: CGPoint, excluding i: Int) -> Int? {
+        frames.first { $0.key != i && $0.value.contains(p) }?.key
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 22 * k) {
             HStack {
@@ -591,24 +642,25 @@ private struct PadsCard: View {
                 VStack(spacing: 12 * k) {
                     ZStack {
                         Color.white
-                        if let qr = pads.qr { Image(uiImage: qr).interpolation(.none).resizable().padding(14 * k) }
+                        if let qr = pads.qr { Image(uiImage: qr).interpolation(.none).resizable().scaledToFit().padding(qrSide * 0.12) }
                         else { Image(systemName: "wifi.slash").font(.ds(.largeTitle, k: t)).foregroundStyle(.black.opacity(0.5)) }
                     }
-                    .frame(width: 230 * k, height: 230 * k).clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
+                    .frame(width: qrSide, height: qrSide).clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
                     if let url = pads.url {
-                        // what a phone's browser takes typed in (it adds http:// itself), as wide as the code above it and in the card's own type
-                        Text(shortURL(url))
-                            .font(.system(size: addressSize * k, weight: .semibold).monospacedDigit())
+                        Text(url)
+                            .font(tenFoot ? .system(size: max(1, min(24 * k, (qrSide - 20 * k) / (CGFloat(max(1, url.count)) * 0.62))),
+                                                   weight: .semibold, design: .monospaced) :
+                                    .system(size: addressSize * k, weight: .semibold).monospacedDigit())
                             .lineLimit(1).minimumScaleFactor(0.5)
                             .padding(.horizontal, 10 * k)
-                            .frame(width: 230 * k).padding(.vertical, 8 * k)
+                            .frame(width: qrSide).padding(.vertical, 8 * k)
                             .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
                             .accessibilityLabel(url)
                     } else {
                         Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first")).font(.ds(.footnote, k: t)).foregroundStyle(.white.opacity(0.65))
                     }
                 }
-                .frame(width: 250 * k)
+                .frame(width: qrSide + 20 * k)
                 Grid(horizontalSpacing: 10 * k, verticalSpacing: 10 * k) {
                     ForEach(0..<4, id: \.self) { r in
                         GridRow { place(r); place(r + 4) }
@@ -624,7 +676,7 @@ private struct PadsCard: View {
             .font(.ds(.callout, k: t)).foregroundStyle(.white.opacity(0.6))
         }
         .padding(30 * k)
-        .frame(maxWidth: 980 * k)
+        .frame(maxWidth: cardWidth)
         .glassCard(DS.cardRadius * k)
         .foregroundStyle(.white)
     }
@@ -669,7 +721,7 @@ private struct PadsCard: View {
             }
         }
         .padding(.horizontal, 12 * k)
-        .frame(height: 64 * k)
+        .frame(height: max(64 * k, qrSide / 4))
         .frame(maxWidth: .infinity)
         .background {
             RoundedRectangle(cornerRadius: DS.rowRadius * k, style: .continuous)
@@ -689,14 +741,13 @@ private struct PadsCard: View {
         .animation(DS.spring, value: sel)
         .animation(DS.spring, value: picked)
         .contentShape(Rectangle())
-        .onTapGesture {   // tap a player: picked up (it buzzes), tap a place: it moves there (the two swap); a removed one is added back
+        .onTapGesture {   // Tap a player to pick it up, then tap another place to move or swap.
             m.sel = i
-            if let p = m.picked, touchMoves {
+            if let p = m.picked {
                 if p != i { players.send(["op": "swap", "a": p + 1, "b": n]) }
                 m.picked = nil
             } else if row != nil {
-                if touchMoves { m.picked = i }
-                players.send(["op": "identify", "p": n])
+                m.picked = i
             }
             else if let r = back { players.send(["op": "add", "index": r.index]) }
         }
@@ -704,52 +755,337 @@ private struct PadsCard: View {
             .onChanged { v in
                 dragging = i; m.picked = nil
                 dragOffset = v.translation
-                dropOn = place(at: v.location)
+                dropOn = place(at: v.location, excluding: i)
             }
             .onEnded { v in
-                if let to = place(at: v.location), to != i { players.send(["op": "swap", "a": n, "b": to + 1]); m.sel = to }
+                if let to = place(at: v.location, excluding: i) {
+                    players.send(["op": "swap", "a": n, "b": to + 1])
+                    m.sel = to
+                }
                 withAnimation(DS.spring) { dragging = nil; dragOffset = .zero; dropOn = nil }
-            }, including: row == nil || !touchMoves ? .subviews : .all)   // only a player can be dragged, and only while the iPad is player 1
+            }, including: row == nil ? .subviews : .all)   // only occupied slots can start a drag
     }
 }
 
-// Every game at once: icons in rows with their names under them, in the row's order, the chosen one ringed and kept in view. The arrows move (PickerModel.gridMove),
-// A or a tap opens the game's settings (its launcher, as Play in the row), B or X goes back to the row on the same game
+private struct GridGameTile: View {
+    let game: PickerGame
+    let focused: Bool
+    let side: CGFloat
+    let width: CGFloat
+    var captionHeight: CGFloat? = nil
+    @Environment(\.uiK) private var k
+
+    var body: some View {
+        VStack(spacing: 14 * k) {
+            GameTile(game: game, focused: focused, side: side, grid: true)
+            Text(game.name).font(.ds(.footnote, focused ? .bold : .semibold, k: k)).lineLimit(1).truncationMode(.tail)
+                .foregroundStyle(.white.opacity(focused ? 1 : 0.65)).frame(width: width, height: captionHeight)
+        }
+        .padding(.top, 12 * k)
+    }
+}
+
+// The touch grid uses the collection view's lift, insertion, edge scrolling and drop animations.
+// Its cells render the same tiles as the controller grid.
+private struct TouchGameGrid: UIViewRepresentable {
+    let m: PickerModel
+    let width: CGFloat
+    let cols: Int
+    let side: CGFloat
+    let gap: CGFloat
+    @Environment(\.uiK) private var k
+    @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .footnote) private var captionHeight: CGFloat = 18
+
+    struct Appearance: Equatable {
+        let width: CGFloat
+        let cols: Int
+        let side: CGFloat
+        let gap: CGFloat
+        let k: CGFloat
+        let textSize: DynamicTypeSize
+        let captionHeight: CGFloat
+        let reduceMotion: Bool
+        var itemWidth: CGFloat { side + 0.8 * gap }
+
+        func apply(to layout: UICollectionViewFlowLayout) {
+            let spacing = 0.2 * gap
+            let rowWidth = CGFloat(cols) * itemWidth + CGFloat(cols - 1) * spacing
+            let inset = max(0, (width - rowWidth) / 2 - 0.5)
+            layout.itemSize = CGSize(width: itemWidth, height: side + 26 * k + captionHeight)
+            layout.minimumInteritemSpacing = spacing
+            layout.minimumLineSpacing = 26 * k
+            layout.sectionInset = UIEdgeInsets(top: 20 * k, left: inset, bottom: 20 * k, right: inset)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(m) }
+    func makeUIView(context: Context) -> UICollectionView {
+        let view = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewFlowLayout())
+        view.backgroundColor = .clear
+        view.contentInsetAdjustmentBehavior = .never
+        view.showsVerticalScrollIndicator = false
+        view.dragInteractionEnabled = true
+        view.reorderingCadence = .fast
+        view.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "game")
+        view.dataSource = context.coordinator
+        view.delegate = context.coordinator
+        view.dragDelegate = context.coordinator
+        view.dropDelegate = context.coordinator
+        return view
+    }
+    func updateUIView(_ view: UICollectionView, context: Context) {
+        let appearance = Appearance(width: width, cols: cols, side: side, gap: gap, k: k, textSize: textSize,
+                                    captionHeight: captionHeight * k, reduceMotion: reduceMotion)
+        context.coordinator.update(in: view, appearance: appearance)
+    }
+    static func dismantleUIView(_ view: UICollectionView, coordinator: Coordinator) {
+        coordinator.endDrag()
+    }
+
+    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate,
+                             UICollectionViewDragDelegate, UICollectionViewDropDelegate {
+        let m: PickerModel
+        private var appearance: Appearance?
+        private var focusedID: String?
+        private var draggedID: String?
+
+        init(_ model: PickerModel) { m = model }
+
+        func update(in view: UICollectionView, appearance: Appearance) {
+            let previous = self.appearance
+            let styleChanged = previous != appearance
+            self.appearance = appearance
+            if styleChanged, let layout = view.collectionViewLayout as? UICollectionViewFlowLayout {
+                appearance.apply(to: layout)
+            }
+            let nextFocus = m.game(m.focus)?.id
+            let focusChanged = focusedID != nextFocus
+            focusedID = nextFocus
+            if styleChanged || focusChanged {
+                for cell in view.visibleCells {
+                    if let path = view.indexPath(for: cell) { configure(cell, at: path) }
+                }
+            }
+            guard (focusChanged || styleChanged), !m.reorderingGames, !m.starting, let nextFocus else { return }
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, self.focusedID == nextFocus,
+                      !self.m.reorderingGames, !self.m.starting, view.window != nil, view.bounds.height > 0,
+                      let index = self.m.games.firstIndex(where: { $0.id == nextFocus }) else { return }
+                view.layoutIfNeeded()
+                view.scrollToItem(at: IndexPath(item: index, section: 0), at: .centeredVertically,
+                                  animated: previous != nil && !appearance.reduceMotion)
+            }
+        }
+
+        private func configure(_ cell: UICollectionViewCell, at indexPath: IndexPath) {
+            guard let appearance, let game = m.game(indexPath.item + 1) else { return }
+            let focused = game.id == focusedID
+            cell.contentConfiguration = UIHostingConfiguration {
+                GridGameTile(game: game, focused: focused, side: appearance.side, width: appearance.itemWidth,
+                             captionHeight: appearance.captionHeight)
+                    .environment(\.uiK, appearance.k).dynamicTypeSize(appearance.textSize)
+            }.margins(.all, 0)
+            cell.isAccessibilityElement = true
+            cell.accessibilityLabel = game.name
+            cell.accessibilityTraits = .button
+        }
+
+        func collectionView(_ view: UICollectionView, numberOfItemsInSection section: Int) -> Int { m.games.count }
+        func collectionView(_ view: UICollectionView, cellForItemAt path: IndexPath) -> UICollectionViewCell {
+            let cell = view.dequeueReusableCell(withReuseIdentifier: "game", for: path)
+            configure(cell, at: path)
+            return cell
+        }
+        func collectionView(_ view: UICollectionView, canFocusItemAt path: IndexPath) -> Bool { false }
+        func collectionView(_ view: UICollectionView, didSelectItemAt path: IndexPath) {
+            view.deselectItem(at: path, animated: false)
+            m.choose(at: m.pos + path.item + 1 - m.focus)
+        }
+
+        func collectionView(_ view: UICollectionView, itemsForBeginning session: UIDragSession, at path: IndexPath) -> [UIDragItem] {
+            guard m.gridOpen, !m.padsOpen, !m.starting, !m.reorderingGames, m.games.count > 1,
+                  let game = m.game(path.item + 1) else { return [] }
+            let item = UIDragItem(itemProvider: NSItemProvider(object: game.name as NSString))
+            item.localObject = game.id
+            session.localContext = view
+            draggedID = game.id
+            return [item]
+        }
+        func collectionView(_ view: UICollectionView, dragSessionAllowsMoveOperation session: UIDragSession) -> Bool { true }
+        func collectionView(_ view: UICollectionView, dragSessionIsRestrictedToDraggingApplication session: UIDragSession) -> Bool { true }
+        func collectionView(_ view: UICollectionView, dragSessionWillBegin session: UIDragSession) { m.reorderingGames = true }
+        func collectionView(_ view: UICollectionView, dragSessionDidEnd session: UIDragSession) { endDrag() }
+        func collectionView(_ view: UICollectionView, dragPreviewParametersForItemAt path: IndexPath) -> UIDragPreviewParameters? { iconPreview() }
+        func collectionView(_ view: UICollectionView, dropPreviewParametersForItemAt path: IndexPath) -> UIDragPreviewParameters? { iconPreview() }
+        private func iconPreview() -> UIDragPreviewParameters? {
+            guard let appearance else { return nil }
+            let side = appearance.side
+            let rect = CGRect(x: (appearance.itemWidth - side) / 2, y: 12 * appearance.k, width: side, height: side)
+            let preview = UIDragPreviewParameters()
+            preview.backgroundColor = .clear
+            preview.visiblePath = UIBezierPath(roundedRect: rect, cornerRadius: tileRadius(side))
+            return preview
+        }
+        func endDrag() {
+            guard draggedID != nil else { return }
+            draggedID = nil
+            m.reorderingGames = false
+        }
+
+        func collectionView(_ view: UICollectionView, canHandle session: UIDropSession) -> Bool {
+            guard let draggedID, m.gridOpen, !m.padsOpen, !m.starting,
+                  (session.localDragSession?.localContext as? UICollectionView) === view else { return false }
+            return session.items.count == 1 && (session.items.first?.localObject as? String) == draggedID
+        }
+        func collectionView(_ view: UICollectionView, dropSessionDidUpdate session: UIDropSession,
+                            withDestinationIndexPath destination: IndexPath?) -> UICollectionViewDropProposal {
+            guard collectionView(view, canHandle: session) else { return UICollectionViewDropProposal(operation: .forbidden) }
+            return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+        }
+        func collectionView(_ view: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
+            guard collectionView(view, canHandle: coordinator.session), let item = coordinator.items.first,
+                  let source = item.sourceIndexPath, m.game(source.item + 1)?.id == draggedID,
+                  let destination = dropDestination(in: view, for: coordinator) else { return }
+            if source != destination {
+                view.performBatchUpdates {
+                    withAnimation(self.appearance?.reduceMotion == true ? nil : DS.spring) {
+                        self.m.reorderGame(from: source.item, to: destination.item)
+                    }
+                    view.moveItem(at: source, to: destination)
+                }
+            }
+            coordinator.drop(item.dragItem, toItemAt: destination)
+        }
+        private func dropDestination(in view: UICollectionView, for drop: UICollectionViewDropCoordinator) -> IndexPath? {
+            let last = IndexPath(item: m.games.count - 1, section: 0)
+            if let proposed = drop.destinationIndexPath {
+                return IndexPath(item: min(proposed.item, last.item), section: 0)
+            }
+            // A release below a short last row can place the game at the end.
+            let point = drop.session.location(in: view)
+            guard let attributes = view.layoutAttributesForItem(at: last), point.y > attributes.frame.midY else { return nil }
+            return last
+        }
+    }
+}
+
+// Both grids share PickerModel, including the selection and the order shown in the carousel.
 private struct GameGrid: View {
     @ObservedObject var m: PickerModel
     let width: CGFloat
     let cols: Int
     @Environment(\.uiK) private var k
+    @Environment(\.tenFoot) private var tenFoot
+    @Environment(\.pregameMirror) private var mirror
     var body: some View {
-        let pad = 48 * k, gap = 28 * k
-        let side = max(60, ((width - 2 * pad - CGFloat(cols - 1) * gap) / CGFloat(cols)).rounded(.down))
+        let pad = min(48 * k, width * 0.1), gap = 28 * k
+        let columns = max(1, min(cols, Int((width - 2 * pad + gap) / (60 + gap))))
+        let side = max(1, ((width - 2 * pad - CGFloat(columns - 1) * gap) / CGFloat(columns)).rounded(.down))
+        Group {
+            if tenFoot || mirror {
+                controllerGrid(pad: pad, gap: gap, side: side, columns: columns)
+            } else {
+                TouchGameGrid(m: m, width: width, cols: columns, side: side, gap: gap)
+            }
+        }
+        .clipped()
+        .onChange(of: columns, initial: true) { _, c in if !mirror { m.gridCols = c } }
+    }
+
+    private func controllerGrid(pad: CGFloat, gap: CGFloat, side: CGFloat, columns: Int) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(side), spacing: gap), count: cols), spacing: 26 * k) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(side), spacing: gap), count: columns), spacing: 26 * k) {
                     ForEach(Array(m.games.enumerated()), id: \.element.id) { i, g in
                         let on = m.focus == i + 1
-                        VStack(spacing: 14 * k) {
-                            GameTile(game: g, focused: on, side: side, grid: true)
-                            Text(g.name).font(.ds(.footnote, on ? .bold : .semibold, k: k)).lineLimit(1).truncationMode(.tail)
-                                .foregroundStyle(.white.opacity(on ? 1 : 0.65)).frame(width: side + gap * 0.8)
-                        }
-                        .padding(.top, 12 * k)   // room for the ring and the larger chosen tile
-                        .opacity(m.starting && !on ? 0 : 1)
-                        .contentShape(Rectangle())
-                        .onTapGesture { m.choose(at: m.pos + i + 1 - m.focus) }
-                        .accessibilityLabel(g.name).accessibilityAddTraits(.isButton)
-                        .id(g.id)
+                        GridGameTile(game: g, focused: on, side: side, width: side + gap * 0.8)
+                            .contentShape(Rectangle())
+                            .onTapGesture { m.choose(at: m.pos + i + 1 - m.focus) }
+                            .accessibilityLabel(g.name).accessibilityAddTraits(.isButton)
+                            .id(g.id)
                     }
                 }
                 .padding(.horizontal, pad).padding(.vertical, 20 * k)
                 .animation(DS.spring, value: m.pos)
-                .animation(.easeOut(duration: 0.3), value: m.starting)
             }
             .onChange(of: m.pos) { _, _ in if let id = m.game(m.focus)?.id { withAnimation(DS.spring) { proxy.scrollTo(id, anchor: .center) } } }
             .onAppear { if let id = m.game(m.focus)?.id { proxy.scrollTo(id, anchor: .center) } }
         }
-        .clipped()
-        .onChange(of: cols, initial: true) { _, c in m.gridCols = c }
+    }
+}
+
+private struct PickerSettingsCard: View {
+    @ObservedObject var m: PickerModel
+    let k: CGFloat
+    @State private var volume = pickerVolume()
+    @State private var outputs = pickerOutputs()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10 * k) {
+            Text(m.confirmingExit ? tr("關閉 SwitchPad？", "Close SwitchPad?") : tr("SwitchPad 設定", "SwitchPad settings"))
+                .font(.ds(.title2, .bold, k: k)).padding(.bottom, 8 * k)
+            if m.confirmingExit {
+                option(0, "arrow.uturn.left", tr("取消", "Cancel")) { m.confirmingExit = false; m.setting = 3 }
+                option(3, "power", tr("關閉 SwitchPad", "Close SwitchPad")) { pickerAction(3) }
+            } else {
+                VStack(alignment: .leading, spacing: 2 * k) {
+                    Label(tr("音量 ", "Volume ") + String(Int((volume * 100).rounded())) + "%", systemImage: "speaker.wave.2.fill")
+                        .font(.ds(.headline, .semibold, k: k))
+                    Slider(value: Binding(get: { volume }, set: {
+                        m.setting = 0
+                        volume = $0
+                        setPickerVolume($0)
+                    }), in: 0...1, step: 0.01)
+                    .accessibilityLabel(tr("音量", "Volume"))
+                }
+                .padding(.horizontal, 14 * k).padding(.vertical, 8 * k)
+                .background(m.setting == 0 ? DS.accent : DS.plate, in: RoundedRectangle(cornerRadius: 12 * k))
+                if outputs & 1 != 0 {
+                    option(1, "display", tr("畫面模式", "Display mode"),
+                           outputs & 2 == 0 ? tr("主機模式", "Console") : tr("掌機模式", "Handheld")) { pickerAction(1) }
+                    option(2, "speaker.wave.2", tr("聲音輸出", "Audio output"),
+                           outputs & 4 == 0 ? tr("外接螢幕", "External display") : "iPad") { pickerAction(2) }
+                }
+                option(3, "power", tr("關閉 SwitchPad", "Close SwitchPad")) {
+                    m.confirmingExit = true
+                    m.setting = 0
+                }
+                Button { m.settingsOpen = false } label: {
+                    KeyHint(key: "B", text: tr("返回", "Back"))
+                        .font(.ds(.callout, k: k))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.top, 6 * k)
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(22 * k)
+        .frame(maxWidth: 510 * k)
+        .foregroundStyle(.white)
+        .background(DS.card, in: RoundedRectangle(cornerRadius: DS.cardRadius * k))
+        .overlay { RoundedRectangle(cornerRadius: DS.cardRadius * k).strokeBorder(DS.hairline).allowsHitTesting(false) }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMShellChanged"))) { _ in
+            volume = pickerVolume()
+            outputs = pickerOutputs()
+            if outputs & 1 == 0 && (m.setting == 1 || m.setting == 2) { m.setting = 0 }
+        }
+    }
+
+    private func option(_ id: Int, _ icon: String, _ title: String, _ detail: String? = nil, action: @escaping () -> Void) -> some View {
+        Button {
+            m.setting = id
+            action()
+        } label: {
+            HStack(spacing: 10 * k) {
+                Label(title, systemImage: icon)
+                Spacer(minLength: 4 * k)
+                if let detail { Text(detail).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8) }
+            }
+            .font(.ds(.headline, .semibold, k: k)).lineLimit(1)
+            .padding(.horizontal, 14 * k).padding(.vertical, 12 * k)
+            .background(m.setting == id ? DS.accent : DS.plate, in: RoundedRectangle(cornerRadius: 12 * k))
+        }.buttonStyle(.plain)
     }
 }
 
@@ -760,8 +1096,14 @@ private struct PickerView: View {
     @StateObject private var activity = ActivityModel()
     @State private var held: (key: String, task: Task<Void, Never>)?
     @State private var drag: CGFloat = 0   // how far a finger has moved the row
-    @StateObject private var tv = TenFoot(native: true)   // laid out at the TV's own size: text drawn sharp at 4K
+    @State private var pendingShortcut: String?
+    @StateObject private var tv: TenFoot
     @Environment(\.pregameMirror) private var mirror   // the TV's copy in handheld mode: shows, takes no input
+
+    init(m: PickerModel, onTV: Bool, screenScale: CGFloat = 1) {
+        self.m = m
+        _tv = StateObject(wrappedValue: TenFoot(native: true, onTV: onTV, screenScale: screenScale))
+    }
 
     var body: some View {
         GeometryReader { g in
@@ -792,12 +1134,28 @@ private struct PickerView: View {
                 if m.padsOpen {
                     Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.picked = nil; m.padsOpen = false }
                         .transition(.opacity)
-                    PadsCard(m: m, pads: pads, players: players).padding(32 * k)
+                    PadsCard(m: m, pads: pads, players: players, viewport: g.size).padding(32 * k)
                         .dynamicTypeSize(tv.on ? .xLarge ... .xLarge : .xSmall ... .accessibility5)   // its places have fixed sizes: a little larger on a TV, not the whole step
                         .transition(DS.cardIn)
                 }
+                if m.settingsOpen {
+                    Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { closeSettings() }
+                        .transition(.opacity)
+                    ViewThatFits(in: .vertical) {
+                        PickerSettingsCard(m: m, k: k)
+                        ScrollView {
+                            PickerSettingsCard(m: m, k: k).frame(maxWidth: .infinity)
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                    }
+                    .frame(maxHeight: max(1, g.size.height - 48 * k))
+                    .padding(24 * k)
+                    .dynamicTypeSize(tv.on ? .xLarge ... .xLarge : .xSmall ... .accessibility5)
+                    .transition(DS.cardIn)
+                }
             }
             .animation(DS.pop, value: m.padsOpen)
+            .animation(DS.pop, value: m.settingsOpen)
             .environmentObject(activity)
             .frame(width: g.size.width, height: g.size.height)
             .background { backdrop(current) }   // behind, not in the stack: the icon filling the screen would make the stack taller than it and push the row down
@@ -807,8 +1165,22 @@ private struct PickerView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { input($0.userInfo) } }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMHomePressed"))) { note in
+            guard !mirror, note.userInfo?["p"] as? Int == 1, note.userInfo?["shortcut"] as? Bool == true,
+                  !m.starting, !m.reorderingGames else { return }
+            pendingShortcut = nil
+            if m.settingsOpen { closeSettings() } else { openSettings() }
+        }
         .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
-        .onDisappear { held?.task.cancel() }
+        .onChange(of: m.settingsOpen) { _, open in
+            if !open { held?.task.cancel(); held = nil }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            held?.task.cancel()
+            held = nil
+            pendingShortcut = nil
+        }
+        .onDisappear { held?.task.cancel(); pendingShortcut = nil }
         .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
         .tenFoot(tv)
     }
@@ -824,14 +1196,12 @@ private struct PickerView: View {
                     if let game = m.game(i) {
                         GameTile(game: game, focused: v == m.pos, side: side).accessibilityLabel(game.name)
                     } else {
-                        PadsTile(qr: pads.qr, joined: players.players.count, focused: v == m.pos, side: side)
+                        PadsTile(qr: pads.qr, joined: players.players.map(\.player), focused: v == m.pos, side: side)
                     }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { m.choose(at: v) }
                 .accessibilityAddTraits(.isButton)
-                .scaleEffect(m.starting && v == m.pos ? 1.1 : 1)
-                .opacity(m.starting && v != m.pos ? 0 : 1)
                 .offset(x: CGFloat(v - m.pos) * pitch + drag)
             }
         }
@@ -849,7 +1219,6 @@ private struct PickerView: View {
                 }
         )
         .animation(DS.spring, value: m.pos)
-        .animation(.easeOut(duration: 0.3), value: m.starting)
     }
 
     private func backdrop(_ game: PickerGame?) -> some View {
@@ -897,6 +1266,13 @@ private struct PickerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(m.gridOpen ? tr("回到單排", "Back to the row") : tr("所有遊戲", "All games"))
             }
+            Button { openSettings() } label: {
+                Image(systemName: "gearshape").font(.ds(.title3, .semibold, k: k))
+                    .frame(width: 48 * k, height: 44 * k)
+                    .background(DS.chip, in: RoundedRectangle(cornerRadius: 12 * k))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(tr("SwitchPad 設定", "SwitchPad settings"))
             BackToTVButton()
             StatusBar()
         }
@@ -926,6 +1302,9 @@ private struct PickerView: View {
 
     private func footer(_ k: CGFloat) -> some View {
         HStack(spacing: 22 * k) {
+            if m.gridOpen && !tv.on && !mirror && m.games.count > 1 {
+                Text(tr("長按圖示可排序", "Touch and hold to reorder")).lineLimit(1).minimumScaleFactor(0.8)
+            }
             Spacer()
             if m.gridOpen {
                 KeyHint(key: "✛", text: tr("選擇", "Choose"))
@@ -937,10 +1316,10 @@ private struct PickerView: View {
                 if m.games.count > 1 { KeyHint(key: "X", text: tr("所有遊戲", "All games")) }
             }
             KeyHint(key: "Y", text: tr("玩家", "Players"))
+            KeyHint(key: "＋／−", text: tr("設定", "Settings"))
             if tv.on { KeyHint(key: "Home", text: tr("切換模式", "Switch mode")) }   // on the TV, the same in console and handheld mode
         }
         .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
-        .opacity(m.starting ? 0 : 1)
     }
 
     // On the players card: up and down within a column, left and right between the columns; A identifies, − switches the layout, X removes, B closes
@@ -965,11 +1344,78 @@ private struct PickerView: View {
         }
     }
 
+    private func openSettings() {
+        guard !m.starting, !m.reorderingGames else { return }
+        held?.task.cancel()
+        m.picked = nil
+        m.padsOpen = false
+        m.setting = 0
+        m.confirmingExit = false
+        m.settingsOpen = true
+    }
+
+    private func closeSettings() {
+        if m.confirmingExit {
+            m.confirmingExit = false
+            m.setting = 3
+        } else {
+            m.settingsOpen = false
+        }
+    }
+
+    private func settingsInput(_ key: String) {
+        if key == "b" { closeSettings(); return }
+        if m.confirmingExit {
+            if key == "up" { m.setting = 0 }
+            if key == "down" { m.setting = 3 }
+            if key == "a" {
+                if m.setting == 3 { pickerAction(3) } else { closeSettings() }
+            }
+            return
+        }
+        let rows = pickerOutputs() & 1 == 0 ? [0, 3] : [0, 1, 2, 3]
+        switch key {
+        case "up", "down":
+            let index = rows.firstIndex(of: m.setting) ?? 0
+            m.setting = rows[min(rows.count - 1, max(0, index + (key == "up" ? -1 : 1)))]
+        case "left" where m.setting == 0, "right" where m.setting == 0:
+            let direction: Int32 = key == "left" ? -1 : 1
+            guard adjustPickerVolume(direction) else { return }
+            held = (key, Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                var repeats = 0
+                while !Task.isCancelled {
+                    if !adjustPickerVolume(direction) { break }
+                    repeats += 1
+                    try? await Task.sleep(for: .milliseconds(max(35, 130 - repeats * 7)))
+                }
+            })
+        case "a":
+            if m.setting == 3 {
+                m.confirmingExit = true
+                m.setting = 0
+            } else if m.setting != 0 {
+                pickerAction(Int32(m.setting))
+            }
+        default: break
+        }
+    }
+
     private func input(_ u: [AnyHashable: Any]?) {
         guard let key = u?["key"] as? String, (u?["p"] as? Int ?? 1) == 1 else { return }   // player 1 drives it, as in the launcher
-        if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
+        let pressed = (u?["on"] as? Int ?? 1) != 0
+        if key == "plus" || key == "minus" {
+            // A single key acts on release, so a staggered ＋/− chord cannot launch a game first.
+            if pressed { pendingShortcut = key; return }
+            guard pendingShortcut == key else { return }
+            pendingShortcut = nil
+        } else if !pressed {
+            if held?.key == key { held?.task.cancel(); held = nil }
+            return
+        }
         held?.task.cancel(); held = nil
-        guard !m.starting else { return }
+        guard !m.starting, !m.reorderingGames else { return }
+        if m.settingsOpen { settingsInput(key); return }
         if m.padsOpen { cardInput(key); return }
         switch key {
         case "y": m.padsOpen = true
@@ -996,9 +1442,11 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     let fresh = PickerModel.kept == nil
     let model = PickerModel.kept ?? PickerModel()
     PickerModel.kept = model
-    model.starting = false; model.padsOpen = false
-    let h = NoFocusHostingController(rootView: PickerView(m: model))   // Launcher.swift
-    PregameStage.shared.showPicker({ AnyView(PickerView(m: model)) }, fresh: fresh)   // the TV's copy in handheld mode
+    model.starting = false; model.padsOpen = false; model.settingsOpen = false
+    let scene = parent.view.window?.windowScene
+    let onTV = scene?.session.role == .windowExternalDisplayNonInteractive
+    let h = NoFocusHostingController(rootView: PickerView(m: model, onTV: onTV, screenScale: scene?.screen.scale ?? 1))
+    PregameStage.shared.showPicker({ AnyView(PickerView(m: model, onTV: true)) }, fresh: fresh)   // the TV's copy in handheld mode
     // The blurred backdrops and, with a TV, the enlarged icons made ahead, off the main thread: the TV's copy (built again on the way back from the
     // launcher) had to make them all as it appeared, and came in well after the iPad
     if fresh {
@@ -1011,16 +1459,21 @@ public func dmShowPicker(_ viewController: UnsafeMutableRawPointer, _ done: @con
     controllerNotForUIKit(h.view)   // Launcher.swift
     h.modalPresentationStyle = .fullScreen
     h.modalTransitionStyle = .crossDissolve   // fades in and out, to and from the launcher
-    model.start = { [weak h] game in
+    model.start = { [weak h, weak model] game in
+        guard let h else { model?.starting = false; return }
+        let covered = frontIosPickerCoverBegin()
         UserDefaults.standard.set(Date(), forKey: "picker.played." + game.id)
         PickerModel.lastPicked = game.id
         fputs("picker: \(game.id) (\(game.name))\n", stderr)
         NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
-        DispatchQueue.main.async {   // let the loading veil draw before main.m reads the game's files
+        DispatchQueue.main.async {
             game.id.withCString { shellGameChoose($0) }
-            h?.dismiss(animated: true) { done() }
+            h.dismiss(animated: !covered) { done() }
         }
     }
-    parent.present(h, animated: true)
+    parent.present(h, animated: !frontIosPickerCoverActive()) {
+        h.view.layoutIfNeeded()
+        frontIosPickerCoverEnd()
+    }
     fputs("picker: \(model.games.count) games shown\n", stderr)
 }
