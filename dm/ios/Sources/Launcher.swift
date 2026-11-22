@@ -92,7 +92,8 @@ private let zhText: [String: String] = [
     // save slots (SaveSlots.swift)
     "Saves": "存檔", "Save in use": "使用中的存檔", "Switch saves": "切換存檔", "Choose a save": "選擇存檔",
     "New empty save": "新增空白存檔", "Copy this save": "複製目前的存檔",
-    "Rename this save": "重新命名這份存檔", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
+    "Rename this save": "重新命名這份存檔",
+    "Enter the new name on the iPad": "請在 iPad 上輸入新名稱", "Delete a save": "刪除存檔", "Delete": "刪除", "Cancel": "取消", "Rename": "重新命名", "Name": "名稱",
     "Save %d": "存檔 %d", "%@ (copy)": "%@（副本）", "Delete \"%@\"?": "要刪除「%@」嗎？",
     "Create an empty save?": "要新增空白存檔嗎？",
     "The new empty save will become the save in use. Your existing saves will be kept.": "新增的空白存檔會成為使用中的存檔。原有存檔會保留。",
@@ -569,6 +570,12 @@ private final class NavModel: ObservableObject {
     @Published var part: Int?        // on a player's row: 0 layout, 1 Identify, 2 Move to, 3 Remove
     @Published var moveTo: Int?      // Move to: the player number picked so far
     @Published var own: [Int: Int] = [:]   // players 2 to 8: the control each one picked on its own row (0 layout, 1 Identify)
+    @Published var saveConfirmation: SaveConfirmation?
+    @Published var saveSelection: SaveSelection?
+    @Published var selectedSaveID: Int?
+    @Published var confirmFocused = false
+    @Published var nameEntryOnIPad = false
+    @Published var newSaveName = ""
     var list = ""                    // the row left for Play, where right goes back to
     func reset() { editing = false; part = nil; moveTo = nil }
 }
@@ -854,19 +861,17 @@ private struct LauncherView: View {
     @StateObject private var players = PlayersModel()
     @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
     @StateObject private var activity = ActivityModel()
-    @StateObject private var saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
-    @State private var saveConfirmation: SaveConfirmation?
-    @State private var saveSelection: SaveSelection?
-    @State private var selectedSaveID: Int?
-    @State private var newSaveName = ""
+    @ObservedObject var saves: SaveSlotsModel
+    @State private var nameAlert: UIAlertController?
     @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
     @StateObject private var tv: TenFoot
 
-    init(m: LauncherModel, shell: ShellSettings, nav: NavModel, play: @escaping () -> Void,
-         back: (() -> Void)?, onTV: Bool, screenScale: CGFloat = 1) {
+    init(m: LauncherModel, shell: ShellSettings, nav: NavModel, saves: SaveSlotsModel,
+         play: @escaping () -> Void, back: (() -> Void)?, onTV: Bool, screenScale: CGFloat = 1) {
         self.m = m
         self.shell = shell
         self.nav = nav
+        self.saves = saves
         self.play = play
         self.back = back
         _tv = StateObject(wrappedValue: TenFoot(native: true, onTV: onTV, screenScale: screenScale))
@@ -968,21 +973,17 @@ private struct LauncherView: View {
         .environmentObject(nav)
         .environmentObject(activity)
         .preferredColorScheme(.dark)
-        .accessibilityHidden(saveSelection != nil)
+        .accessibilityHidden(nav.saveSelection != nil || nav.saveConfirmation != nil)
         .overlay {
-            if let selection = saveSelection { saveSelectionPanel(selection) }
-        }
-        // The launcher owns the alert; an iPad popover in the scrolling list can pick a different anchor.
-        .alert(
-            saveConfirmation?.title ?? "",
-            isPresented: Binding(get: { saveConfirmation != nil }, set: { if !$0 { saveConfirmation = nil } }),
-            presenting: saveConfirmation
-        ) { confirmation in
-            if case .rename = confirmation { TextField(tr("Name"), text: $newSaveName) }
-            Button(tr("Cancel"), role: .cancel) { saveConfirmation = nil }
-            Button(confirmation.action, role: confirmation.role) { confirmSaveAction(confirmation) }
-        } message: { confirmation in
-            if !confirmation.message.isEmpty { Text(confirmation.message) }
+            GeometryReader { geometry in
+                let k = tv.on ? TenFootStage.scale(geometry.size) : 1
+                if let confirmation = nav.saveConfirmation {
+                    saveConfirmationPanel(confirmation, k: k)
+                } else if let selection = nav.saveSelection {
+                    saveSelectionPanel(selection, k: k)
+                }
+            }
+            .allowsHitTesting(!mirror && (nav.saveConfirmation != nil || nav.saveSelection != nil))
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
         .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
@@ -995,15 +996,55 @@ private struct LauncherView: View {
     }
 
     private func requestSaveConfirmation(_ confirmation: SaveConfirmation) {
-        guard !mirror, saveConfirmation == nil, saveSelection == nil else { return }
+        guard !mirror, nav.saveConfirmation == nil, nav.saveSelection == nil else { return }
         held?.task.cancel()
         held = nil
-        if case .rename(let slot) = confirmation { newSaveName = slot.name }
-        saveConfirmation = confirmation
+        nav.confirmFocused = false
+        nav.saveConfirmation = confirmation
+        if case .rename(let slot) = confirmation {
+            nav.newSaveName = slot.name
+            if tv.on { enterNameOnIPad(confirmation) }
+        }
+    }
+
+    private func enterNameOnIPad(_ confirmation: SaveConfirmation) {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.session.role == .windowApplication && $0.activationState == .foregroundActive }
+        guard let root = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController,
+              root.presentedViewController == nil else { return }
+        let alert = UIAlertController(title: confirmation.title, message: nil, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = tr("Name")
+            field.text = nav.newSaveName
+        }
+        alert.addAction(UIAlertAction(title: tr("Cancel"), style: .cancel) { [weak nav] _ in
+            nav?.nameEntryOnIPad = false
+            nav?.saveConfirmation = nil
+        })
+        alert.addAction(UIAlertAction(title: confirmation.action, style: .default) { [weak alert, weak nav, weak saves] _ in
+            guard let nav, nav.saveConfirmation == confirmation,
+                  case .rename(let slot) = confirmation else { return }
+            saves?.rename(slot.id, alert?.textFields?.first?.text ?? nav.newSaveName)
+            nav.nameEntryOnIPad = false
+            nav.saveConfirmation = nil
+        })
+        nav.nameEntryOnIPad = true
+        nameAlert = alert
+        root.present(alert, animated: true)
+    }
+
+    private func cancelSaveConfirmation() {
+        nameAlert?.dismiss(animated: true)
+        nameAlert = nil
+        nav.nameEntryOnIPad = false
+        nav.saveConfirmation = nil
     }
 
     private func confirmSaveAction(_ confirmation: SaveConfirmation) {
-        saveConfirmation = nil
+        guard nav.saveConfirmation == confirmation else { return }
+        nameAlert = nil
+        nav.nameEntryOnIPad = false
+        nav.saveConfirmation = nil
         switch confirmation {
         case .create:
             saves.addEmpty()
@@ -1011,7 +1052,7 @@ private struct LauncherView: View {
             guard saves.active == slot.id else { return }
             saves.duplicate(name: tr("%@ (copy)").replacingOccurrences(of: "%@", with: slot.name))
         case .rename(let slot):
-            saves.rename(slot.id, newSaveName)
+            saves.rename(slot.id, nav.newSaveName)
         case .delete(let slot):
             saves.delete(slot.id)
         }
@@ -1022,71 +1063,113 @@ private struct LauncherView: View {
     }
 
     private func openSaveSelection(_ selection: SaveSelection) {
-        guard !mirror, saveSelection == nil, saveConfirmation == nil,
+        guard !mirror, nav.saveSelection == nil, nav.saveConfirmation == nil,
               let first = saveOptions(selection).first else { return }
         held?.task.cancel()
         held = nil
-        selectedSaveID = selection == .use ? saves.active : first.id
-        saveSelection = selection
+        nav.selectedSaveID = selection == .use ? saves.active : first.id
+        nav.saveSelection = selection
     }
 
     private func chooseSave(_ slot: SaveSlot, for selection: SaveSelection) {
-        guard saveSelection == selection else { return }
-        saveSelection = nil
+        guard nav.saveSelection == selection else { return }
+        nav.saveSelection = nil
         if selection == .use { saves.switchTo(slot.id) }
         else { requestSaveConfirmation(.delete(slot)) }
     }
 
-    private func saveSelectionPanel(_ selection: SaveSelection) -> some View {
+    private func saveConfirmationPanel(_ confirmation: SaveConfirmation, k: CGFloat) -> some View {
+        ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea().accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 14 * k) {
+                Text(confirmation.title).font(.ds(.headline, .bold, k: k)).accessibilityAddTraits(.isHeader)
+                if !confirmation.message.isEmpty {
+                    Text(confirmation.message).font(.ds(.subheadline, k: k)).foregroundStyle(.secondary)
+                }
+                if case .rename = confirmation {
+                    if nav.nameEntryOnIPad || mirror {
+                        Text(tr("Enter the new name on the iPad")).font(.ds(.subheadline, k: k)).foregroundStyle(.secondary)
+                    } else {
+                        TextField(tr("Name"), text: $nav.newSaveName).textFieldStyle(.roundedBorder)
+                    }
+                }
+                if !nav.nameEntryOnIPad {
+                    HStack(spacing: 8 * k) {
+                        saveDecision(tr("Cancel"), selected: !nav.confirmFocused, k: k, action: cancelSaveConfirmation)
+                        saveDecision(confirmation.action, selected: nav.confirmFocused, destructive: confirmation.role == .destructive, k: k) {
+                            confirmSaveAction(confirmation)
+                        }
+                    }
+                }
+            }
+            .padding(22 * k)
+            .frame(maxWidth: (tv.on ? 575 : 420) * k)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20 * k))
+            .padding(20 * k)
+        }
+    }
+
+    private func saveDecision(_ label: String, selected: Bool, destructive: Bool = false, k: CGFloat, action: @escaping () -> Void) -> some View {
+        Text(label)
+            .font(.ds(.body, .semibold, k: k))
+            .foregroundStyle(destructive && !selected ? Color.red : Color.white)
+            .padding(10 * k)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? (destructive ? Color.red : DS.accent) : rowPlate,
+                        in: RoundedRectangle(cornerRadius: 8 * k))
+            .saveTap(label, perform: action)
+    }
+
+    private func saveSelectionPanel(_ selection: SaveSelection, k: CGFloat) -> some View {
         ZStack {
             Color.black.opacity(0.55).ignoresSafeArea()
-                .onTapGesture { saveSelection = nil }
+                .onTapGesture { nav.saveSelection = nil }
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 14) {
-                Text(selection.title).font(.headline).accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 14 * k) {
+                Text(selection.title).font(.ds(.headline, .bold, k: k)).accessibilityAddTraits(.isHeader)
                 ScrollViewReader { scroll in
                     ScrollView {
-                        VStack(spacing: 4) {
+                        VStack(spacing: 4 * k) {
                             ForEach(saveOptions(selection)) { slot in
                                 HStack {
                                     Text(slot.name)
                                     Spacer()
                                     if slot.id == saves.active { Image(systemName: "checkmark").accessibilityLabel(tr("Save in use")) }
                                 }
-                                .padding(10)
-                                .background(slot.id == selectedSaveID ? DS.accent.opacity(0.45) : rowPlate,
-                                            in: RoundedRectangle(cornerRadius: 8))
+                                .padding(10 * k)
+                                .background(slot.id == nav.selectedSaveID ? DS.accent.opacity(0.45) : rowPlate,
+                                            in: RoundedRectangle(cornerRadius: 8 * k))
                                 .saveTap(slot.name) { chooseSave(slot, for: selection) }
                                 .id(slot.id)
                             }
                         }
                     }
-                    .frame(maxHeight: 240)
-                    .onChange(of: selectedSaveID, initial: true) { _, id in
+                    .frame(maxHeight: 240 * k)
+                    .onChange(of: nav.selectedSaveID, initial: true) { _, id in
                         if let id { scroll.scrollTo(id) }
                     }
                 }
                 Text(tr("Cancel")).foregroundStyle(Color.accentColor)
-                    .padding(10)
-                    .saveTap(tr("Cancel")) { saveSelection = nil }
+                    .padding(10 * k)
+                    .saveTap(tr("Cancel")) { nav.saveSelection = nil }
             }
-            .padding(20)
-            .frame(maxWidth: 420)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-            .padding(20)
+            .padding(20 * k)
+            .frame(maxWidth: (tv.on ? 575 : 420) * k)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20 * k))
+            .padding(20 * k)
         }
     }
 
     private func saveSelectionInput(_ selection: SaveSelection, _ key: String) {
         let options = saveOptions(selection)
         switch key {
-        case "b": saveSelection = nil
+        case "b": nav.saveSelection = nil
         case "a":
-            if let slot = options.first(where: { $0.id == selectedSaveID }) { chooseSave(slot, for: selection) }
+            if let slot = options.first(where: { $0.id == nav.selectedSaveID }) { chooseSave(slot, for: selection) }
         case "up", "down":
-            guard let index = options.firstIndex(where: { $0.id == selectedSaveID }) else { return }
+            guard let index = options.firstIndex(where: { $0.id == nav.selectedSaveID }) else { return }
             let next = Swift.max(0, Swift.min(options.count - 1, index + (key == "up" ? -1 : 1)))
-            selectedSaveID = options[next].id
+            nav.selectedSaveID = options[next].id
         default: break
         }
     }
@@ -1203,11 +1286,19 @@ private struct LauncherView: View {
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
         guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
-        if saveConfirmation != nil {
-            if key == "b", (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { saveConfirmation = nil }
+        if let confirmation = nav.saveConfirmation {
+            guard (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 else { return }
+            if key == "b" { cancelSaveConfirmation(); return }
+            guard !nav.nameEntryOnIPad else { return }
+            if ["left", "up"].contains(key) { nav.confirmFocused = false }
+            if ["right", "down"].contains(key) { nav.confirmFocused = true }
+            if key == "a" {
+                if nav.confirmFocused { confirmSaveAction(confirmation) }
+                else { cancelSaveConfirmation() }
+            }
             return
         }
-        if let selection = saveSelection {
+        if let selection = nav.saveSelection {
             if (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { saveSelectionInput(selection, key) }
             return
         }
@@ -1234,7 +1325,7 @@ private struct LauncherView: View {
         default:   // a direction: once, then repeated while held (moving up and down, or a value)
             let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
             navDirection(key)
-            guard repeats, saveSelection == nil, saveConfirmation == nil else { return }
+            guard repeats, nav.saveSelection == nil, nav.saveConfirmation == nil else { return }
             held = (key, Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(400))
                 while !Task.isCancelled { navDirection(key); try? await Task.sleep(for: .milliseconds(120)) }
@@ -1261,10 +1352,11 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings(), nav = NavModel()
+    let saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
     var host: UIViewController?
     let scene = parent.view.window?.windowScene
     let onTV = scene?.session.role == .windowExternalDisplayNonInteractive
-    let view = LauncherView(m: model, shell: shell, nav: nav, play: {
+    let view = LauncherView(m: model, shell: shell, nav: nav, saves: saves, play: {
         guard let h = host else { return }
         host = nil
         PregameStage.shared.clear()
@@ -1280,7 +1372,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         let covered = frontIosPickerCoverBegin()
         h.dismiss(animated: !covered) { frontIosBackToPicker() }
     } : nil, onTV: onTV, screenScale: scene?.screen.scale ?? 1)
-    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, play: {}, back: severalGames ? {} : nil, onTV: true)) }   // the TV's copy in handheld mode
+    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, saves: saves, play: {}, back: severalGames ? {} : nil, onTV: true)) }   // the TV's copy in handheld mode
     let h = NoFocusHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen

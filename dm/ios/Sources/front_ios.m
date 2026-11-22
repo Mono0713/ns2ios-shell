@@ -1300,7 +1300,12 @@ static void output_video_set(BOOL ipad) {   // the picture moves at once, the me
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
 }
 // Handheld or console play while a TV is connected: the picture and the sound go together (the sound output can still be changed on its own after)
-static void play_mode_set(BOOL handheld) { output_audio_set(handheld); output_video_set(handheld); }
+static void play_mode_set(BOOL handheld) {
+    // A console-mode save rename uses the iPad's input alert. Finish it before moving the launcher.
+    if (handheld && !g_root.game && [g_root.presentedViewController isKindOfClass:UIAlertController.class]) return;
+    output_audio_set(handheld);
+    output_video_set(handheld);
+}
 int front_ios_console_mode(void) { return tv_on(); }   // for the picker and the launcher (GamePicker.swift / Launcher.swift): the TV layout; changes come with DMShellChanged
 static void output_audio_set(BOOL ipad) {   // switches at once (a paused game's sound resumes on the new output) and stays the choice
     if (ipad == [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]) return;
@@ -1399,80 +1404,88 @@ static NSString *menu_symbol(NSString *act) {   // each row's SF Symbol
                         @"change": @"square.grid.2x2.fill", @"quit": @"power", @"back": @"chevron.left"};
     return m[act] ?: @"circle.fill";
 }
+static CGRect home_menu_rect(CGFloat unit, CGFloat x, CGFloat y, CGFloat w, CGFloat h) {
+    return CGRectMake(x * unit, y * unit, w * unit, h * unit);
+}
 static UIView *home_menu_make(UIView *root) {
     BOOL z = zh_ui();
     UIView *menu = [[UIView alloc] initWithFrame:root.bounds];
     menu.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
-    BOOL onTV = root.window && root.window == g_tv;   // seen from the sofa: larger type, no touch buttons, the card fills most of the screen
+    BOOL onTV = root.window && root.window == g_tv;
     BOOL pl = g_menu_page == 1;   // the Players page: the phones' QR code on the left, the eight numbers on the right
     CGFloat W = pl ? 720 : 440, rowH = pl ? 46 : 60, gap = pl ? 6 : 8, pad = 16, top = 84, x0 = pl ? pad + 236 : pad, rw = W - x0 - pad;
     NSString *qrURL = nil; UIImage *qr = pl ? phones_qr(&qrURL) : nil;
     CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + (pl ? 34 : 4);   // key hints only on the Players page
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - W) / 2), floor((root.bounds.size.height - H) / 2), W, H)];
+    CGSize viewport = root.bounds.size;
+    CGFloat fit = MIN(viewport.width * 0.84 / W, viewport.height * 0.86 / H);
+    CGFloat tvType = MAX(0.55, MIN(viewport.width / 1920, viewport.height / 1080)) * 1.65;
+    CGFloat unit = onTV && fit > 0 ? MIN(tvType, fit) : 1;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W * unit, H * unit)];
     card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    card.layer.cornerRadius = 26; card.layer.cornerCurve = kCACornerCurveContinuous;
-    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.45; card.layer.shadowRadius = 30; card.layer.shadowOffset = CGSizeMake(0, 14);
+    card.layer.cornerRadius = 26 * unit; card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.45; card.layer.shadowRadius = 30 * unit; card.layer.shadowOffset = CGSizeMake(0, 14 * unit);
     // the backdrop: frosted glass over the paused game, a hairline edge
     UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
-    glass.frame = card.bounds; glass.tag = 1; glass.layer.cornerRadius = 26; glass.layer.cornerCurve = kCACornerCurveContinuous; glass.clipsToBounds = YES;
-    glass.layer.borderWidth = 1; glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+    glass.frame = card.bounds; glass.tag = 1; glass.layer.cornerRadius = 26 * unit; glass.layer.cornerCurve = kCACornerCurveContinuous; glass.clipsToBounds = YES;
+    glass.layer.borderWidth = 1 * unit; glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
     glass.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.55];
     [card addSubview:glass];
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(pad + 4, 20, W - 2 * pad - 8, 28)];
-    t.text = game_name(); t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    UILabel *t = [[UILabel alloc] initWithFrame:home_menu_rect(unit, pad + 4, 20, W - 2 * pad - 8, 28)];
+    t.adjustsFontSizeToFitWidth = YES; t.minimumScaleFactor = 0.75;
+    t.text = game_name(); t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:22 * unit weight:UIFontWeightBold];
     // a small tag box: what is going on (a pause glyph and a word)
-    UIView *tag = [[UIView alloc] initWithFrame:CGRectMake(pad + 4, 52, 10, 22)];
-    tag.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; tag.layer.cornerRadius = 7; tag.layer.cornerCurve = kCACornerCurveContinuous;
-    UIImageView *pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:9 weight:UIImageSymbolWeightBold]]];
-    pi.tintColor = [UIColor colorWithWhite:0.85 alpha:1]; pi.center = CGPointMake(14, 11); [tag addSubview:pi];
+    UIView *tag = [[UIView alloc] initWithFrame:home_menu_rect(unit, pad + 4, 52, 10, 22)];
+    tag.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; tag.layer.cornerRadius = 7 * unit; tag.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageView *pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:9 * unit weight:UIImageSymbolWeightBold]]];
+    pi.tintColor = [UIColor colorWithWhite:0.85 alpha:1]; pi.center = CGPointMake(14 * unit, 11 * unit); [tag addSubview:pi];
     UILabel *tl = [[UILabel alloc] init]; tl.text = pl ? (z ? @"玩家" : @"Players") : (z ? @"已暫停" : @"Paused");
-    tl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; tl.textColor = [UIColor colorWithWhite:0.85 alpha:1]; [tl sizeToFit];
-    tl.frame = CGRectMake(24, 0, tl.bounds.size.width, 22); [tag addSubview:tl];
-    CGRect tf = tag.frame; tf.size.width = 24 + tl.bounds.size.width + 9; tag.frame = tf;
+    tl.font = [UIFont systemFontOfSize:12 * unit weight:UIFontWeightSemibold]; tl.textColor = [UIColor colorWithWhite:0.85 alpha:1]; [tl sizeToFit];
+    tl.frame = CGRectMake(24 * unit, 0, tl.bounds.size.width, 22 * unit); [tag addSubview:tl];
+    CGRect tf = tag.frame; tf.size.width = 33 * unit + tl.bounds.size.width; tag.frame = tf;
     [card addSubview:t]; [card addSubview:tag];
     if (pl) {   // joining: the QR code on white, what to do, the address
-        UIView *qc = [[UIView alloc] initWithFrame:CGRectMake(pad, top, 220, 220)];
-        qc.backgroundColor = UIColor.whiteColor; qc.layer.cornerRadius = 20; qc.layer.cornerCurve = kCACornerCurveContinuous;
-        if (qr) { UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectInset(qc.bounds, 16, 16)]; iv.image = qr; iv.layer.magnificationFilter = kCAFilterNearest; iv.contentMode = UIViewContentModeScaleAspectFit; [qc addSubview:iv]; }
-        UILabel *jt = [[UILabel alloc] initWithFrame:CGRectMake(pad, top + 232, 220, 22)]; jt.textAlignment = NSTextAlignmentCenter;
-        jt.text = z ? @"用手機加入" : @"Join with a phone"; jt.textColor = UIColor.whiteColor; jt.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
-        UILabel *u = [[UILabel alloc] initWithFrame:CGRectMake(pad, top + 256, 220, 18)]; u.textAlignment = NSTextAlignmentCenter; u.adjustsFontSizeToFitWidth = YES;
+        UIView *qc = [[UIView alloc] initWithFrame:home_menu_rect(unit, pad, top, 220, 220)];
+        qc.backgroundColor = UIColor.whiteColor; qc.layer.cornerRadius = 20 * unit; qc.layer.cornerCurve = kCACornerCurveContinuous;
+        if (qr) { UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectInset(qc.bounds, 16 * unit, 16 * unit)]; iv.image = qr; iv.layer.magnificationFilter = kCAFilterNearest; iv.contentMode = UIViewContentModeScaleAspectFit; [qc addSubview:iv]; }
+        UILabel *jt = [[UILabel alloc] initWithFrame:home_menu_rect(unit, pad, top + 232, 220, 22)]; jt.textAlignment = NSTextAlignmentCenter;
+        jt.text = z ? @"用手機加入" : @"Join with a phone"; jt.textColor = UIColor.whiteColor; jt.font = [UIFont systemFontOfSize:16 * unit weight:UIFontWeightBold];
+        UILabel *u = [[UILabel alloc] initWithFrame:home_menu_rect(unit, pad, top + 256, 220, 18)]; u.textAlignment = NSTextAlignmentCenter; u.adjustsFontSizeToFitWidth = YES;
         u.text = qrURL ?: (z ? @"手機手把沒有開啟" : @"Phone controllers are off"); u.textColor = [UIColor colorWithWhite:1 alpha:0.5];
-        u.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+        u.font = [UIFont monospacedSystemFontOfSize:12 * unit weight:UIFontWeightRegular];
         [card addSubview:qc]; [card addSubview:jt]; [card addSubview:u];
     }
     for (NSUInteger i = 0; i < g_menu_rows.count; i++) {   // each row's own faint plate, under the sliding pill
-        UIView *plate = [[UIView alloc] initWithFrame:CGRectMake(x0, top + i * (rowH + gap), rw, rowH)];
-        plate.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05]; plate.layer.cornerRadius = 16; plate.layer.cornerCurve = kCACornerCurveContinuous; plate.userInteractionEnabled = NO;
+        UIView *plate = [[UIView alloc] initWithFrame:home_menu_rect(unit, x0, top + i * (rowH + gap), rw, rowH)];
+        plate.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05]; plate.layer.cornerRadius = 16 * unit; plate.layer.cornerCurve = kCACornerCurveContinuous; plate.userInteractionEnabled = NO;
         [card addSubview:plate];
     }
     UIView *pill = [[UIView alloc] initWithFrame:CGRectZero]; pill.tag = 50; pill.alpha = 0; pill.userInteractionEnabled = NO;
-    pill.backgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; pill.layer.cornerRadius = 16; pill.layer.cornerCurve = kCACornerCurveContinuous;
-    pill.layer.shadowColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12; pill.layer.shadowOffset = CGSizeZero;
+    pill.backgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; pill.layer.cornerRadius = 16 * unit; pill.layer.cornerCurve = kCACornerCurveContinuous;
+    pill.layer.shadowColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12 * unit; pill.layer.shadowOffset = CGSizeZero;
     [card addSubview:pill];
     if (g_menu_anim == 0 && g_menu_prev_sel >= 0 && g_menu_prev_sel < (int)g_menu_rows.count) {   // redrawn in place: the pill starts where it was and slides
-        pill.frame = CGRectMake(x0, top + g_menu_prev_sel * (rowH + gap), rw, rowH); pill.alpha = 1;
+        pill.frame = home_menu_rect(unit, x0, top + g_menu_prev_sel * (rowH + gap), rw, rowH); pill.alpha = 1;
     }
     CGFloat tileS = rowH == 60 ? 36 : 32;
     shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
     for (NSUInteger i = 0; i < g_menu_rows.count; i++) {
         UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
-        row.frame = CGRectMake(x0, top + i * (rowH + gap), rw, rowH); row.tag = 100 + (NSInteger)i;
+        row.frame = home_menu_rect(unit, x0, top + i * (rowH + gap), rw, rowH); row.tag = 100 + (NSInteger)i;
         NSString *act = g_menu_rows[i][2];
         int slot = [act hasPrefix:@"slot:"] ? [[act substringFromIndex:5] intValue] : -1;
         BOOL held = slot >= 0 && info[slot].kind != SHELL_SLOT_NONE;
         [row addTarget:DmMenuTap.class action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
-        UIView *tile = [[UIView alloc] initWithFrame:CGRectMake(12, (rowH - tileS) / 2, tileS, tileS)]; tile.tag = 60; tile.userInteractionEnabled = NO;
-        tile.layer.cornerRadius = 10; tile.layer.cornerCurve = kCACornerCurveContinuous;
+        UIView *tile = [[UIView alloc] initWithFrame:home_menu_rect(unit, 12, (rowH - tileS) / 2, tileS, tileS)]; tile.tag = 60; tile.userInteractionEnabled = NO;
+        tile.layer.cornerRadius = 10 * unit; tile.layer.cornerCurve = kCACornerCurveContinuous;
         UIView *ic;
         if (slot >= 0) {   // a player's number on its own colour, instead of an icon
             UILabel *n = [[UILabel alloc] initWithFrame:tile.bounds]; n.text = [NSString stringWithFormat:@"P%d", slot + 1]; n.textAlignment = NSTextAlignmentCenter;
-            n.font = [UIFont systemFontOfSize:13 weight:UIFontWeightHeavy]; n.textColor = held ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
+            n.font = [UIFont systemFontOfSize:13 * unit weight:UIFontWeightHeavy]; n.textColor = held ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.3];
             tile.backgroundColor = held ? player_color(slot + 1) : [UIColor colorWithWhite:1 alpha:0.06]; tile.tag = 63;   // not lit by the selection
             ic = n;
         } else {
-            UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:menu_symbol(act) withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]]];
+            UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:menu_symbol(act) withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 * unit weight:UIImageSymbolWeightSemibold]]];
             iv.tag = 61; iv.contentMode = UIViewContentModeCenter; ic = iv;
         }
         ic.frame = tile.bounds; [tile addSubview:ic];
@@ -1481,10 +1494,10 @@ static UIView *home_menu_make(UIView *root) {
         CGFloat sliderWidth = volume ? 102 : 0;
         CGFloat x = 12 + tileS + 12, tw = rw - x - 12 - tools * 40 - sliderWidth;
         BOOL two = [g_menu_rows[i][1] length] > 0;
-        UILabel *a = [[UILabel alloc] initWithFrame:CGRectMake(x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
-        a.tag = 64; a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:(onTV ? 19 : 17) weight:UIFontWeightSemibold];
-        UILabel *d = [[UILabel alloc] initWithFrame:CGRectMake(x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
-        d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13];
+        UILabel *a = [[UILabel alloc] initWithFrame:home_menu_rect(unit, x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
+        a.tag = 64; a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:(onTV ? 19 : 17) * unit weight:UIFontWeightSemibold];
+        UILabel *d = [[UILabel alloc] initWithFrame:home_menu_rect(unit, x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
+        d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13 * unit];
         if (slot >= 0 && !held) a.textColor = [UIColor colorWithWhite:1 alpha:0.35];
         [row addSubview:tile]; [row addSubview:a]; [row addSubview:d];
         if (volume) {
@@ -1493,17 +1506,17 @@ static UIView *home_menu_make(UIView *root) {
             slider.tag = 65;
             slider.minimumTrackTintColor = UIColor.whiteColor;
             slider.maximumTrackTintColor = [UIColor colorWithWhite:1 alpha:0.27];
-            slider.frame = CGRectMake(rw - 12 - 40 - sliderWidth, (rowH - 40) / 2, sliderWidth, 40);
+            slider.frame = home_menu_rect(unit, rw - 12 - 40 - sliderWidth, (rowH - 40) / 2, sliderWidth, 40);
             [row addSubview:slider];
         }
         NSArray *syms = held ? @[@"gamecontroller", @"wave.3.right", @"xmark"] : @[@"minus", @"plus"];
         for (int k = 0; k < tools; k++) {
             UIButton *tb = [UIButton buttonWithType:UIButtonTypeSystem];
             CGFloat buttonX = rw - 12 - (tools - k) * 40 + 4 - (volume && k == 0 ? sliderWidth : 0);
-            tb.frame = CGRectMake(buttonX, (rowH - 32) / 2, 32, 32);
+            tb.frame = home_menu_rect(unit, buttonX, (rowH - 32) / 2, 32, 32);
             tb.tag = held ? 400 + slot * 4 + k : 300 + k;
-            [tb setImage:[UIImage systemImageNamed:syms[k] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
-            tb.tintColor = UIColor.whiteColor; tb.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14]; tb.layer.cornerRadius = 10; tb.layer.cornerCurve = kCACornerCurveContinuous;
+            [tb setImage:[UIImage systemImageNamed:syms[k] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 * unit weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+            tb.tintColor = UIColor.whiteColor; tb.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14]; tb.layer.cornerRadius = 10 * unit; tb.layer.cornerCurve = kCACornerCurveContinuous;
             [tb addTarget:DmMenuTap.class action:@selector(tool:) forControlEvents:UIControlEventTouchUpInside];
             if (!held) {
                 tb.accessibilityLabel = k == 0 ? (z ? @"降低音量" : @"Decrease volume") : (z ? @"提高音量" : @"Increase volume");
@@ -1515,13 +1528,13 @@ static UIView *home_menu_make(UIView *root) {
         }
         [card addSubview:row];
     }
-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(pad, H - 34, W - 2 * pad, 22)]; hint.hidden = !pl;
+    UILabel *hint = [[UILabel alloc] initWithFrame:home_menu_rect(unit, pad, H - 34, W - 2 * pad, 22)]; hint.hidden = !pl;
     hint.text = pl ? (g_menu_move >= 0 ? (z ? @"↑↓ 選號碼   A 放下   B 取消" : @"↑↓ number   A put down   B cancel")
                                       : (z ? @"A 換號碼   Y 按鍵配置   X 移除" : @"A number   Y layout   X remove"))
                    : @"";
-    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.5]; hint.font = [UIFont systemFontOfSize:(onTV ? 15 : 13) weight:UIFontWeightSemibold];
+    hint.textAlignment = NSTextAlignmentCenter; hint.textColor = [UIColor colorWithWhite:1 alpha:0.5]; hint.font = [UIFont systemFontOfSize:(onTV ? 15 : 13) * unit weight:UIFontWeightSemibold];
     [card addSubview:hint];
-    CGFloat k = onTV ? MIN(root.bounds.size.width * 0.84 / W, root.bounds.size.height * 0.86 / H) : ui_scale(root);
+    CGFloat k = onTV ? 1 : ui_scale(root);
     CGAffineTransform base = CGAffineTransformMakeScale(k, k);
     card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
     [menu addSubview:card]; [root addSubview:menu];
@@ -1530,13 +1543,13 @@ static UIView *home_menu_make(UIView *root) {
     // coming in: opening pops up from a little smaller and lower (a spring) as the dim fades in; a page slides in from the side it goes to
     if (g_menu_anim == 1) {
         menu.backgroundColor = UIColor.clearColor; card.alpha = 0;
-        card.transform = CGAffineTransformTranslate(CGAffineTransformScale(base, 0.9, 0.9), 0, 24);
+        card.transform = CGAffineTransformTranslate(CGAffineTransformScale(base, 0.9, 0.9), 0, 24 * unit);
         UIColor *dim = [UIColor colorWithWhite:0 alpha:0.55];
         [UIView animateWithDuration:0.22 animations:^{ menu.backgroundColor = dim; }];
         [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction
                          animations:^{ card.alpha = 1; card.transform = base; } completion:nil];
     } else if (g_menu_anim == 2 || g_menu_anim == 3) {
-        card.alpha = 0; card.transform = CGAffineTransformTranslate(base, g_menu_anim == 2 ? 36 : -36, 0);
+        card.alpha = 0; card.transform = CGAffineTransformTranslate(base, (g_menu_anim == 2 ? 36 : -36) * unit, 0);
         [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.2 options:UIViewAnimationOptionAllowUserInteraction
                          animations:^{ card.alpha = 1; card.transform = base; } completion:nil];
     }
