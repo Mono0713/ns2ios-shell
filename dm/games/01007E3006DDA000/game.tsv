@@ -37,6 +37,8 @@ mem_reserve	0x100000000
 mem_alias	0x10000000
 mem_stack	0x10000000
 app_pool	0xCD500000
+# Startup reserves 0xC0D00000 heap bytes in three allocations, in addition to the 64 MB already used.
+app_pool_min_gb	3.1
 sys_resource	0x0
 
 # ---- Shader split (shader_split.py; BNSH in HAL's .cmp containers, the loose shader/ files and main) ----

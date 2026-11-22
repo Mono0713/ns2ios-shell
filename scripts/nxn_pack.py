@@ -1541,8 +1541,8 @@ def env_for(rows):
                   ('present_interval', 'DM_PRESENT_INTERVAL')):
         v = one(rows, k)
         if v: lines.append('%s=%s' % (ev, v.strip()))
-    # ... and the two that are read as atoi != 0, where the profile writes "on" (atoi("on") is 0, which is off)
-    for k, ev in (('core_preempt', 'DM_PREEMPT'), ('vconv_range', 'DM_NVN_VCONV_RANGE')):
+    # ... and the switches that are read as atoi != 0, where the profile writes "on" (atoi("on") is 0, which is off)
+    for k, ev in (('core_preempt', 'DM_PREEMPT'), ('vconv_range', 'DM_NVN_VCONV_RANGE'), ('vk_defer_pso', 'DM_VK_DEFER_PSO')):
         v = one(rows, k)
         if v: lines.append('%s=%s' % (ev, '1' if truthy(v) else '0'))
     # The keys whose host read a compiled-in constant and nothing else (no getenv at all: dm/gfx/nvn/hle_nvn.c, dm/gfx/nvn/nvn_mtl.m,

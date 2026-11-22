@@ -25,6 +25,7 @@ shader_versions	v393216
 # ---- Graphics ----
 # main imports Vulkan, not NVN: the host's Vulkan layer (dm/gfx/vk/hle_vk.m). Hagi generates its GX shaders as SPIR-V at run time, and the RomFS has no SPIR-V file,
 # so the NSP script captures them by booting the game on the Mac (vk_capture.tsv lists the keys); vk_shaders.py translates the capture
+vk_defer_pso	on
 
 # ---- Files ----
 # load order as on Horizon: main, subsdk*, sdk; subsdk1–4 (GLSLC, nn::pcm, NVIDIA's OpenGL and Vulkan drivers) are replaced by the host's Vulkan layer and not loaded

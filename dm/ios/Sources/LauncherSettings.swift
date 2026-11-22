@@ -101,7 +101,7 @@ struct MemoryAuto {
         case "k": return .worked
         case "w", "b": return .tooBig   // killed by iOS with no crash of ours: memory pressure, or a kill at the limit too fast to see
         case "x": return flag == "m" ? .tooSmall : .maybeSmall
-        case "c", "h": return flag == "m" ? .tooSmall : .notMemory
+        case "c", "h", "e": return flag == "m" ? .tooSmall : .notMemory
         default: return nil
         }
     }
@@ -112,37 +112,44 @@ struct MemoryAuto {
         return smaller ? (down ?? up) : (up ?? down)
     }
 
-    init(store: SettingsStore, package: UInt64) {
+    init(store: SettingsStore, package: UInt64, minimumGB: Double) {
         self.store = store; self.package = package
+        let minimum = min(package, UInt64((minimumGB * 1024).rounded()) << 20)
         var d = store.object(forKey: Self.key) as? [String: Any] ?? [:]
         var failed = (d["failed"] as? [String: String] ?? [:]).reduce(into: [UInt64: Outcome]()) { r, e in
-            if let p = Self.parse(e.key), let o = Outcome(rawValue: e.value) { r[p] = o } }
-        var ok = (d["ok"] as? String).flatMap(Self.parse)
-        var lastPool = (d["last"] as? String).flatMap(Self.parse)
+            if let p = Self.parse(e.key), p >= minimum, let o = Outcome(rawValue: e.value) { r[p] = o } }
+        func savedPool(_ key: String) -> UInt64? {
+            guard let p = (d[key] as? String).flatMap(Self.parse), p >= minimum else { return nil }
+            return p
+        }
+        var ok = savedPool("ok")
+        var lastPool = savedPool("last")
         var jumpTop = false
-        let cands = Array(Set(Self.ladder + [package])).filter { $0 >= 0x20000000 && $0 <= 0xCCD00000 }
+        let cands = Array(Set(Self.ladder + [package])).filter { $0 >= max(minimum, 0x20000000) && $0 <= Self.top }
         // the previous run's marker: read once, then removed
         if let data = try? Data(contentsOf: store.runURL), data.count >= 2, let txt = String(data: data, encoding: .utf8) {
             try? FileManager.default.removeItem(at: store.runURL)
             let chars = Array(txt) + ["-", "-"]
             let kv = Dictionary(txt.split(separator: "\n").dropFirst().compactMap { l -> (String, String)? in
                 let p = l.split(separator: "=", maxSplits: 1); return p.count == 2 ? (String(p[0]), String(p[1])) : nil }, uniquingKeysWith: { a, _ in a })
-            if kv["auto"] == "1", let p = kv["pool"].flatMap(Self.parse), let o = Self.outcome(state: chars[0], flag: chars[1]) {
+            if kv["auto"] == "1", let p = kv["pool"].flatMap(Self.parse), p >= minimum,
+               let o = Self.outcome(state: chars[0], flag: chars[1]) {
                 var o = o
                 if o == .maybeSmall && failed.values.contains(.maybeSmall) { o = .notMemory }   // already moved up once for an abort: it is not memory
                 // Below the package's own size, a crash or abort is taken as too small: the package's size is the one the game was set up for, and a game whose heap
                 // came up short often crashes on the null pointer its allocator returns, which the marker cannot tell from any other crash. Kirby Star Allies was moved
                 // down from 0xCD500000 to 0xA0000000 by kills that were not about its memory, then crashed at nnMain asking for 1.3 GB; counted as not memory, the size stayed
-                if (o == .notMemory || o == .maybeSmall) && p < package { o = .tooSmall }
+                if chars[0] != "e" && (o == .notMemory || o == .maybeSmall) && p < package { o = .tooSmall }
                 // A guessed (provisional) package starts at 1 GB, below what most games were made for, and a game whose own allocator runs dry inside the pool crashes on the
                 // null pointer it got back without the host ever refusing it memory, so the marker reads "not memory" and the size never moved: Overcooked and Rabbids Party
                 // of Legends crashed at 1 GB run after run (2026-11-21), and Overcooked ran at 3.2 GB. So the first crash or abort of a provisional package below the top
                 // size goes straight to the top size; a crash there too is the game's own, and the size stays where it is
-                if Self.provisional && (o == .notMemory || o == .maybeSmall) && p < Self.top && failed[Self.top] == nil { o = .tooSmall; jumpTop = true }
+                if chars[0] != "e" && Self.provisional && (o == .notMemory || o == .maybeSmall) && p < Self.top && failed[Self.top] == nil { o = .tooSmall; jumpTop = true }
                 last = (p, o); lastPool = p
                 switch o {
                 case .worked: ok = p; failed = [:]
-                case .notMemory: break
+                case .notMemory:
+                    if chars[0] == "e" { failed.removeValue(forKey: p) }
                 default: failed[p] = o; if ok == p { ok = nil }
                 }
                 fputs("launcher: automatic memory: the last run at \(Self.hex(p)) → \(o.rawValue) (marker \(chars[0])\(chars[1]))\n", stderr)
@@ -220,8 +227,11 @@ final class LauncherModel: ObservableObject {
         fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
         let envFile = fromFile
         memory = settings.first { $0.env == "DM_APP_POOL" && $0.kind == "memory" && !envFile.contains($0.env) }
-            .flatMap { ProcessInfo.processInfo.environment[$0.env].flatMap(MemoryAuto.parse) }
-            .map { MemoryAuto(store: defaults, package: $0) }
+            .flatMap { setting in
+                ProcessInfo.processInfo.environment[setting.env].flatMap(MemoryAuto.parse).map {
+                    MemoryAuto(store: defaults, package: $0, minimumGB: setting.min ?? 0.5)
+                }
+            }
         // Read every kept choice before assigning any: each assignment to values saves them all, and saving with the rest still unread
         // would store their defaults, deleting the choices about to be read (the language, and every setting after the first, came back as defaults)
         var loaded: [String: String] = [:]

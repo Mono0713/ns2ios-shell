@@ -15,6 +15,7 @@ No code of the game is cut, and no run-time key is set. The game asks for presen
 ## Memory
 
 - The NPDM declares no system resource, so there is no virtual address memory: the game sets a heap of the pool less the used memory, 3.14 GB (`[mem] heap 3.14 GB (heap region 3.25 GB)`).
+- **Pending iPad retest:** with a 2 GiB pool and a 1.94 GiB heap, startup crashed at `main+0xa1084`. The three allocations at `main+0x8194`, `+0x81f0` and `+0x8240` request `0xC0D00000` bytes in total before the failed allocation is used. The profile sets a 3.1 GiB launcher minimum to cover those requests and the 64 MiB already used. See [Launcher memory floor for fixed startup allocations](../../../docs/reference/memory.md#launcher-memory-floor-for-fixed-startup-allocations).
 - **Current:** about 4.0 GB resident on the Mac in Green Gardens with the pipeline archive on the internal disk, 5.1 GB with it on an external drive, which reads its 1.13 GB into memory ([A pipeline archive on an external drive is read into memory](../../../docs/reference/memory.md#a-pipeline-archive-on-an-external-drive-is-read-into-memory)). Nearly flat over about 15 minutes on the external drive (5,070 → 5,125 MB). `footprint` with the archive on the internal disk: 3.15 GB untagged, the guest memory (all of the 3.14 GB heap, already at the title; Kirby and the Forgotten Land on the same host touches 2.6 GB of its heap, so this looks like the game's doing, not traced to an instruction); 0.66 GB graphics; 0.15 GB small mallocs. How much a phone allows is open.
 
 ## Files and shaders
@@ -55,11 +56,12 @@ No code of the game is cut, and no run-time key is set. The game asks for presen
 ## Open
 
 - No stage was finished, so no boss, no stage clear, no Dream Friend, no co-op, no sub-game and no save at a stage's end.
-- iOS: no IPA was built or tested; memory may be the first limit there, at 3.15 GB of guest memory before any of the port's own ([Memory](#memory)).
+- iOS: verify a cold start on Auto and enter Green Gardens after the launcher memory floor is applied.
 - No `smoke.tsv` yet, so `scripts/regress.py` does not run this game.
 
 ## Found on this game
 
+- [Launcher memory floor for fixed startup allocations](../../../docs/reference/memory.md#launcher-memory-floor-for-fixed-startup-allocations).
 - [`nv12-colorspace` picks the game's YUV matrix](../../../docs/reference/movies.md#nv12-colorspace-picks-the-games-yuv-matrix).
 - [H.264 packets are Annex B, not NAL lengths](../../../docs/reference/movies.md#h264-packets-are-annex-b-not-nal-lengths): its `ImageMovie.mp4` has 167 samples whose first NAL length begins `00 00 01`, and plays in full, so its packets come as Annex B.
 - [Integer outputs told by the pipeline's targets](../../../docs/reference/shaders.md#integer-outputs-told-by-the-pipelines-targets).

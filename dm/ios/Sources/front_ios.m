@@ -13,6 +13,7 @@
 #import <objc/runtime.h>
 #import <Network/Network.h>
 #include <errno.h>
+#include <math.h>
 #include <string.h>
 #include <os/proc.h>
 #include "front.h"
@@ -66,6 +67,7 @@ static void crisp(UIView *v, CGFloat k) {
     }
 }
 static UIView *g_loading, *g_prog, *g_menu;   // the loading screen, the prepare step's progress and the Home menu: over the picture, wherever it is
+static CFTimeInterval g_play_started;
 // Handheld play with a TV connected: the TV shows the same screens as in console play, so these have a second copy there, over the mirrored picture (tv_copies_sync)
 static UIView *g_loading_tv, *g_prog_tv, *g_menu_tv;
 static void tv_copies_sync(void);
@@ -82,13 +84,15 @@ static NSArray<NSString *> *video_row(void);
 static void home_menu_watch(void);
 static void home_menu_open(void);
 static void home_menu_close(void);
+static void volume_hold_stop(void);
 static void home_menu_quit(int relaunch);
 static UIView *tv_panel(CGRect frame);
 // The volume the menu and the TV panel set: the device's own (the same as its volume buttons) wherever iOS has one for the output, the iPad's speaker, headphones,
 // Bluetooth or AirPlay. An output with no system volume (the TV over HDMI, a line out: iOS sends them full level and the TV's remote sets the loudness) gets
 // the app's own gain instead (dm_audio_master, hle_audio.c), kept between runs. iOS gives apps no call to set the system volume; MPVolumeView's slider is
 // the system's own control for it, so the setter moves that slider, in a view kept off screen only while it is used (while one is on screen the system's
-// volume indicator stays hidden, the volume buttons' too). Steps of 1 % up to 10 %, so it can go very quiet, then 5 %
+// volume indicator stays hidden, the volume buttons' too).
+enum { VOLUME_STEP_PERCENT = 2 };
 static BOOL volume_is_device(void) {
     for (AVAudioSessionPortDescription *o in AVAudioSession.sharedInstance.currentRoute.outputs)
         if ([o.portType isEqualToString:AVAudioSessionPortHDMI] || [o.portType isEqualToString:AVAudioSessionPortLineOut] || [o.portType isEqualToString:AVAudioSessionPortDisplayPort]) return NO;
@@ -114,6 +118,7 @@ static void volume_set(float v) {
         }
         int gen = ++g_volgen; g_sysvol_set = v;
         void (^apply)(void) = ^{
+            if (gen != g_volgen) return;
             for (UIView *x in g_volview.subviews) if ([x isKindOfClass:UISlider.class]) { UISlider *sl = (UISlider *)x; [sl setValue:v animated:NO]; [sl sendActionsForControlEvents:UIControlEventValueChanged]; }
         };
         apply();
@@ -126,12 +131,23 @@ static void volume_set(float v) {
     }
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the menu and the TV panel redraw what they show
 }
-static float volume_step(float v, int dir) {   // the next level up (dir 1) or down (-1): 1 % steps up to 10 %, 5 % above
-    int pct = (int)lroundf(v * 100);
-    if (dir > 0) pct = pct < 10 ? pct + 1 : (pct / 5 + 1) * 5;
-    else pct = pct <= 10 ? pct - 1 : pct % 5 ? pct / 5 * 5 : pct - 5;
+static float volume_step(float v, int dir) {
+    int pct = (int)lroundf(v * 100) + dir * VOLUME_STEP_PERCENT;
     return MAX(0, MIN(100, pct)) / 100.f;
 }
+static BOOL volume_adjust(int dir) {
+    float current = volume_pref();
+    float next = volume_step(current, dir);
+    if (next == current) return NO;
+    volume_set(next);
+    return next > 0.f && next < 1.f;
+}
+@interface DmVolumeSlider : UISlider
+@end
+@implementation DmVolumeSlider
+- (void)accessibilityIncrement { volume_adjust(1); }
+- (void)accessibilityDecrement { volume_adjust(-1); }
+@end
 // The volume buttons and the output changing (a TV plugged in or out, headphones): what the menu and the panel show follows, and the app's gain applies only where it is used
 @interface DmVolumeWatch : NSObject
 @end
@@ -411,6 +427,7 @@ void front_ios_back_to_picker(void) {
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
     if (self.game) return;
+    g_play_started = CACurrentMediaTime();
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
     self.stage = [[UIView alloc] initWithFrame:self.view.bounds]; self.stage.backgroundColor = UIColor.blackColor;
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
@@ -597,9 +614,13 @@ static UIView *tv_panel(CGRect frame) {
     UIButton *pause = panel_button(@"", @"pause.fill", accent, UIColor.whiteColor, ^{ if (g_root.game) home_menu_toggle(); });
     UIImageView *vlo = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.fill"]], *vhi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.wave.3.fill"]];
     for (UIImageView *x in @[vlo, vhi]) { x.tintColor = [UIColor colorWithWhite:1 alpha:0.7]; x.contentMode = UIViewContentModeScaleAspectFit; }
-    UISlider *vol = [UISlider new]; vol.minimumTrackTintColor = accent; vol.value = volume_pref();
+    UISlider *vol = [DmVolumeSlider new]; vol.minimumTrackTintColor = accent; vol.value = volume_pref();
     __weak UISlider *wvol = vol;
-    [vol addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; volume_set(wvol.value); }] forControlEvents:UIControlEventValueChanged];
+    [vol addAction:[UIAction actionWithHandler:^(UIAction *a) {
+        (void)a;
+        float level = roundf(wvol.value * (100.f / VOLUME_STEP_PERCENT)) * (VOLUME_STEP_PERCENT / 100.f);
+        if (fabsf(level - volume_pref()) > 0.001f) volume_set(level);
+    }] forControlEvents:UIControlEventValueChanged];
     UILabel *vl = panel_label(20, UIFontWeightSemibold, 0.85); vl.textAlignment = NSTextAlignmentRight;
     UILabel *vidl = panel_label(18, UIFontWeightSemibold, 0.65); vidl.text = z ? @"模式" : @"Mode";
     // the switch slides first, then the screens change (their dip through black would otherwise cut the slide short)
@@ -875,7 +896,9 @@ static void loading_show(UIView *root) {
 void front_ios_loading_text(NSString *zh, NSString *en) {
     NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
     BOOL z = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
-    ((UILabel *)[g_loading viewWithTag:1]).text = z ? zh : en; ((UILabel *)[g_loading_tv viewWithTag:1]).text = z ? zh : en; LOG("front end: loading screen: %s", en.UTF8String);
+    ((UILabel *)[g_loading viewWithTag:1]).text = z ? zh : en;
+    ((UILabel *)[g_loading_tv viewWithTag:1]).text = z ? zh : en;
+    LOG("front end: loading screen: %s (%.3f s since Play)", en.UTF8String, CACurrentMediaTime() - g_play_started);
 }
 // The launcher's automatic memory (hle_runmark.c): the run counts as working once frames have kept coming for 40 s after the first, in the foreground, and as
 // memory pressure when iOS warns or under 256 MB is left for this process (iOS kills a process at its limit with no crash log, so the pressure is recorded before it)
@@ -900,7 +923,11 @@ static void run_watch_start(void) {
     dispatch_resume(t);
 }
 void front_first_frame(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ if (!g_loading) return; [g_loading removeFromSuperview]; g_loading = nil; tv_copies_sync(); LOG("front end: first frame, loading screen hidden"); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!g_loading) return;
+        [g_loading removeFromSuperview]; g_loading = nil; tv_copies_sync();
+        LOG("front end: first frame, loading screen hidden (%.3f s since Play)", CACurrentMediaTime() - g_play_started);
+    });
 }
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
 static UIView *prog_make(UIView *root) {   // the title (tag 1), the bar (2) and the count (3)
@@ -1135,6 +1162,7 @@ static void resume_when_released(unsigned gen, int tries) {
 }
 static void home_menu_close(void) {
     if (!g_menu || g_menu_closing) return;
+    volume_hold_stop();
     g_menu_closing = 1;
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @0}];
     UIView *m = g_menu, *mi = g_menu_tv;
@@ -1230,15 +1258,34 @@ static void output_audio_set(BOOL ipad) {   // switches at once (a paused game's
 }
 static void home_menu_activate(int i) {
     if (!g_menu || g_menu_closing || i < 0 || i >= (int)g_menu_rows.count) return;
+    volume_hold_stop();
     NSString *act = g_menu_rows[i][2];
     if ([act isEqualToString:@"continue"]) home_menu_close();
     else if ([act isEqualToString:@"players"]) { g_menu_move = g_menu_confirm = -1; menu_page(1, 0); }
     else if ([act isEqualToString:@"back"]) { g_menu_move = g_menu_confirm = -1; menu_page(0, 1); }
     else if ([act hasPrefix:@"slot:"]) slot_activate([[act substringFromIndex:5] intValue]);
-    else if ([act isEqualToString:@"volume"]) { volume_set(volume_pref() >= 0.995f ? 0.f : volume_step(volume_pref(), 1)); menu_refresh(i); }   // A steps up and wraps; left and right go either way
+    else if ([act isEqualToString:@"volume"]) volume_adjust(1);
     else if ([act isEqualToString:@"audio"]) { output_audio_set(![NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]); menu_refresh(i); }
     else if ([act isEqualToString:@"video"]) { play_mode_set(!video_pref_ipad()); menu_refresh(i); }
     else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
+}
+static NSTimer *g_volume_hold;
+static int g_volume_hold_dir;
+static BOOL g_volume_hold_touch;
+static void volume_hold_stop(void) {
+    [g_volume_hold invalidate];
+    g_volume_hold = nil;
+}
+static void volume_hold_start(int dir, BOOL touch) {
+    volume_hold_stop();
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive || !volume_adjust(dir)) return;
+    g_volume_hold_dir = dir;
+    g_volume_hold_touch = touch;
+    g_volume_hold = [[NSTimer alloc] initWithFireDate:[NSDate dateWithTimeIntervalSinceNow:(touch ? 0.12 : 0.4)]
+                                            interval:0.12 repeats:YES block:^(NSTimer *timer) {
+        if (timer == g_volume_hold && (!g_menu || g_menu_closing || !volume_adjust(dir))) volume_hold_stop();
+    }];
+    [NSRunLoop.mainRunLoop addTimer:g_volume_hold forMode:NSRunLoopCommonModes];
 }
 @interface DmMenuTap : NSObject
 @end
@@ -1246,11 +1293,16 @@ static void home_menu_activate(int i) {
 + (void)tap:(UIButton *)b { g_menu_sel = (int)b.tag - 100; home_menu_draw(); home_menu_activate(g_menu_sel); }
 + (void)tool:(UIButton *)b {   // the small buttons on a row: volume down / up, and a player's layout, identify, remove
     int t = (int)b.tag;
-    if (t == 300) { volume_set(volume_step(volume_pref(), -1)); menu_refresh(g_menu_sel); return; }
-    if (t == 301) { volume_set(volume_step(volume_pref(), 1)); menu_refresh(g_menu_sel); return; }
+    if (t == 300 || t == 301) { volume_hold_stop(); volume_adjust(t == 300 ? -1 : 1); return; }
     int p = (t - 400) / 4, k = (t - 400) % 4;
     if (p < 0 || p >= DM_PLAYERS) return;
     if (k == 0) slot_layout(p); else if (k == 1) slot_identify(p); else slot_remove(p);
+}
++ (void)holdVolume:(UILongPressGestureRecognizer *)press {
+    int dir = press.view.tag == 300 ? -1 : 1;
+    if (press.state == UIGestureRecognizerStateBegan && g_menu && !g_menu_closing) volume_hold_start(dir, YES);
+    else if (g_volume_hold_touch && g_volume_hold_dir == dir &&
+             (press.state == UIGestureRecognizerStateEnded || press.state == UIGestureRecognizerStateCancelled)) volume_hold_stop();
 }
 @end
 static NSString *menu_symbol(NSString *act) {   // each row's SF Symbol
@@ -1352,6 +1404,12 @@ static UIView *home_menu_make(UIView *root) {
             [tb setImage:[UIImage systemImageNamed:syms[k] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
             tb.tintColor = UIColor.whiteColor; tb.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14]; tb.layer.cornerRadius = 10; tb.layer.cornerCurve = kCACornerCurveContinuous;
             [tb addTarget:DmMenuTap.class action:@selector(tool:) forControlEvents:UIControlEventTouchUpInside];
+            if (!held) {
+                tb.accessibilityLabel = k == 0 ? (z ? @"降低音量" : @"Decrease volume") : (z ? @"提高音量" : @"Increase volume");
+                UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:DmMenuTap.class action:@selector(holdVolume:)];
+                press.minimumPressDuration = 0.4;
+                [tb addGestureRecognizer:press];
+            }
             [row addSubview:tb];
         }
         [card addSubview:row];
@@ -1384,6 +1442,7 @@ static UIView *home_menu_make(UIView *root) {
     return menu;
 }
 static void home_menu_build(void) {
+    volume_hold_stop();
     UIView *root = overlay_root(); if (!root) return;
     g_menu_cards = [NSMutableArray array];
     g_menu = home_menu_make(root);
@@ -1486,9 +1545,15 @@ static void home_menu_open(void) {
 }
 static void home_menu_toggle(void) { if (g_menu) home_menu_close(); else home_menu_open(); }
 static void home_menu_input(NSDictionary *u) {
-    if (!g_menu || g_menu_closing || ![u[@"on"] boolValue]) return;
+    if (!g_menu || g_menu_closing) return;
     if ([u[@"p"] intValue] != 1) return;   // only player 1 runs the menu (who that is: the menu's Players page)
     NSString *k = u[@"key"], *act = g_menu_rows[g_menu_sel][2];
+    int dir = [k isEqualToString:@"left"] ? -1 : [k isEqualToString:@"right"] ? 1 : 0;
+    if (![u[@"on"] boolValue]) {
+        if (!g_volume_hold_touch && dir == g_volume_hold_dir) volume_hold_stop();
+        return;
+    }
+    volume_hold_stop();
     int slot = [act hasPrefix:@"slot:"] ? [[act substringFromIndex:5] intValue] : -1;
     BOOL up = [k isEqualToString:@"up"], down = [k isEqualToString:@"down"];
     if ((up || down) && g_menu_move >= 0) {   // carrying a player: the selection chooses where it goes among the eight numbers; nothing changes until A
@@ -1497,7 +1562,7 @@ static void home_menu_input(NSDictionary *u) {
     if (up) g_menu_sel = MAX(0, g_menu_sel - 1);
     else if (down) g_menu_sel = MIN((int)g_menu_rows.count - 1, g_menu_sel + 1);
     else if ([k isEqualToString:@"a"]) { home_menu_activate(g_menu_sel); return; }
-    else if (([k isEqualToString:@"left"] || [k isEqualToString:@"right"]) && [act isEqualToString:@"volume"]) { volume_set(volume_step(volume_pref(), [k isEqualToString:@"left"] ? -1 : 1)); menu_refresh(g_menu_sel); return; }
+    else if (dir && [act isEqualToString:@"volume"]) { volume_hold_start(dir, NO); return; }
     else if ([k isEqualToString:@"y"] && slot >= 0) { slot_layout(slot); return; }
     else if ([k isEqualToString:@"x"] && slot >= 0) {
         if (g_menu_confirm == slot) slot_remove(slot);
@@ -1532,8 +1597,12 @@ static void home_menu_watch(void) {   // once the game starts (startGame)
         }
     }];
     [nc addObserverForName:@"DMLauncherInput" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { home_menu_input(n.userInfo); }];
+    [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+        (void)n; volume_hold_stop();
+    }];
     [nc addObserverForName:@"DMPlayersChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {   // a phone joined or left while the Players page is up
-        (void)n; if (g_menu && !g_menu_closing && g_menu_page == 1) menu_refresh(g_menu_sel);
+        (void)n; if (!g_volume_hold_touch) volume_hold_stop();
+        if (g_menu && !g_menu_closing && g_menu_page == 1) menu_refresh(g_menu_sel);
     }];
 }
 int front_ios_menu_open(void) { return g_menu != nil; }

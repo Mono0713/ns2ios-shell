@@ -10,3 +10,14 @@ CUTS = {
     (0x143b0, '6c700294', '1f2003d5', 'nninitStartup: bl 0xb0560 (FMallocBinned3 constructor, 38 GB of the engine region) → nop; the host allocator is in the object already (hle_uemalloc.c)'),
   ],
 }
+
+OBS = {
+  # It reaches its intro and then aborts in Xal.cpp:78 with XblInitialize=E_INVALIDARG. XalInitialize runs first, then the game
+  # reads PrimaryServiceConfigId from its config or derives it from XalGetTitleId. Trace the separate Xal result, the Xbl entry
+  # arguments, and the sandbox query's return in XSAPI to identify which input or setup step actually failed.
+  'c6b32f4d3d4243ff190b082b4f6aea18': [
+    (0x4238c34, 22, 'd10043a0', 'XalInitialize returned its HRESULT in w0 before the game logs it; orig sub x0, x29, #0x10'),
+    (0x7133f20, 22, 'd10683ff', 'XblInitialize entry: x0 points to its argument struct; orig sub sp, sp, #0x1a0'),
+    (0x7176224, 22, '2a0003f5', 'XSAPI config: XalGetSandbox returned its HRESULT in w0; orig mov w21, w0'),
+  ],
+}

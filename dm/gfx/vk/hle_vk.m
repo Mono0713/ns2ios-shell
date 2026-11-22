@@ -255,6 +255,8 @@ struct VkRenderPass_T { uint32_t natt, ncol; ratt att[16]; int col[8], res[8], d
 struct VkFramebuffer_T { uint32_t n, w, h, layers; VkImageView v[16]; };
 struct VkPipeline_T {
     __strong id<MTLRenderPipelineState> pso; __strong id<MTLDepthStencilState> dss;
+    __strong MTLRenderPipelineDescriptor *pending;
+    char shader_keys[64];
     const shinfo *vs, *fs; uint32_t vb_mask; VkPipelineLayout layout;
     MTLPrimitiveType prim; MTLCullMode cull; MTLWinding wind; MTLTriangleFillMode fill; MTLDepthClipMode clip;
     int bias; float bias_c, bias_s, bias_cl; float blend[4]; uint32_t sref_f, sref_b;
@@ -892,6 +894,15 @@ static int dual_source(const VkPipelineColorBlendStateCreateInfo *cb) {   // a b
     }
     return 0;
 }
+static void pipe_compile(VkPipeline p, MTLRenderPipelineDescriptor *pd, const char *keys) {
+    NSError *err = nil;
+    p->pso = [g_dev newRenderPipelineStateWithDescriptor:pd error:&err];
+    if (p->pso) g_n_pso++;
+    else {
+        static _Atomic unsigned failures;
+        if (atomic_fetch_add(&failures, 1) < 20) LOG("[vk] [RED] cannot build the pipeline (%s): %s", keys, err.localizedDescription.UTF8String);
+    }
+}
 static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
     VkPipeline p = zalloc(sizeof *p); p->layout = ci->layout;
     @autoreleasepool {
@@ -988,10 +999,13 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
         const VkPipelineViewportStateCreateInfo *vs = ci->pViewportState;
         if (!p->dyn_vp && vs && vs->pViewports && vs->viewportCount) { p->vp = vp_of(&vs->pViewports[0]); p->has_vp = 1; }
         if (!p->dyn_sc && vs && vs->pScissors && vs->scissorCount) { p->sc = vs->pScissors[0]; p->has_sc = 1; }
-        NSError *err = nil;
-        p->pso = [g_dev newRenderPipelineStateWithDescriptor:pd error:&err];
-        if (!p->pso) { static int n; if (n++ < 20) LOG("[vk] [RED] cannot build the pipeline (%s): %s", keys, err.localizedDescription.UTF8String); }
-        else g_n_pso++;
+        const char *defer = getenv("DM_VK_DEFER_PSO");
+        if (defer && atoi(defer)) {
+            // Hagi creates the whole pipeline database at startup. Keep the descriptor and its Metal functions before returning
+            // the handle so the unused pipelines need no Metal compilation, and shader modules may still be destroyed immediately.
+            p->pending = pd;
+            strlcpy(p->shader_keys, keys, sizeof p->shader_keys);
+        } else pipe_compile(p, pd, keys);
     }
     return p;
 }
@@ -1000,7 +1014,10 @@ VKB(vkCreateGraphicsPipelines, VkResult, VkDevice d, VkPipelineCache c, uint32_t
     for (uint32_t i = 0; i < n; i++) out[i] = pipe_make(&ci[i]);   // a pipeline Metal refuses is still handed out: its draws are skipped
     return VK_SUCCESS;
 }
-VKB(vkDestroyPipeline, void, VkDevice d, VkPipeline p, const VkAllocationCallbacks *a) { (void)d; (void)a; if (p) { p->pso = nil; p->dss = nil; free(p); } }
+VKB(vkDestroyPipeline, void, VkDevice d, VkPipeline p, const VkAllocationCallbacks *a) {
+    (void)d; (void)a;
+    if (p) { p->pending = nil; p->pso = nil; p->dss = nil; free(p); }
+}
 
 // ---------- Command buffers: recording ----------
 enum { C_BRP = 1, C_ERP, C_PIPE, C_SETS, C_VB, C_IB, C_VP, C_SC, C_DRAWI, C_COPYB, C_COPYB2I, C_DRAW, C_PUSH, C_COPYI, C_COPYI2B, C_QRESET, C_QTS, C_QBEGIN, C_QEND };
@@ -1249,7 +1266,11 @@ static int pre_draw(rs_t *s) {
     if (!s->re && s->cut) resume_rp(s);
     VkPipeline p = s->pipe; id<MTLRenderCommandEncoder> re = s->re;
     if (!re) { RED1("draw outside a render pass"); return 0; }
-    if (!p || !p->pso) return 0;
+    if (!p) return 0;
+    if (p->pending) {   // replay holds g_qmu, so a deferred pipeline is compiled just once, before its first draw
+        @autoreleasepool { pipe_compile(p, p->pending, p->shader_keys); p->pending = nil; }
+    }
+    if (!p->pso) return 0;
     if (s->applied != p) {
         [re setRenderPipelineState:p->pso]; [re setDepthStencilState:p->dss ? p->dss : g_dss_off];
         [re setCullMode:p->cull]; [re setFrontFacingWinding:p->wind]; [re setTriangleFillMode:p->fill]; [re setDepthClipMode:p->clip];

@@ -23,6 +23,7 @@ Update 1.4.0 (v393216) over the base game, SDK 18.3.5. NERD's Hagi Wii layer, as
 ## Shaders
 
 - 3,797 SPIR-V modules, all created about 7 s after launch (Galaxy: 3,089), captured by the NSP script as for Galaxy (`vk_capture.tsv`).
+- **Pending iPad startup test:** [Deferring Vulkan pipeline compilation until a draw uses it](../../../docs/reference/rendering.md#deferring-vulkan-pipeline-compilation-until-a-draw-uses-it).
 - The same two geometry shaders (GX points and lines) are skipped: those draws come out as one-pixel points and lines.
 - `romfs_marker` is `hagi.config`.
 

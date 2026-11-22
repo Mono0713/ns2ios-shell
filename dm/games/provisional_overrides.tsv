@@ -42,3 +42,10 @@
 # MemoryManager::Reallocate (main+0x51fc90) got 0 for 320 bytes from a dynamic_array's growth (main+0x2a9130) and copied into it
 # (SIGSEGV addr=0 in the SDK's memcpy, pool 0.75 of 1.00 GB used, iPad log 2026-11-21). The whole pool of a 4 GB Switch.
 0100F28011892000	app_pool	0xCD500000
+# The iPad run presents at interval 2. Pair display-paced presents with the Unity frame-rate field verified in hle_fpslock.c.
+0100F28011892000	fps_target	60
+0100F28011892000	present_interval	display
+
+# Moving Out 2. Pair display-paced presents with the build-checked Unity frame-rate field in hle_fpslock.c.
+010065D018172000	fps_target	60
+010065D018172000	present_interval	display

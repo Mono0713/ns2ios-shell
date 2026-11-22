@@ -40,6 +40,7 @@ Update 1.3.1 (v327680) over the base game, SDK 18.3.5. The Wii game (codename Co
 ## Shaders
 
 - Hagi generates its GX shaders as SPIR-V at run time. While it shows "Initializing system..." it creates 3,089 modules (the 56 built into `main` among them) and 4,535 pipelines from `data/database/pip/pipelineDB.pip`, the same on every boot (about 15 s on the Mac).
+- **Pending iPad test:** [Deferring Vulkan pipeline compilation until a draw uses it](../../../docs/reference/rendering.md#deferring-vulkan-pipeline-compilation-until-a-draw-uses-it).
 - The RomFS has no SPIR-V file, so the NSP script's `Vulkan shader capture` stage, with the profile's key list `vk_capture.tsv`, boots the game in the Mac host with `DM_VK_CAPTURE=<version dir>/vk_capture` until every listed key is there (under a minute; it gives up after 120 s), then `vk_shaders.py` translates the RomFS and the capture (it reads capture folders like a RomFS).
 - Its SPIR-V puts `ArrayStride` on the struct member (`OpMemberDecorate`) instead of the array type, which NVIDIA's driver accepts and SPIRV-Cross refuses ("Struct member does not have ArrayStride set"): `fix_strides` copies it onto the type before translating.
 - `romfs_marker` is `hagi.config`.

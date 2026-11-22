@@ -722,6 +722,13 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Fix:** the host's GL layer (`dm/gfx/gl/hle_gl.m`) answers the EGL imports and `eglGetProcAddress` (the rest of this section).
 - **Found on:** [Digimon Story Cyber Sleuth: Complete Edition](../../dm/games/010014E00DB56000/README.md) (SDK 6.4.0, Media.Vision's MVGL engine; one boot).
 
+### Deferring Vulkan pipeline compilation until a draw uses it
+
+- **Symptom:** the game spends several seconds on its initialization screen on every launch.
+- **Cause:** the game requests its whole pipeline database during startup. The host synchronously creates a Metal pipeline for each Vulkan handle, including pipelines the first scene does not use.
+- **Fix candidate:** `vk_defer_pso` retains the Metal descriptor and compiles each pipeline at its first draw in the serialized replay. The iPad build records the time to its first frame. Compare startup time and first-use frame times on the same route.
+- **Found on:** [Super Mario Galaxy](../../dm/games/010099C022B96000/README.md) and [Super Mario Galaxy 2](../../dm/games/0100FD8022DAA000/README.md).
+
 ### Telling a GL game from an NVN or Vulkan one
 
 - **Symptom:** the NSP script's provisional profile said Vulkan, and the capture boot crashed in the GL layer.

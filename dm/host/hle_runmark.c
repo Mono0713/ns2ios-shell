@@ -4,6 +4,7 @@
 // File: byte 0 the state, byte 1 the memory flag, then lines the launcher wrote (pool=, auto=). States:
 //   b running, not yet known to work        g not counted: before the game starts, or in the background (the player left)     w memory pressure (iOS warning, or under 256 MB left)
 //   k worked: 40 s of frames (final)        x the game's own abort (svcBreak)                       c a host crash (signal)       h the watchdog's hang exit
+//   e the game's entry point returned before reaching the 40 s mark
 // Flag byte: m once the host refused the game memory (SetHeapSize past the heap region or the pool, MapPhysicalMemory past the pool), '-' otherwise.
 // The first of x / c / h wins (what followed is a consequence). Written with pwrite on a descriptor opened in advance: safe from a signal handler.
 #include "hle.h"
@@ -29,6 +30,7 @@ static int allowed(char cur, char c) {
     case 'w': return cur == 'b';   // not before the game starts (shader preparation) or while in the background
     case 'g': return cur == 'b';
     case 'b': return cur == 'g';
+    case 'e': return cur == 'b' || cur == 'g';
     default: return 0;
     }
 }

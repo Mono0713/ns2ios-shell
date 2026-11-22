@@ -11,13 +11,19 @@
 // period, so frames at exactly 16.667 ms came 0.11 ms late each on the Mac (59.6 fps, every 150th frame shown two vsyncs). Slightly shorter, the host's present pacing sets the pace
 // (the acquire waits): Luigi's Mansion 3's display interval p99 18.69 → 16.67 ms, 60.0 fps. Not at 30: with present_interval display the presents follow every vsync and hold no
 // frame for two, so a shorter time showed some frames for one (30.4 fps); 30 writes the game's own 33.333 ms
-enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, UNLOCK_I32, VSYNCS_M1_I32 };   // UNLOCK_I32: vsyncs per frame, where 0 means no limit with the game stepping by the time that passed (written 0 at 60, 2 at 30); VSYNCS_M1_I32: vsyncs per frame less one (0 at 60, 1 at 30)
+enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, UNITY_FPS_I32, UNLOCK_I32, VSYNCS_M1_I32 };   // UNLOCK_I32: vsyncs per frame, where 0 means no limit with the game stepping by the time that passed (written 0 at 60, 2 at 30); VSYNCS_M1_I32: vsyncs per frame less one (0 at 60, 1 at 30)
 #define MS_MARGIN 0.5f
 static float ms_want(int fps) { return 1000.0f / (float)fps - (fps == 60 ? MS_MARGIN : 0); }
 static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; } k_locks[] = {
     // Pokemon Brilliant Diamond 1.3.0: Unity's Application.targetFrameRate. Its icall registration (main+0xe34e60) resolves to main+0xdc8e70 -> +0x5fa640,
     // which stores w0 at main+0x4afc868; the getter at +0x5fa630 reads the same int32. The game sets 30 when entering the field; display pacing alone does not remove that cap.
     { "94ceae325c205c4b9d6f7235552f28fd", "Unity targetFrameRate", 0, 0x4afc868, FPS_I32, 1 },
+    // Overcooked! All You Can Eat: Application's registered getter and setter at +0xd982a0/+0xd982b0 branch to +0x591e20/+0x591e30,
+    // which read and write the same int32. Its image initializes that field to -1 (the engine default). The iPad run asks NVN for interval 2.
+    { "5582cbf6d1a747428e93752eaee8d5c3", "Unity targetFrameRate", 0, 0x4d962e0, UNITY_FPS_I32, 1 },
+    // Moving Out 2: the IL2CPP registration table maps the same getter and setter to +0x178e9b0/+0x178e9c0.
+    // The game's managed rate setter can pass -1 when vSyncCount is positive, so the engine default also needs overriding.
+    { "c552b6464e7348a7bb261a708b353137", "Unity targetFrameRate", 0, 0x8ff34e8, UNITY_FPS_I32, 1 },
     // Monster Hunter Rise 16.0.2: RE Engine's frame limit, a float at [main+0x1295b3f0]+0x434 (the pointer is a global in main's bss). The frame loop (main+0x6b106c8) sleeps until
     // [+0x430] / [+0x434] sixtieths of a second have passed ([+0x430] = 60) and steps the game by the time that really passed (+0x41c), so a higher limit runs the game faster in frames
     // at the same speed. The game sets 30 after boot; it also asks for present interval 2, which the profile's present_interval display ignores.
@@ -107,10 +113,12 @@ void dm_fps_lock_tick(void) {
                 if (cur == want || cur > 3) continue;
                 snprintf(was, sizeof was, "%u", cur + 1);
             } else {
-                int fps = k_locks[k].kind == FPS_I32;
+                int unity = k_locks[k].kind == UNITY_FPS_I32;
+                int fps = k_locks[k].kind == FPS_I32 || unity;
+                int engine_default = unity && cur == UINT32_MAX;
                 want = fps ? (uint32_t)target : 60 / (uint32_t)target;
-                if (cur == want || cur < (fps ? 10u : 1u) || cur > (fps ? 120u : 4u)) continue;
-                snprintf(was, sizeof was, "%u", cur);
+                if (cur == want || (!engine_default && (cur < (fps ? 10u : 1u) || cur > (fps ? 120u : 4u)))) continue;
+                snprintf(was, sizeof was, "%d", (int32_t)cur);
             }
             uint32_t *p = (uint32_t *)(uintptr_t)a;
             dm_guest_write_prepare(p, sizeof *p); __atomic_store_n(p, want, __ATOMIC_RELAXED);
@@ -118,7 +126,8 @@ void dm_fps_lock_tick(void) {
                 if (k_locks[k].kind == MS_F32) snprintf(now, sizeof now, "%.3f ms (%d fps)", ms_want(target), target);
                 else if (k_locks[k].kind == UNLOCK_I32 && !want) snprintf(now, sizeof now, "0 (no limit, %d fps by the display)", target);
                 else if (k_locks[k].kind == VSYNCS_M1_I32) snprintf(now, sizeof now, "%u vsyncs (%d fps)", want + 1, target);
-                else snprintf(now, sizeof now, "%u%s", k_locks[k].kind == FPS_F32 ? (unsigned)target : want, k_locks[k].kind == FPS_F32 || k_locks[k].kind == FPS_I32 ? " fps" : " vsyncs");
+                else snprintf(now, sizeof now, "%u%s", k_locks[k].kind == FPS_F32 ? (unsigned)target : want,
+                    k_locks[k].kind == FPS_F32 || k_locks[k].kind == FPS_I32 || k_locks[k].kind == UNITY_FPS_I32 ? " fps" : " vsyncs");
                 LOG("main: %s%s %s → %s (%s)", k_locks[k].what, k_locks[k].copies > 1 ? (c ? " (render thread)" : " (game thread)") : "", was, now, src); }
         }
     }

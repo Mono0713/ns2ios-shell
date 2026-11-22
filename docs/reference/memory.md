@@ -15,6 +15,20 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 
 ## Heap and application pool
 
+### Launcher memory floor for fixed startup allocations
+
+- **Symptom:** a game crashes at startup when the launcher reports a small application pool, including on repeat launches with a saved manual setting.
+- **Cause:** the game reserves several fixed-size regions of its heap before reaching its first frame. When the application pool cannot cover those regions and the memory already in use, its allocator returns a null pointer.
+- **Fix:** a profile with a measured minimum sets `app_pool_min_gb`. The launcher discards saved choices below the minimum and keeps automatic selections at or above it. An invalid manual setting returns to Auto, which starts with the package's pool when there is no valid automatic history.
+- **Found on:** [Kirby Star Allies](../../dm/games/01007E3006DDA000/README.md) on iPad with a 2 GiB pool.
+
+### A game return is recorded separately from a system kill
+
+- **Symptom:** after the game's entry point returned, automatic memory treated the run as a system kill.
+- **Cause:** `nnMain` logged its return without updating the run marker. Its marker could still say the guest was running at the next launch.
+- **Fix:** a return sets marker `e`. The launcher keeps the current size after a return unless a host memory refusal was recorded. A previous pressure warning or completed run keeps its original marker.
+- **Found on:** Gang Beasts at the start of a local match on iPad.
+
 ### Provisional Unreal layout leaves no heap
 
 - **Symptom:** `SetHeapSize OOM: req 0x600000 > cap 0`, followed by an SDK abort in `nninitStartup` on the first provisional boot.

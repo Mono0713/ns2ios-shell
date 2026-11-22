@@ -66,6 +66,7 @@ def build(gid, patched, control):
             s.update(min=lo, max=hi, step=st)
         elif kind == 'memory':   # a slider in GB (Launcher.swift); the default '-' leaves the package's value
             lo, hi, st = (float(x) for x in values.split(':'))
+            lo = float(g.get('app_pool_min_gb', lo))
             s.update(min=lo, max=hi, step=st)
         elif kind == 'toggle':
             if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')
