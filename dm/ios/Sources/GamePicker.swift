@@ -636,31 +636,11 @@ private struct PadsCard: View {
             HStack {
                 Text(tr("玩家", "Players")).font(.ds(.title, .bold, k: t))
                 Spacer()
-                Text(tr("\(players.players.count) / 8 位玩家", "\(players.players.count) / 8 players")).font(.ds(.headline, k: t)).foregroundStyle(.white.opacity(0.6))
+                Text(tr("\(players.players.count) / 8 位玩家", "\(players.players.count) / 8 players"))
+                    .font(.ds(.headline, k: t)).foregroundStyle(.white.opacity(0.6))
             }
             HStack(alignment: .top, spacing: 28 * k) {
-                VStack(spacing: 12 * k) {
-                    ZStack {
-                        Color.white
-                        if let qr = pads.qr { Image(uiImage: qr).interpolation(.none).resizable().scaledToFit().padding(qrSide * 0.12) }
-                        else { Image(systemName: "wifi.slash").font(.ds(.largeTitle, k: t)).foregroundStyle(.black.opacity(0.5)) }
-                    }
-                    .frame(width: qrSide, height: qrSide).clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
-                    if let url = pads.url {
-                        Text(url)
-                            .font(tenFoot ? .system(size: max(1, min(24 * k, (qrSide - 20 * k) / (CGFloat(max(1, url.count)) * 0.62))),
-                                                   weight: .semibold, design: .monospaced) :
-                                    .system(size: addressSize * k, weight: .semibold).monospacedDigit())
-                            .lineLimit(1).minimumScaleFactor(0.5)
-                            .padding(.horizontal, 10 * k)
-                            .frame(width: qrSide).padding(.vertical, 8 * k)
-                            .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
-                            .accessibilityLabel(url)
-                    } else {
-                        Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first")).font(.ds(.footnote, k: t)).foregroundStyle(.white.opacity(0.65))
-                    }
-                }
-                .frame(width: qrSide + 20 * k)
+                joinColumn
                 Grid(horizontalSpacing: 10 * k, verticalSpacing: 10 * k) {
                     ForEach(0..<4, id: \.self) { r in
                         GridRow { place(r); place(r + 4) }
@@ -671,7 +651,10 @@ private struct PadsCard: View {
             }
             HStack(spacing: 22 * k) {
                 Spacer()
-                KeyHint(key: "A", text: m.picked == nil ? tr("換位置", "Move") : tr("放這裡", "Put here")); KeyHint(key: "−", text: tr("切換配置", "Layout")); KeyHint(key: "X", text: tr("移除", "Remove")); KeyHint(key: "B", text: tr("關閉", "Close"))
+                KeyHint(key: "A", text: m.picked == nil ? tr("換位置", "Move") : tr("放這裡", "Put here"))
+                KeyHint(key: "−", text: tr("切換配置", "Layout"))
+                KeyHint(key: "X", text: tr("移除", "Remove"))
+                KeyHint(key: "B", text: tr("關閉", "Close"))
             }
             .font(.ds(.callout, k: t)).foregroundStyle(.white.opacity(0.6))
         }
@@ -679,6 +662,42 @@ private struct PadsCard: View {
         .frame(maxWidth: cardWidth)
         .glassCard(DS.cardRadius * k)
         .foregroundStyle(.white)
+    }
+
+    private var joinColumn: some View {
+        VStack(spacing: 12 * k) {
+            ZStack {
+                Color.white
+                if let qr = pads.qr {
+                    Image(uiImage: qr).interpolation(.none).resizable().scaledToFit().padding(qrSide * 0.12)
+                } else {
+                    Image(systemName: "wifi.slash").font(.ds(.largeTitle, k: t)).foregroundStyle(.black.opacity(0.5))
+                }
+            }
+            .frame(width: qrSide, height: qrSide)
+            .clipShape(RoundedRectangle(cornerRadius: 18 * k, style: .continuous))
+            if let url = pads.url {
+                Text(url)
+                    .font(addressFont(url))
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .padding(.horizontal, 10 * k)
+                    .frame(width: qrSide).padding(.vertical, 8 * k)
+                    .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.chip))
+                    .accessibilityLabel(url)
+            } else {
+                Text(tr("請先連上 Wi-Fi", "Connect to Wi-Fi first"))
+                    .font(.ds(.footnote, k: t)).foregroundStyle(.white.opacity(0.65))
+            }
+        }
+        .frame(width: qrSide + 20 * k)
+    }
+
+    private func addressFont(_ url: String) -> Font {
+        guard tenFoot else { return .system(size: addressSize * k, weight: .semibold).monospacedDigit() }
+        let available = qrSide - 20 * k
+        let estimatedWidth = CGFloat(max(1, url.count)) * 0.62
+        let fitted = min(24 * k, available / estimatedWidth)
+        return .system(size: max(1, fitted), weight: .semibold, design: .monospaced)
     }
 
     @ViewBuilder private func place(_ i: Int) -> some View {
