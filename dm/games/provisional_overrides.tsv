@@ -35,6 +35,8 @@
 010092A0172E4000	mem_alias	0x118000000
 010092A0172E4000	mem_stack	0x10000000
 010092A0172E4000	app_pool	0xCD500000
+# The 1.0.3 build can request 60 FPS through its Unreal frame limits (hle_fpslock.c); the host gates the writes by build ID.
+010092A0172E4000	fps_target	60
 
 # Overcooked (0100F28011892000, Unity 2019.4). The provisional 1 GB pool ran out soon after the first picture: Unity's
 # MemoryManager::Reallocate (main+0x51fc90) got 0 for 320 bytes from a dynamic_array's growth (main+0x2a9130) and copied into it

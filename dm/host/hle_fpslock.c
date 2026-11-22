@@ -49,6 +49,10 @@ static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field
     // +0x10) and main+0x134d380 (int, AsVariableInt at +0x10)
     { "0d9649011312f62e93f6a5673a09d7e9", "Unreal t.MaxFPS", 0x76fef58 + 0x10, 0, FPS_F32, 2 },
     { "0d9649011312f62e93f6a5673a09d7e9", "Unreal rhi.SyncInterval", 0x75ad0d0 + 0x10, 0, VSYNCS_I32, 2 },
+    // It Takes Two 1.0.3 (UE 4.26): t.MaxFPS and rhi.SyncInterval are registered at main+0x547ebc4 and main+0x3bbe538.
+    // The Switch frame pacer at main+0x385fa9c reads rhi.SyncInterval and returns 60 divided by the number of vsyncs.
+    { "104db32fd10e753898d3957264a24c08", "Unreal t.MaxFPS", 0xacf8120 + 0x10, 0, FPS_F32, 2 },
+    { "104db32fd10e753898d3957264a24c08", "Unreal rhi.SyncInterval", 0xab9dcd8 + 0x10, 0, VSYNCS_I32, 2 },
     // SHIN MEGAMI TENSEI V: Vengeance 1.0.3: its Switch profile sets Project.FrameRateLimit=30 and rhi.syncinterval=2. The project variable (registered at +0xdd8624)
     // feeds GameUserSettings.FrameRateLimit at +0xb4 (+0xdd7d24 / +0xdd7f94), which applies it to t.MaxFPS. Write this source value so settings changes keep the target.
     // rhi.SyncInterval is registered at +0x2aa0754. Both use the same TAutoConsoleVariable value pointer at +0x10 and consecutive game/render-thread copies.
