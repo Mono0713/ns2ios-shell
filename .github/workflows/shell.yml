@@ -364,6 +364,13 @@ jobs:
           xcrun clang -std=gnu11 -Wall -Wextra -Werror dm/host/tests/t_aoc_indices.c -o "$RUNNER_TEMP/test-aoc-indices"
           "$RUNNER_TEMP/test-aoc-indices" "$RUNNER_TEMP/test-aoc-list"
 
+      - name: Check controller visibility and player routing
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/fork"
+          make -C dm/host/tests GAME=0000000000000000 build/t_hid
+          dm/host/tests/build/t_hid
+
       - name: Build the shell
         env:
           DM_ROOT: ${{ runner.temp }}/dm-work

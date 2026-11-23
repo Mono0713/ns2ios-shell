@@ -255,6 +255,36 @@ static void t_joyright(void) {
     dm_pad_players(0);
 }
 
+static void t_single_player_profile(void) {
+    const uint32_t no1 = 0, no2 = 1, handheld = NPAD_HANDHELD;
+    const uint32_t ids[] = {no1, no2, handheld};
+    const int8_t limits[] = {1, 4};
+    int32_t info[2];
+
+    g_mode = 1;
+    CHECK(setenv("DM_HID_SINGLE_PLAYER", "1", 1) == 0, "enable the single-player profile");
+    h_hid_InitNpad();
+    h_hid_SetIds(ids, 3);
+    dm_pad_players(3);
+    dm_pad_set_player(0, DM_BTN_A, 0, 0, 0, 0);
+    dm_pad_set_player(1, DM_BTN_B, 0, 0, 0, 0);
+    h_hid_ShowCtrl(info, limits);
+    CHECK(info[0] == 1 && info[1] == (int32_t)no1, "the applet sees only P1 in docked mode");
+    CHECK(h_hid_GetStyle(&no2) == 0 && buttons_of(no1, STYLE_FULLKEY) == DM_BTN_A,
+          "a P2 controller in the launcher is hidden from the game, and does not supply P1 input");
+    h_hid_SetIds(&no1, 1);
+    CHECK(buttons_of(no1, STYLE_FULLKEY) == DM_BTN_A, "the profile keeps P2 independent if the game later lists only No1");
+    h_hid_SetIds(ids, 3);
+
+    g_mode = 0;
+    h_hid_ShowCtrl(info, limits);
+    CHECK(info[0] == 1 && info[1] == (int32_t)handheld, "the applet sees P1 as Handheld in portable mode");
+    CHECK(setenv("DM_HID_SINGLE_PLAYER", "0", 1) == 0, "allow multiple players again");
+    h_hid_InitNpad();
+    h_hid_ShowCtrl(info, limits);
+    CHECK(info[0] == 2 && h_hid_GetStyle(&no2) == STYLE_FULLKEY, "multiplayer games continue to see P2");
+}
+
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
     t_slots();
@@ -262,6 +292,7 @@ int main(void) {
     t_vibration();
     t_rumble_log();
     t_joyright();
+    t_single_player_profile();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

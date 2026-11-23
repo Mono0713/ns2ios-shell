@@ -14,6 +14,7 @@ Update 1.4.3 (v720896) over the base game, SDK 20.5.22. Nintendo EPD's engine (s
 | `tex_dirty_upload on` | `game.tsv` | textures filled from the CPU with no flush at all (the magenta cave, the unlit stone blocks) |
 | Integer output rows | [`shader_facts_manual.tsv`](shader_facts_manual.tsv) | no PC version, so the translator has no output types: agl's BC4 encoder and the Ultrahand mask (`e3fb0bb58a691e10`, R8Uint, from PR #11; the Mac route does not reach it) |
 | `pad_layout full` | `game.tsv` | the 3D gamepad layout: the right stick turns the camera |
+| `hid_single_player on` | `game.tsv` | Test candidate for the iPad startup loop: two connected Xbox controllers led to 4,831 requests for the one-player controller applet. Earlier runs with only P1 skipped the loop. The title sees the P1 controller only, and the launcher retains both slots. Test cold starts with one and two controllers before marking this resolved. |
 
 ## Frame rate
 

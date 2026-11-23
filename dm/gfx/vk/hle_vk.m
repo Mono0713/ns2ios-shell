@@ -123,6 +123,7 @@ static _Atomic uint64_t g_done;                 // highest value whose command b
 static pthread_mutex_t g_qmu = PTHREAD_MUTEX_INITIALIZER, g_done_mu = PTHREAD_MUTEX_INITIALIZER, g_mem_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_done_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic uint64_t g_n_draw, g_n_pass, g_n_submit, g_n_copy, g_n_pso, g_mem_bytes;
+static _Atomic uint64_t g_n_deferred, g_n_depth_states;
 
 // Shader table (<DM_MSL_DIR>/vk/vk_shaders.tsv): resource kind u / b / t / s / c, its (set, binding) in the game's SPIR-V and the Metal slot it was moved to;
 // kind p is the push-constant block (set and binding 0), whose bytes are set straight into its buffer slot
@@ -256,6 +257,7 @@ struct VkFramebuffer_T { uint32_t n, w, h, layers; VkImageView v[16]; };
 struct VkPipeline_T {
     __strong id<MTLRenderPipelineState> pso; __strong id<MTLDepthStencilState> dss;
     __strong MTLRenderPipelineDescriptor *pending;
+    __strong MTLDepthStencilDescriptor *pending_depth;
     char shader_keys[64];
     const shinfo *vs, *fs; uint32_t vb_mask; VkPipelineLayout layout;
     MTLPrimitiveType prim; MTLCullMode cull; MTLWinding wind; MTLTriangleFillMode fill; MTLDepthClipMode clip;
@@ -905,6 +907,8 @@ static void pipe_compile(VkPipeline p, MTLRenderPipelineDescriptor *pd, const ch
 }
 static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
     VkPipeline p = zalloc(sizeof *p); p->layout = ci->layout;
+    const char *defer_setting = getenv("DM_VK_DEFER_PSO");
+    int defer = defer_setting && atoi(defer_setting);
     @autoreleasepool {
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
         char keys[64] = ""; int dual = dual_source(ci->pColorBlendState);
@@ -989,7 +993,11 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
             if (fmt_has_depth(df) && ds->depthTestEnable) { dd.depthCompareFunction = (MTLCompareFunction)ds->depthCompareOp; dd.depthWriteEnabled = ds->depthWriteEnable != 0; }
             if (fmt_has_stencil(df) && ds->stencilTestEnable) { dd.frontFaceStencil = stencil_d(&ds->front); dd.backFaceStencil = stencil_d(&ds->back); p->sref_f = ds->front.reference; p->sref_b = ds->back.reference; }
             if (ds->depthBoundsTestEnable) RED1("depth bounds test not implemented");
-            p->dss = [g_dev newDepthStencilStateWithDescriptor:dd];
+            if (defer) p->pending_depth = dd;
+            else {
+                p->dss = [g_dev newDepthStencilStateWithDescriptor:dd];
+                g_n_depth_states++;
+            }
         } else p->dss = g_dss_off;
         const VkPipelineDynamicStateCreateInfo *dy = ci->pDynamicState;
         for (uint32_t i = 0; dy && i < dy->dynamicStateCount; i++) {
@@ -999,12 +1007,11 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
         const VkPipelineViewportStateCreateInfo *vs = ci->pViewportState;
         if (!p->dyn_vp && vs && vs->pViewports && vs->viewportCount) { p->vp = vp_of(&vs->pViewports[0]); p->has_vp = 1; }
         if (!p->dyn_sc && vs && vs->pScissors && vs->scissorCount) { p->sc = vs->pScissors[0]; p->has_sc = 1; }
-        const char *defer = getenv("DM_VK_DEFER_PSO");
-        if (defer && atoi(defer)) {
-            // Hagi creates the whole pipeline database at startup. Keep the descriptor and its Metal functions before returning
-            // the handle so the unused pipelines need no Metal compilation, and shader modules may still be destroyed immediately.
+        if (defer) {
+            // Keep the Metal descriptors and functions; Vulkan shader modules may be destroyed as soon as this returns.
             p->pending = pd;
             strlcpy(p->shader_keys, keys, sizeof p->shader_keys);
+            g_n_deferred++;
         } else pipe_compile(p, pd, keys);
     }
     return p;
@@ -1016,7 +1023,7 @@ VKB(vkCreateGraphicsPipelines, VkResult, VkDevice d, VkPipelineCache c, uint32_t
 }
 VKB(vkDestroyPipeline, void, VkDevice d, VkPipeline p, const VkAllocationCallbacks *a) {
     (void)d; (void)a;
-    if (p) { p->pending = nil; p->pso = nil; p->dss = nil; free(p); }
+    if (p) { p->pending = nil; p->pending_depth = nil; p->pso = nil; p->dss = nil; free(p); }
 }
 
 // ---------- Command buffers: recording ----------
@@ -1268,7 +1275,15 @@ static int pre_draw(rs_t *s) {
     if (!re) { RED1("draw outside a render pass"); return 0; }
     if (!p) return 0;
     if (p->pending) {   // replay holds g_qmu, so a deferred pipeline is compiled just once, before its first draw
-        @autoreleasepool { pipe_compile(p, p->pending, p->shader_keys); p->pending = nil; }
+        @autoreleasepool {
+            pipe_compile(p, p->pending, p->shader_keys);
+            p->pending = nil;
+            if (p->pso && p->pending_depth) {
+                p->dss = [g_dev newDepthStencilStateWithDescriptor:p->pending_depth];
+                g_n_depth_states++;
+            }
+            p->pending_depth = nil;
+        }
     }
     if (!p->pso) return 0;
     if (s->applied != p) {
@@ -1585,7 +1600,12 @@ static void frame_end(void) {
     if (f <= 3 || f % 300 == 0)
         VLOG("frame %llu: draws %llu, passes %llu, submits %llu, copies %llu (since the last record, %llu frames); pipelines so far %llu, buffer memory %.1f MB", (unsigned long long)f, (unsigned long long)(dr - pd),
              (unsigned long long)(pa - pp), (unsigned long long)(su - ps), (unsigned long long)(co - pc), (unsigned long long)(f <= 3 ? 1 : 300), (unsigned long long)g_n_pso, g_mem_bytes / 1048576.0);
-    if (f <= 3 || f % 300 == 0) { pd = dr; pp = pa; ps = su; pc = co; }
+    if (f <= 3 || f % 300 == 0) {
+        uint64_t deferred = g_n_deferred;
+        if (deferred) VLOG("pipeline deferral at frame %llu: %llu described, %llu render and %llu depth/stencil states created",
+                          (unsigned long long)f, (unsigned long long)deferred, (unsigned long long)g_n_pso, (unsigned long long)g_n_depth_states);
+        pd = dr; pp = pa; ps = su; pc = co;
+    }
     dm_guest_frame_tick();
 }
 VKB(vkQueuePresentKHR, VkResult, VkQueue q, const VkPresentInfoKHR *pi) {

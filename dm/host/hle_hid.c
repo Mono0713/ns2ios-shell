@@ -178,6 +178,8 @@ static void ctl_start(void) {
 // Occupancy and the right Joy-Con mask are published together, so a reader cannot see a moved controller's old style.
 enum { PLAYER_MASK = (1u << DM_PLAYERS) - 1 };
 static _Atomic uint32_t g_pads, g_ids_supported = 0x3ff, g_styles_supported = 0xffffffffu;
+static _Atomic int g_single_player;
+static int player_limit(void) { return atomic_load(&g_single_player) ? 1 : DM_PLAYERS; }
 static uint32_t connected_id_for(uint32_t pads) {
     return dm_opmode() == 0 && !(pads >> DM_PLAYERS & 1) ? NPAD_HANDHELD : NPAD_NO1;
 }
@@ -189,7 +191,7 @@ uint32_t dm_player_npad(int p) { return p <= 0 ? connected_id() : (uint32_t)p; }
 // Handheld, bit 9 Other: all of them until SetSupportedNpadIdType, as the hid service starts)
 static uint32_t id_bit(uint32_t id) { return id < DM_PLAYERS ? 1u << id : id == NPAD_HANDHELD ? 1u << 8 : id == 0x10 ? 1u << 9 : 0; }
 static int reported_with_pads(int p, uint32_t pads) {
-    return p == 0 || (pads >> p & 1 && atomic_load(&g_ids_supported) & id_bit((uint32_t)p));
+    return p == 0 || (p < player_limit() && (pads >> p & 1) && (atomic_load(&g_ids_supported) & id_bit((uint32_t)p)));
 }
 static int reported(int p) { return reported_with_pads(p, atomic_load(&g_pads)); }
 // Players with a controller whose npad the game does not support. A one-player game (no npad past No1 supported) gets them as player 1, so any controller plays it; in a game for
@@ -199,8 +201,10 @@ static uint32_t unsupported_players(void) {
     for (int p = 1; p < DM_PLAYERS; p++) if (pads >> p & 1 && !reported_with_pads(p, pads)) m |= 1u << p;
     return m;
 }
-static int one_player(void) { return !(atomic_load(&g_ids_supported) & ((1u << DM_PLAYERS) - 2)); }
-static uint32_t merged_players(void) { return one_player() ? unsupported_players() : 0; }
+static int merge_unsupported_players(void) {
+    return player_limit() > 1 && !(atomic_load(&g_ids_supported) & ((1u << DM_PLAYERS) - 2));
+}
+static uint32_t merged_players(void) { return merge_unsupported_players() ? unsupported_players() : 0; }
 static int player_of(uint32_t id, uint32_t pads) {
     if (id == connected_id_for(pads)) return 0;
     return id > 0 && id < DM_PLAYERS && reported_with_pads((int)id, pads) ? (int)id : -1;
@@ -227,10 +231,10 @@ static void style_changed(uint32_t id) {
     if (ev) hle_signal_bound_system_event(ev);
 }
 static void note_merged(void) {   // logs the players whose npad the game does not support, when that changes
-    static _Atomic uint32_t last; uint32_t m = unsupported_players(), one = (uint32_t)one_player();
-    if (atomic_exchange(&last, m | one << 31) == (m | one << 31)) return;
+    static _Atomic uint32_t last; uint32_t m = unsupported_players(), merge = (uint32_t)merge_unsupported_players();
+    if (atomic_exchange(&last, m | merge << 31) == (m | merge << 31)) return;
     for (int p = 1; p < DM_PLAYERS; p++) if (m >> p & 1) {
-        if (one) LOG("hid: player %d's controller feeds player 1: the game supports one player (no npad %d)", p + 1, p);
+        if (merge) LOG("hid: player %d's controller feeds player 1: the game supports one player (no npad %d)", p + 1, p);
         else LOG("hid: player %d's controller is not used: the game supports no npad %d", p + 1, p);
     }
 }
@@ -244,7 +248,7 @@ void dm_pad_players_with_joyright(uint32_t mask, uint32_t joyright) {
     for (int p = 0; p < DM_PLAYERS; p++) if (reset >> p & 1) dm_pad_clear_player(p);
     atomic_store(&g_pads, pads);
     uint32_t changed = ((old ^ pads) & PLAYER_MASK) | style_delta;
-    for (int p = 1; p < DM_PLAYERS; p++) if (changed >> p & 1 && atomic_load(&g_ids_supported) & id_bit((uint32_t)p))
+    for (int p = 1; p < player_limit(); p++) if (changed >> p & 1 && atomic_load(&g_ids_supported) & id_bit((uint32_t)p))
         style_changed((uint32_t)p);
     if (style_delta & 1) {
         style_changed(NPAD_NO1);
@@ -312,7 +316,12 @@ static int states(NpadState *out, int n, uint32_t id, uint32_t style) {
     return n;
 }
 
-HLE_FORCE("_ZN2nn3hid14InitializeNpadEv", "connect to the hid service; the host takes input from the front-end state", void, h_hid_InitNpad, void) {}
+HLE_FORCE("_ZN2nn3hid14InitializeNpadEv", "connect to the hid service; the host takes input from the front-end state", void, h_hid_InitNpad, void) {
+    const char *setting = getenv("DM_HID_SINGLE_PLAYER");
+    int single = setting ? atoi(setting) != 0 : DM_GAME_HID_SINGLE_PLAYER;
+    if (atomic_exchange(&g_single_player, single) != single && single)
+        LOG("hid: game profile limits controller visibility to player 1");
+}
 // Supported npad ids: players 2..8 are reported only on supported npads; a one-player game ({No1, Handheld}) gets every controller as player 1 (merged_players); a four-player
 // game ({No1..No4, Handheld}) gets players 1..4, and a fifth controller is not used
 HLE_FORCE("_ZN2nn3hid22SetSupportedNpadIdTypeEPKjm", "supported controller ids; the host records them and reports further players only on supported ids", void, h_hid_SetIds, const uint32_t *ids, uint64_t n) {
