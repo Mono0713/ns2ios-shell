@@ -874,8 +874,6 @@ private struct TouchGameGrid: UIViewRepresentable {
 
         init(_ model: PickerModel) { m = model }
 
-        func collectionView(_ view: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool { false }
-
         func update(in view: UICollectionView, appearance: Appearance, focus: Int) {
             let previous = self.appearance
             let styleChanged = previous != appearance
