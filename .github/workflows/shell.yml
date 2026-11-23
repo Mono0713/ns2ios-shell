@@ -26,7 +26,7 @@ on:
       runner:
         description: 'macOS runner for the shell (macos-15 picks its newest Xcode 26 when macos-26 has no capacity)'
         type: choice
-        options: [macos-26, macos-15]
+        options: [macos-26, macos-26-intel, macos-15]
         default: macos-26
   # push and schedule triggers removed in this fork: builds only run by hand (workflow_dispatch)
 
