@@ -9,8 +9,7 @@
 //                                               | launcher (on 0/1: the settings screen is shown)
 //   DMLauncherInput (posted here, main thread)   while the launcher is shown, each player's controller or phone: userInfo p (player from 1), key: a | b | plus | up |
 //                                               down | left | right (the left stick counts as the D-pad), on: 1 pressed, 0 released (directions only, so the launcher can
-//                                               repeat them). Player 1 drives the whole screen, the others only their own row (all of them have player 1's say while nobody holds it in
-//                                               console mode: acting())
+//                                               repeat them). Player 1 drives the whole screen, the others only their own row. While P1 is vacant all can drive the menus.
 //   DMHomePressed (posted here, main thread)    a player pressed Home: a controller's Home (Xbox) button, − and + together, or a phone page's Home button
 //                                               (shell_slot_home): userInfo p (player from 1). front_ios.m opens or closes its menu over the game
 //   DMPlayerActive (posted here, main thread)    while the launcher is shown, any player pressed something or moved a stick: userInfo p (player from 1), at most
@@ -38,6 +37,7 @@ enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS
 
 static NSMutableArray<GCController *> *g_pads;    // the connected controllers that hold a player, kept alive while they do (the slot table keys on their pointers)
 static NSMutableArray<GCController *> *g_removed; // connected controllers the launcher removed: unused until they reconnect or the launcher adds them back
+static BOOL g_choose_primary;   // the cold-start controllers include physically indistinguishable copies of the same model
 
 static NSString *str(const char *s) { return [NSString stringWithUTF8String:s] ?: @"?"; }   // a phone's name is whatever its page sent: not always UTF-8
 static NSString *layout_key(const char *name) { return [@"DMPadLayout." stringByAppendingString:str(name)]; }
@@ -53,14 +53,10 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 static atomic_int g_launcher;
 static _Atomic uint64_t g_last_nav[DM_PLAYERS];   // each player's buttons, the left stick folded into the D-pad
 static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
-// While no controller or phone holds player 1 in console mode (the picture on the TV, so the iPad's touch controls are not player 1 either), every player
-// has player 1's say: the launcher, the picker, the Players card and the Home menu take anyone's input as player 1's, so a game whose player 1 left is never
-// stuck with nobody able to run the menus or move someone to P1. The numbers stay as they are; handheld mode keeps the iPad as player 1
-int front_ios_console_mode(void);
-static int acting(int p) { return p > 0 && !shell_slot_held(0) && front_ios_console_mode() ? 0 : p; }   // main thread (the TV's window is UIKit's)
 static void home_input(int p, BOOL shortcut) {   // any thread
     dispatch_async(dispatch_get_main_queue(), ^{
-        int a = acting(p);
+        int a = shell_slot_menu_player(p);
+        if (a < 0) return;
         if (a != p) LOG("player %d's Home counts as player 1's: nobody holds player 1", p + 1);
         [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1), @"shortcut": @(shortcut)}];
     });
@@ -95,7 +91,10 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
         if (!on && !(keys[i].held && (released >> keys[i].bit & 1))) continue;   // a direction also reports its release: the launcher repeats it while held
         NSString *key = @(keys[i].key);
         dispatch_async(dispatch_get_main_queue(), ^{
-            [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil userInfo:@{@"key": key, @"on": @(on), @"p": @(acting(p) + 1)}];
+            int menuPlayer = shell_slot_menu_player(p);
+            if (menuPlayer < 0) return;
+            [NSNotificationCenter.defaultCenter postNotificationName:@"DMLauncherInput" object:nil
+                userInfo:@{@"key": key, @"on": @(on), @"p": @(menuPlayer + 1), @"source": @(p + 1)}];
         });
     }
 }
@@ -156,7 +155,10 @@ static void stop_using(GCController *c, int p) {   // c no longer feeds player p
     motion_off(c);
     dm_haptics_apple_controller(p, nil);
     shell_slot_free((__bridge const void *)c);
-    if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
+    if (p >= 0) {
+        atomic_store(&g_last_nav[p], 0);
+        dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    }
     [g_pads removeObject:c];
 }
 static void pads_changed(GCController *gone) {   // a disconnect may still list the controller that went away: it is the notification's object
@@ -195,9 +197,10 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
 static GCController *pad_of(const void *owner) { for (GCController *c in g_pads) if ((__bridge const void *)c == owner) return c; return nil; }
 static void on_moved(const void *owner, int from, int to) {
     GCController *c = pad_of(owner); if (!c) return;
-    dm_haptics_apple_controller(from, nil);   // its new player's rumble from now on (read_pad registers it there)
+    shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
+    if (info[from].kind != SHELL_SLOT_CONTROLLER) dm_haptics_apple_controller(from, nil);
     LOG("controller '%s' moved in the launcher: player %d -> %d", c.vendorName.UTF8String ?: "?", from + 1, to + 1);
-    read_pad(c, false);
+    read_pad(c, true);   // the A that confirmed the move must not also activate the next menu item
 }
 static void on_kick(const void *owner) {
     GCController *c = pad_of(owner); if (!c) return;
@@ -218,6 +221,22 @@ static void on_identify(const void *owner) {   // the launcher's "which one is t
     id<CHHapticPatternPlayer> pl = pat ? [e createPlayerWithPattern:pat error:&err] : nil;
     [pl startAtTime:CHHapticTimeImmediate error:&err];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [e stopWithCompletionHandler:nil]; });
+}
+
+static NSArray<NSNumber *> *primary_candidates(void) {
+    GCController *primary = nil;
+    for (GCController *c in g_pads) {
+        if (shell_slot_of((__bridge const void *)c) == 0) { primary = c; break; }
+    }
+    NSString *model = primary.vendorName;
+    if (!model.length) return @[];
+    NSMutableArray<NSNumber *> *candidates = [NSMutableArray array];
+    for (GCController *c in g_pads) {
+        if (![model isEqualToString:c.vendorName] || ![primary.productCategory isEqualToString:c.productCategory]) continue;
+        int p = shell_slot_of((__bridge const void *)c);
+        if (p >= 0) [candidates addObject:@(p + 1)];
+    }
+    return candidates.count > 1 ? candidates : @[];
 }
 
 // ---- The launcher's list ----
@@ -258,7 +277,10 @@ static void post_players(void) {
         [now appendFormat:@" P%d %@ '%@'%@", p + 1, info[p].kind == SHELL_SLOT_PHONE ? @"phone" : @"controller", str(info[p].label), info[p].xbox ? @" xbox" : @""];
     for (GCController *c in g_removed) [now appendFormat:@" removed '%@'", c.vendorName ?: @"?"];
     if (![now isEqualToString:last]) { last = [now copy]; LOG("players:%s", now.length ? now.UTF8String : " none"); }
-    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersChanged" object:nil userInfo:@{@"players": players, @"removed": removed}];
+    NSArray *candidates = g_choose_primary ? primary_candidates() : @[];
+    if (!candidates.count) g_choose_primary = NO;
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersChanged" object:nil
+        userInfo:@{@"players": players, @"removed": removed, @"primaryCandidates": candidates}];
 }
 static atomic_int g_post_pending;   // changes in a burst (a swap is two moves and a change) post the list once
 static void slots_changed(void) {   // any thread (a phone joins on the server's)
@@ -274,7 +296,15 @@ static void command(NSDictionary *u);
 static void layout_request(int p, int xbox) { dispatch_async(dispatch_get_main_queue(), ^{ command(@{@"op": @"layout", @"p": @(p + 1), @"xbox": @(xbox)}); }); }
 static void command(NSDictionary *u) {
     NSString *op = u[@"op"]; int p = [u[@"p"] intValue] - 1;
-    if ([op isEqualToString:@"swap"]) shell_slot_swap([u[@"a"] intValue] - 1, [u[@"b"] intValue] - 1);
+    if ([op isEqualToString:@"swap"]) {
+        int a = [u[@"a"] intValue] - 1, b = [u[@"b"] intValue] - 1;
+        if (a == 0 || b == 0) g_choose_primary = NO;
+        shell_slot_swap(a, b);
+    } else if ([op isEqualToString:@"choosePrimary"]) {
+        if (!g_choose_primary || ![primary_candidates() containsObject:@(p + 1)]) return;
+        g_choose_primary = NO;
+        shell_slot_swap(0, p);
+    }
     else if ([op isEqualToString:@"kick"]) {
         shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);
         if (p >= 0 && p < DM_PLAYERS && info[p].kind == SHELL_SLOT_PHONE) [g_removing addObject:str(info[p].name)];
@@ -313,7 +343,11 @@ void shell_players_start(void) {   // main.m, on the main thread, once
             pads_changed([note.name isEqualToString:GCControllerDidDisconnectNotification] ? note.object : nil);
         }];
     [nc addObserverForName:@"DMPlayersCommand" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { command(note.userInfo); }];
-    dispatch_async(dispatch_get_main_queue(), ^{ pads_changed(nil); });   // the ones already connected, once the app runs
+    dispatch_async(dispatch_get_main_queue(), ^{
+        pads_changed(nil);   // the ones already connected, once the app runs
+        g_choose_primary = primary_candidates().count > 0;
+        if (g_choose_primary) post_players();
+    });
 }
 int shell_players_external(void) {   // controllers and phones playing now (main thread): the touch gamepad hides while there is one
     shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);

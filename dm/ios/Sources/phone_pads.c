@@ -199,7 +199,14 @@ static void publish_input(client *c, int p) {
     dm_pad_set_player(p, buttons, c->axes[0], c->axes[1], c->axes[2], c->axes[3]);
     shell_slot_input(p, buttons, c->axes[c->joyright ? 2 : 0], c->axes[c->joyright ? 3 : 1]);
 }
-static void release(client *c) { int p = shell_slot_of(c); c->raw = 0; c->kept = 0; c->hold_until = 0; if (p >= 0 && !c->released) { dm_pad_set_player(p, 0, 0, 0, 0, 0); c->released = 1; } }
+static void release(client *c) {
+    int p = shell_slot_of(c);
+    c->raw = 0; c->kept = 0; c->hold_until = 0;
+    if (p < 0 || c->released) return;
+    dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    shell_slot_input(p, 0, 0, 0);
+    c->released = 1;
+}
 // A game reads the buttons once a frame, so a press and its release closer together than a frame or two are never seen: a quick tap (Tetris), or two packets the
 // Wi-Fi held back and handed over at once. A button let go within MIN_HOLD_NS of going down stays down until then (the loop below lets it go)
 static void hold_expire(client *c, int p, uint64_t t) {

@@ -138,6 +138,7 @@ struct RemovedPad: Identifiable, Equatable { let index: Int; let label: String; 
 final class PlayersModel: ObservableObject {
     @Published var players: [PlayerRow] = []
     @Published var removed: [RemovedPad] = []
+    @Published private(set) var primaryCandidates: [Int] = []
     private var token: NSObjectProtocol?
 
     init() {
@@ -157,6 +158,8 @@ final class PlayersModel: ObservableObject {
         let sorted = players.sorted { $0.player < $1.player }   // P1 at the top, and after any move too
         if sorted != self.players { self.players = sorted }
         if removed != self.removed { self.removed = removed }
+        let candidates = (u?["primaryCandidates"] as? [Int] ?? []).sorted()
+        if candidates != primaryCandidates { primaryCandidates = candidates }
     }
     func send(_ u: [String: Any]) { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: u) }
 }
@@ -646,6 +649,9 @@ private final class ShellSettings: ObservableObject {
     @Published var touchScale: Double { didSet { style(); save() } }
     var gyroLocked: Bool { fromFile.contains("DM_GYRO") }
     var fpsLocked: Bool { fromFile.contains("DM_FPS") }
+    var changed: Bool {
+        (!gyroLocked && !gyro) || (!fpsLocked && fps != 60) || touchOpacity != 1 || touchScale != 1
+    }
     init() {
         let env = ProcessInfo.processInfo.environment, d = gameDefaults
         gyro = fromFile.contains("DM_GYRO") ? env["DM_GYRO"] != "0" : d.object(forKey: "launcher.DM_GYRO") as? Bool ?? true
@@ -660,6 +666,12 @@ private final class ShellSettings: ObservableObject {
         d.set(touchOpacity, forKey: "launcher.touchOpacity"); d.set(touchScale, forKey: "launcher.touchScale")
         if !gyroLocked { d.set(gyro, forKey: "launcher.DM_GYRO") }
         if !fpsLocked { d.set(fps == 30, forKey: "launcher.DM_FPS30") }
+    }
+    func reset() {
+        if !gyroLocked { gyro = true }
+        if !fpsLocked { fps = 60 }
+        touchOpacity = 1
+        touchScale = 1
     }
     func apply() {
         save()
@@ -863,7 +875,7 @@ private struct LauncherView: View {
     @StateObject private var activity = ActivityModel()
     @ObservedObject var saves: SaveSlotsModel
     @State private var nameAlert: UIAlertController?
-    @State private var held: (key: String, task: Task<Void, Never>)?   // the direction player 1 holds, repeating
+    @State private var held: (key: String, source: Int, task: Task<Void, Never>)?
     @StateObject private var tv: TenFoot
 
     init(m: LauncherModel, shell: ShellSettings, nav: NavModel, saves: SaveSlotsModel,
@@ -947,9 +959,9 @@ private struct LauncherView: View {
                         }
                     }
                     Section {
-                        Button { m.reset() } label: { Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise") }
+                        Button(action: resetSettings) { Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise") }
                             .foregroundStyle(tv.on ? Color.white : Color.accentColor)
-                            .disabled(!m.changed)
+                            .disabled(!settingsChanged)
                             .nav("reset")
                         if !tv.on {   // the Files app opens on the iPad, not on the TV
                             Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
@@ -986,6 +998,10 @@ private struct LauncherView: View {
             .allowsHitTesting(!mirror && (nav.saveConfirmation != nil || nav.saveSelection != nil))
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPadsChanged"))) { _ in
+            held?.task.cancel()
+            held = nil
+        }
         .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear {
             held?.task.cancel()
@@ -1212,6 +1228,14 @@ private struct LauncherView: View {
         default: nav.reset(); players.send(["op": "kick", "p": r.player])
         }
     }
+    private var settingsChanged: Bool { m.changed || shell.changed }
+
+    private func resetSettings() {
+        guard settingsChanged else { return }
+        m.reset()
+        shell.reset()
+    }
+
     private func navItems() -> [NavItem] {   // the rows in screen order (Play is apart); a setting an env file set is skipped
         var items: [NavItem] = []
         for r in players.players { items.append(NavItem(id: "p\(r.player)", activate: { nav.part = 0 })) }
@@ -1243,7 +1267,7 @@ private struct LauncherView: View {
                 items.append(NavItem(id: "touchScale", slider: true, adjust: { shell.touchScale = Swift.min(1.3, Swift.max(0.7, shell.touchScale + Double($0) * 0.05)) })) }
             }
         }
-        items.append(NavItem(id: "reset", activate: { if m.changed { m.reset() } }))
+        items.append(NavItem(id: "reset", activate: resetSettings))
         if !tv.on { items.append(NavItem(id: "folder", activate: openGameFolder)) }
         return items
     }
@@ -1303,7 +1327,11 @@ private struct LauncherView: View {
             return
         }
         if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
-        if (u?["on"] as? Int ?? 1) == 0 { if held?.key == key { held?.task.cancel(); held = nil }; return }   // a direction let go
+        let source = u?["source"] as? Int ?? 1
+        if (u?["on"] as? Int ?? 1) == 0 {
+            if held?.key == key, held?.source == source { held?.task.cancel(); held = nil }
+            return
+        }
         held?.task.cancel(); held = nil
         let row = players.players.first { "p\($0.player)" == nav.focus }
         switch key {
@@ -1326,7 +1354,7 @@ private struct LauncherView: View {
             let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
             navDirection(key)
             guard repeats, nav.saveSelection == nil, nav.saveConfirmation == nil else { return }
-            held = (key, Task { @MainActor in
+            held = (key, source, Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(400))
                 while !Task.isCancelled { navDirection(key); try? await Task.sleep(for: .milliseconds(120)) }
             })

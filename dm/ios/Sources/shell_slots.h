@@ -14,6 +14,7 @@ int shell_slot_set_joyright(const void *owner, int joyright);   // returns the p
 int shell_slot_free(const void *owner);   // frees owner's slot and returns it, -1 when it held none; the caller releases that player's input
 int shell_slot_of(const void *owner);
 int shell_slot_held(int p);   // 1 while a controller or a phone holds player p + 1
+int shell_slot_menu_player(int p);   // input's effective player for menus, or -1 when the input slot is vacant
 void shell_slots_list(shell_slot_info out[]);   // DM_PLAYERS entries, kind SHELL_SLOT_NONE for a free slot
 
 // moved: owner's slot is now `to` (it was `from`), called after the swap with no lock held; the holder feeds `to` its current state at once (a player the swap left

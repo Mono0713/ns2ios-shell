@@ -5,6 +5,8 @@ OBS = {
   # reading a track's source that held 3, 3, 0, 2 instead of an object (main+0x4091100; iPad logs 2026-11-21, at 1 GB and at 3.2 GB alike, so not memory). Diagnostic gates
   # (OBS_TRACE, hle_sdk16.c) show both sources registered with MatroskaSource's vtable, then one overwritten before the invalid call.
   # Trace its two destructor entries and Stop rather than logging every fetch, which used up the 16-hit budget before the crash.
+  # iPad 2026-11-23: neither destructor nor Stop fired, and the fault followed the first decoded PCM copy. Compare the recorded source
+  # address to the decoder's output range before treating this as an object lifetime bug.
   '7e9f31f59e001cf5d9b546ffb233f480': [
     # right after bl 0x3310a0 (a gate goes at a function entry or after a bl): x23 = the source stored into the new TrackInfo by the stp x23, x21, [x22] next, x21 = the track index
     (0x2e98ac, 22, '92800008', 'NuMediaExtractor::selectTrack: the source (x23) about to go into the new TrackInfo; orig mov x8, #-1'),

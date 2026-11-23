@@ -52,11 +52,15 @@ int main(int argc, char **argv) {
     for (;;) {
         FILE *f = fopen(tmp, "w"); if (!f) return 1;
         shell_slot_info info[DM_PLAYERS]; shell_slots_list(info);   // before g_mu: the table calls dm_pad_players under its own lock
+        int menu_players[DM_PLAYERS];
+        for (int i = 0; i < DM_PLAYERS; i++) menu_players[i] = shell_slot_menu_player(i);
         pthread_mutex_lock(&g_mu);
         fprintf(f, "{\"slots\": [");
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%d, %d]", i ? ", " : "", info[i].kind, info[i].xbox);
         fprintf(f, "], \"mask\": %u, \"joyright\": %u, \"players\": [", g_mask, g_joyright);
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%llu, %d, %d, %d, %d]", i ? ", " : "", (unsigned long long)g_btn[i], g_ax[i][0], g_ax[i][1], g_ax[i][2], g_ax[i][3]);
+        fprintf(f, "], \"menu_players\": [");
+        for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s%d", i ? ", " : "", menu_players[i]);
         fprintf(f, "], \"motion\": [");
         for (int i = 0; i < DM_PLAYERS; i++) fprintf(f, "%s[%d, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]", i ? ", " : "", g_motions[i], g_acc[i][0], g_acc[i][1], g_acc[i][2], g_gyro[i][0], g_gyro[i][1], g_gyro[i][2]);
         fprintf(f, "]}\n");

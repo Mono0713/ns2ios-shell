@@ -300,6 +300,41 @@ class PhonePadsWithControllersTests(PhonePadsTests):
         for ph in [a, extra] + more: ph.close()
         self.assertEqual(self.host()['mask'], 0b110)   # the phones leaving does not take the controllers' players away (now players 2 and 3)
 
+class PhoneMenuAuthorityTests(PhonePadsServer):
+    def test_menu_authority_when_player_one_disconnects(self):
+        def join(name, slot):
+            phone = Phone(self.port)
+            self.addCleanup(phone.close)
+            self.assertEqual(phone.hello(name)['player'], slot)
+            return phone
+
+        first = join('authority-first', 1)
+        second = join('authority-second', 2)
+        third = join('authority-third', 3)
+        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+
+        first.close()
+        state = self.host()
+        self.assertEqual(state['mask'], 0b110)
+        self.assertEqual(state['menu_players'][:3], [-1, 0, 0])
+        fourth = join('authority-new', 4)
+        self.assertEqual(self.host()['menu_players'][:4], [-1, 0, 0, 0])
+        fourth.close()
+        first = join('authority-first', 1)
+        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+
+        first.close()
+        self.assertEqual(self.host()['mask'], 0b110)
+        self.launcher('swap 0 2')
+        self.assertEqual(third.reply()['player'], 1)
+        self.assertEqual(self.host()['menu_players'][:3], [0, 1, -1])
+        first = join('authority-first', 3)
+        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+        for phone in (first, second, third):
+            phone.close()
+        self.assertEqual(self.host()['mask'], 0)
+
+
 class PhoneJoyconTests(PhonePadsServer):
     controllers = 2
 

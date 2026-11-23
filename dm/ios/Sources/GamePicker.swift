@@ -808,6 +808,7 @@ private struct GridGameTile: View {
 // Its cells render the same tiles as the controller grid.
 private struct TouchGameGrid: UIViewRepresentable {
     let m: PickerModel
+    let focus: Int
     let width: CGFloat
     let cols: Int
     let side: CGFloat
@@ -847,6 +848,7 @@ private struct TouchGameGrid: UIViewRepresentable {
         view.showsVerticalScrollIndicator = false
         view.dragInteractionEnabled = true
         view.reorderingCadence = .fast
+        controllerNotForUIKit(view)
         view.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "game")
         view.dataSource = context.coordinator
         view.delegate = context.coordinator
@@ -857,7 +859,7 @@ private struct TouchGameGrid: UIViewRepresentable {
     func updateUIView(_ view: UICollectionView, context: Context) {
         let appearance = Appearance(width: width, cols: cols, side: side, gap: gap, k: k, textSize: textSize,
                                     captionHeight: captionHeight * k, reduceMotion: reduceMotion)
-        context.coordinator.update(in: view, appearance: appearance)
+        context.coordinator.update(in: view, appearance: appearance, focus: focus)
     }
     static func dismantleUIView(_ view: UICollectionView, coordinator: Coordinator) {
         coordinator.endDrag()
@@ -872,14 +874,16 @@ private struct TouchGameGrid: UIViewRepresentable {
 
         init(_ model: PickerModel) { m = model }
 
-        func update(in view: UICollectionView, appearance: Appearance) {
+        func collectionView(_ view: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool { false }
+
+        func update(in view: UICollectionView, appearance: Appearance, focus: Int) {
             let previous = self.appearance
             let styleChanged = previous != appearance
             self.appearance = appearance
             if styleChanged, let layout = view.collectionViewLayout as? UICollectionViewFlowLayout {
                 appearance.apply(to: layout)
             }
-            let nextFocus = m.game(m.focus)?.id
+            let nextFocus = m.game(focus)?.id
             let focusChanged = focusedID != nextFocus
             focusedID = nextFocus
             if styleChanged || focusChanged {
@@ -1006,7 +1010,7 @@ private struct GameGrid: View {
             if tenFoot || mirror {
                 controllerGrid(pad: pad, gap: gap, side: side, columns: columns)
             } else {
-                TouchGameGrid(m: m, width: width, cols: columns, side: side, gap: gap)
+                TouchGameGrid(m: m, focus: m.focus, width: width, cols: columns, side: side, gap: gap)
             }
         }
         .clipped()
@@ -1050,8 +1054,14 @@ private struct PickerSettingsCard: View {
                 option(3, "power", tr("關閉 SwitchPad", "Close SwitchPad")) { pickerAction(3) }
             } else {
                 VStack(alignment: .leading, spacing: 2 * k) {
-                    Label(tr("音量 ", "Volume ") + String(Int((volume * 100).rounded())) + "%", systemImage: "speaker.wave.2.fill")
-                        .font(.ds(.headline, .semibold, k: k))
+                    HStack {
+                        Label(tr("音量 ", "Volume ") + String(Int((volume * 100).rounded())) + "%",
+                              systemImage: volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.ds(.headline, .semibold, k: k))
+                        Spacer()
+                        KeyHint(key: "A", text: volume == 0 ? tr("恢復音量", "Unmute") : tr("靜音", "Mute"))
+                            .font(.ds(.footnote, k: k))
+                    }
                     Slider(value: Binding(get: { volume }, set: {
                         m.setting = 0
                         volume = $0
@@ -1062,10 +1072,10 @@ private struct PickerSettingsCard: View {
                 .padding(.horizontal, 14 * k).padding(.vertical, 8 * k)
                 .background(m.setting == 0 ? DS.accent : DS.plate, in: RoundedRectangle(cornerRadius: 12 * k))
                 if outputs & 1 != 0 {
-                    option(1, "display", tr("畫面模式", "Display mode"),
-                           outputs & 2 == 0 ? tr("主機模式", "Console") : tr("掌機模式", "Handheld")) { pickerAction(1) }
                     option(2, "speaker.wave.2", tr("聲音輸出", "Audio output"),
                            outputs & 4 == 0 ? tr("外接螢幕", "External display") : "iPad") { pickerAction(2) }
+                    option(1, "display", tr("畫面模式", "Display mode"),
+                           outputs & 2 == 0 ? tr("主機模式", "Console") : tr("掌機模式", "Handheld")) { pickerAction(1) }
                 }
                 option(3, "power", tr("關閉 SwitchPad", "Close SwitchPad")) {
                     m.confirmingExit = true
@@ -1113,9 +1123,9 @@ private struct PickerView: View {
     @StateObject private var pads = PadsModel()
     @StateObject private var players = PlayersModel()   // Launcher.swift: the list from shell_players.m
     @StateObject private var activity = ActivityModel()
-    @State private var held: (key: String, task: Task<Void, Never>)?
+    @State private var held: (key: String, source: Int, task: Task<Void, Never>)?
     @State private var drag: CGFloat = 0   // how far a finger has moved the row
-    @State private var pendingShortcut: String?
+    @State private var pendingShortcut: (key: String, source: Int)?
     @StateObject private var tv: TenFoot
     @Environment(\.pregameMirror) private var mirror   // the TV's copy in handheld mode: shows, takes no input
 
@@ -1184,6 +1194,11 @@ private struct PickerView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { input($0.userInfo) } }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPadsChanged"))) { _ in
+            held?.task.cancel()
+            held = nil
+            pendingShortcut = nil
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMHomePressed"))) { note in
             guard !mirror, note.userInfo?["p"] as? Int == 1, note.userInfo?["shortcut"] as? Bool == true,
                   !m.starting, !m.reorderingGames else { return }
@@ -1321,17 +1336,21 @@ private struct PickerView: View {
 
     private func footer(_ k: CGFloat) -> some View {
         HStack(spacing: 22 * k) {
-            if m.gridOpen && !tv.on && !mirror && m.games.count > 1 {
+            if !players.primaryCandidates.isEmpty {
+                KeyHint(key: "A", text: tr("用要當 P1 的手把按下", "Press on the controller for P1"))
+            } else if m.gridOpen && !tv.on && !mirror && m.games.count > 1 {
                 Text(tr("長按圖示可排序", "Touch and hold to reorder")).lineLimit(1).minimumScaleFactor(0.8)
             }
             Spacer()
             if m.gridOpen {
                 KeyHint(key: "✛", text: tr("選擇", "Choose"))
-                KeyHint(key: "A", text: tr("設定", "Settings"))
+                if players.primaryCandidates.isEmpty { KeyHint(key: "A", text: tr("設定", "Settings")) }
                 KeyHint(key: "B", text: tr("返回", "Back"))
             } else {
                 KeyHint(key: "◀ ▶", text: tr("選擇", "Choose"))
-                KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
+                if players.primaryCandidates.isEmpty {
+                    KeyHint(key: "A", text: m.focus == 0 ? tr("玩家", "Players") : tr("開始", "Play"))
+                }
                 if m.games.count > 1 { KeyHint(key: "X", text: tr("所有遊戲", "All games")) }
             }
             KeyHint(key: "Y", text: tr("玩家", "Players"))
@@ -1382,7 +1401,7 @@ private struct PickerView: View {
         }
     }
 
-    private func settingsInput(_ key: String) {
+    private func settingsInput(_ key: String, source: Int) {
         if key == "b" { closeSettings(); return }
         if m.confirmingExit {
             if key == "up" { m.setting = 0 }
@@ -1392,7 +1411,7 @@ private struct PickerView: View {
             }
             return
         }
-        let rows = pickerOutputs() & 1 == 0 ? [0, 3] : [0, 1, 2, 3]
+        let rows = pickerOutputs() & 1 == 0 ? [0, 3] : [0, 2, 1, 3]
         switch key {
         case "up", "down":
             let index = rows.firstIndex(of: m.setting) ?? 0
@@ -1400,7 +1419,7 @@ private struct PickerView: View {
         case "left" where m.setting == 0, "right" where m.setting == 0:
             let direction: Int32 = key == "left" ? -1 : 1
             guard adjustPickerVolume(direction) else { return }
-            held = (key, Task { @MainActor in
+            held = (key, source, Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(350))
                 var repeats = 0
                 while !Task.isCancelled {
@@ -1413,7 +1432,7 @@ private struct PickerView: View {
             if m.setting == 3 {
                 m.confirmingExit = true
                 m.setting = 0
-            } else if m.setting != 0 {
+            } else {
                 pickerAction(Int32(m.setting))
             }
         default: break
@@ -1421,20 +1440,27 @@ private struct PickerView: View {
     }
 
     private func input(_ u: [AnyHashable: Any]?) {
-        guard let key = u?["key"] as? String, (u?["p"] as? Int ?? 1) == 1 else { return }   // player 1 drives it, as in the launcher
+        guard let key = u?["key"] as? String else { return }
+        let source = u?["source"] as? Int ?? 1
         let pressed = (u?["on"] as? Int ?? 1) != 0
+        if key == "a", pressed, !m.starting, !m.reorderingGames, !m.padsOpen, !m.settingsOpen,
+           players.primaryCandidates.contains(source) {
+            players.send(["op": "choosePrimary", "p": source])
+            return
+        }
+        guard (u?["p"] as? Int ?? 1) == 1 else { return }   // player 1 drives it, as in the launcher
         if key == "plus" || key == "minus" {
             // A single key acts on release, so a staggered ＋/− chord cannot launch a game first.
-            if pressed { pendingShortcut = key; return }
-            guard pendingShortcut == key else { return }
+            if pressed { pendingShortcut = (key, source); return }
+            guard pendingShortcut?.key == key, pendingShortcut?.source == source else { return }
             pendingShortcut = nil
         } else if !pressed {
-            if held?.key == key { held?.task.cancel(); held = nil }
+            if held?.key == key, held?.source == source { held?.task.cancel(); held = nil }
             return
         }
         held?.task.cancel(); held = nil
         guard !m.starting, !m.reorderingGames else { return }
-        if m.settingsOpen { settingsInput(key); return }
+        if m.settingsOpen { settingsInput(key, source: source); return }
         if m.padsOpen { cardInput(key); return }
         switch key {
         case "y": m.padsOpen = true
@@ -1444,7 +1470,7 @@ private struct PickerView: View {
         case "left", "right", "up", "down":
             let step: @MainActor () -> Void = m.gridOpen ? { m.gridMove(key) } : { m.move(key == "left" || key == "up" ? -1 : 1) }
             step()
-            held = (key, Task { @MainActor in   // repeats while held
+            held = (key, source, Task { @MainActor in   // repeats while held
                 try? await Task.sleep(for: .milliseconds(400))
                 while !Task.isCancelled { step(); try? await Task.sleep(for: .milliseconds(m.gridOpen ? 130 : 160)) }
             })

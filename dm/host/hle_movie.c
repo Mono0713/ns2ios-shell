@@ -752,7 +752,7 @@ HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferE", "movie decoder: ge
         if (!p || cap < n) { LOG("[RED] movie: client audio output buffer is %zu bytes, this packet needs %zu", cap, n); G.set_range(buf, 0, 0); return 0x100b; }
         if (n) memcpy(p, d->out[i].frm, n);
         G.set_range(buf, 0, (int)n);
-        MD_TRACE(d, 12, "GetOutputBuffer index %d → PCM %zu bytes", i, n);
+        MD_TRACE(d, 12, "GetOutputBuffer index %d → PCM %zu bytes at %p (client buffer %p, capacity %zu)", i, n, (void *)p, buf, cap);
         return 0;
     }
     int w, h, stride, slice; md_dims(d, &w, &h, &stride, &slice);

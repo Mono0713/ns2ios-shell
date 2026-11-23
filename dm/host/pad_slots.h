@@ -16,16 +16,19 @@ static int pad_slot_of(const pad_slots *s, const void *owner) {
     for (int i = 0; owner && i < DM_PLAYERS; i++) if (s->owner[i] == owner) return i;
     return -1;
 }
-static int pad_slot_take(pad_slots *s, const void *owner, const char *name) {
+static inline int pad_slot_take_from(pad_slots *s, const void *owner, const char *name, int first) {
     int p = pad_slot_of(s, owner); if (p >= 0 || !owner) return p;
     if (!name) name = "";
-    for (int i = 0; p < 0 && *name && i < DM_PLAYERS; i++) if (!s->owner[i] && !strcmp(s->last[i], name)) p = i;
-    if (p < 0 && !s->owner[0]) p = 0;
-    for (int i = 0; p < 0 && i < DM_PLAYERS; i++) if (!s->owner[i] && !s->last[i][0]) p = i;
-    for (int i = 0; p < 0 && i < DM_PLAYERS; i++) if (!s->owner[i]) p = i;
+    for (int i = first; p < 0 && *name && i < DM_PLAYERS; i++) if (!s->owner[i] && !strcmp(s->last[i], name)) p = i;
+    if (p < 0 && first == 0 && !s->owner[0]) p = 0;
+    for (int i = first; p < 0 && i < DM_PLAYERS; i++) if (!s->owner[i] && !s->last[i][0]) p = i;
+    for (int i = first; p < 0 && i < DM_PLAYERS; i++) if (!s->owner[i]) p = i;
     if (p < 0) return -1;
     s->owner[p] = owner; snprintf(s->last[p], sizeof s->last[p], "%s", name);
     return p;
+}
+static inline int pad_slot_take(pad_slots *s, const void *owner, const char *name) {
+    return pad_slot_take_from(s, owner, name, 0);
 }
 static int pad_slot_free(pad_slots *s, const void *owner) {
     int p = pad_slot_of(s, owner); if (p >= 0) s->owner[p] = NULL;

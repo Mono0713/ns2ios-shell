@@ -6,6 +6,7 @@
 // The host runs on the big-stack thread started by main.m; front_run runs the guest directly on the calling thread.
 #import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <QuartzCore/CAShapeLayer.h>
 #import <Metal/Metal.h>
 #import <CoreImage/CoreImage.h>
 #import <AVFAudio/AVFAudio.h>
@@ -144,6 +145,13 @@ static BOOL volume_adjust(int dir) {
     if (next == current) return NO;
     volume_set(next);
     return next > 0.f && next < 1.f;
+}
+static void volume_toggle_mute(void) {
+    static float last_audible[] = { 1.f, 0.5f };   // app gain and iPad volume have independent restore levels
+    float *restore = &last_audible[volume_is_device() ? 1 : 0];
+    float current = volume_quantized(volume_pref());
+    if (current > 0.f) *restore = current;
+    volume_set(current > 0.f ? 0.f : *restore);
 }
 @interface DmVolumeSlider : UISlider
 @end
@@ -482,6 +490,9 @@ void front_ios_back_to_picker(void) {
 - (void)startGame {
     if (self.game) return;
     g_play_started = CACurrentMediaTime();
+    // A Joy-Con joining before Play can query and cache the operation mode. Apply the final setting before the guest starts.
+    const char *mode = getenv("DM_OPMODE");
+    if (mode && (!strcmp(mode, "0") || !strcmp(mode, "1"))) dm_set_opmode(mode[0] - '0');
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
     self.stage = [[UIView alloc] initWithFrame:self.view.bounds]; self.stage.backgroundColor = UIColor.blackColor;
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
@@ -687,7 +698,7 @@ static UIView *tv_panel(CGRect frame) {
     UIButton *quit = panel_button(z ? @"關閉遊戲" : @"Close", @"power", [UIColor colorWithWhite:1 alpha:0.12], [UIColor colorWithRed:1 green:0.27 blue:0.23 alpha:1], ^{
         panel_confirm(z ? @"關閉遊戲？" : @"Close the game?", z ? @"未存檔的進度會遺失。" : @"Unsaved progress is lost.", z ? @"關閉" : @"Close", ^{ home_menu_quit(0); });
     });
-    for (UIView *x in @[ct, pause, vlo, vol, vhi, vl, vidl, vid, audl, aud, change, quit]) [ccv addSubview:x];
+    for (UIView *x in @[ct, pause, vlo, vol, vhi, vl, audl, aud, vidl, vid, change, quit]) [ccv addSubview:x];
     // what the controls show: the game's state, the volume, the outputs (the menu on the TV and this panel change the same things)
     __weak UIButton *wpause = pause, *wchange = change, *wquit = quit; __weak UILabel *wvl = vl, *wtitle = title, *wlt = lt; __weak UISegmentedControl *wvid = vid, *waud = aud; __weak UIView *wdot = dot, *wlive = live;
     void (^sync)(void) = ^{
@@ -831,8 +842,8 @@ static UIView *tv_panel(CGRect frame) {
         pause.frame = CGRectMake(22, y, cw2, 66); y += 86;
         vlo.frame = CGRectMake(22, y + 4, 24, 28); vl.frame = CGRectMake(22 + cw2 - 60, y + 3, 60, 30);
         vol.frame = CGRectMake(22 + 32, y + 1, cw2 - 32 - 32 - 70, 34); vhi.frame = CGRectMake(22 + cw2 - 60 - 34, y + 4, 30, 28); y += 58;
-        vidl.frame = CGRectMake(22, y, cw2, 24); y += 30; vid.frame = CGRectMake(22, y, cw2, 46); y += 64;
         audl.frame = CGRectMake(22, y, cw2, 24); y += 30; aud.frame = CGRectMake(22, y, cw2, 46); y += 64;
+        vidl.frame = CGRectMake(22, y, cw2, 24); y += 30; vid.frame = CGRectMake(22, y, cw2, 46); y += 64;
         CGFloat bh = 60, by = MAX(y, cf.size.height - 20 - bh);
         if (wchange.hidden) { quit.frame = CGRectMake(22, by, cw2, bh); }
         else { change.frame = CGRectMake(22, by, (cw2 - 10) / 2, bh); quit.frame = CGRectMake(22 + (cw2 + 10) / 2, by, (cw2 - 10) / 2, bh); }
@@ -1230,21 +1241,76 @@ static void home_menu_close(void) {
     resume_when_released(g_menu_gen, 0);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the TV panel's Pause / Continue
 }
+// The menu's size depends on its rows. Give the exit status its own layout on each display.
+static void home_exit_status(UIView *root, NSString *message) {
+    if (!root) return;
+    UIView *oldMenu = g_menu.superview == root ? g_menu : nil;
+    if (g_menu_tv.superview == root) oldMenu = g_menu_tv;
+    DmLayoutView *overlay = [[DmLayoutView alloc] initWithFrame:root.bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    overlay.accessibilityViewIsModal = YES;
+    UIVisualEffectView *card = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    card.clipsToBounds = YES;
+    card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    card.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.55];
+    UILabel *label = [UILabel new];
+    label.text = message;
+    label.textAlignment = NSTextAlignmentCenter;
+    label.textColor = UIColor.whiteColor;
+    label.numberOfLines = 2;
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.8;
+    [card.contentView addSubview:label];
+    CAShapeLayer *ring = [CAShapeLayer layer];
+    ring.fillColor = nil;
+    ring.strokeColor = UIColor.whiteColor.CGColor;
+    ring.lineCap = kCALineCapRound;
+    ring.strokeEnd = 0.78;
+    [card.contentView.layer addSublayer:ring];
+    [overlay addSubview:card];
+    overlay.layout = ^(UIView *view) {
+        CGSize size = view.bounds.size;
+        if (size.width <= 0 || size.height <= 0) return;
+        BOOL tv = view.window && view.window == g_tv;
+        CGFloat unit = tv ? MAX(0.55, MIN(size.width / 1920, size.height / 1080)) * 1.65 : 1;
+        unit = MIN(unit, MIN(size.width * 0.86 / 300, size.height * 0.75 / 120));
+        card.frame = CGRectMake((size.width - 300 * unit) / 2, (size.height - 120 * unit) / 2, 300 * unit, 120 * unit);
+        card.layer.cornerRadius = 22 * unit;
+        card.layer.borderWidth = unit;
+        label.font = [UIFont systemFontOfSize:18 * unit weight:UIFontWeightSemibold];
+        label.frame = CGRectMake(20 * unit, 66 * unit, 260 * unit, 38 * unit);
+        ring.bounds = CGRectMake(0, 0, 32 * unit, 32 * unit);
+        ring.position = CGPointMake(150 * unit, 42 * unit);
+        ring.contentsScale = view.window.windowScene.screen.scale ?: 1;
+        ring.lineWidth = 2.5 * unit;
+        ring.path = [UIBezierPath bezierPathWithOvalInRect:CGRectInset(ring.bounds, 3 * unit, 3 * unit)].CGPath;
+    };
+    overlay.alpha = 0;
+    [root addSubview:overlay];
+    [overlay layoutIfNeeded];
+    BOOL reduce = UIAccessibilityIsReduceMotionEnabled();
+    if (!reduce) {
+        CABasicAnimation *motion = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+        motion.toValue = @(2 * M_PI);
+        motion.duration = 0.85;
+        motion.repeatCount = HUGE_VALF;
+        [ring addAnimation:motion forKey:@"rotation"];
+    }
+    [UIView animateWithDuration:reduce ? 0 : 0.22 animations:^{ oldMenu.alpha = 0; overlay.alpha = 1; }];
+}
 // Closing from the Home menu is deliberate. Only Change games grants the next process a one-shot relaunch request.
 static void home_menu_quit(int relaunch) {
+    static BOOL exiting;
+    if (exiting) return;
+    exiting = YES;
+    g_menu_closing = 1;
+    volume_hold_stop();
     BOOL z = zh_ui();
-    for (UIView *card in g_menu_cards) {
-        UIView *keep = [card viewWithTag:1];
-        [UIView transitionWithView:card duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
-            for (UIView *v in card.subviews) if (v != keep) [v removeFromSuperview];
-            UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
-            spin.color = UIColor.whiteColor; spin.center = CGPointMake(card.bounds.size.width / 2, card.bounds.size.height / 2 - 22); [spin startAnimating]; [card addSubview:spin];
-            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(24, card.bounds.size.height / 2 + 12, card.bounds.size.width - 48, 30)];
-            l.numberOfLines = 0; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
-            l.text = relaunch ? (z ? @"正在回到選擇遊戲…" : @"Back to the games…") : (z ? @"正在關閉…" : @"Closing…");   // how a relaunch happens (a Shortcuts automation) is in the README, not on screen
-            [card addSubview:l];
-        } completion:nil];
-    }
+    NSString *message = relaunch ? (z ? @"正在回到選擇遊戲…" : @"Back to the games…") : (z ? @"正在關閉…" : @"Closing…");
+    home_exit_status(g_root.view, message);
+    home_exit_status(g_tv.rootViewController.view, message);
     LOG("front end: Home menu: user confirmed %s", relaunch ? "Change games" : "Close the game");
     fflush(stderr);
     // The next game needs a fresh process. Leave the request just before exiting, after the closing animation.
@@ -1306,7 +1372,6 @@ static void play_mode_set(BOOL handheld) {
     output_audio_set(handheld);
     output_video_set(handheld);
 }
-int front_ios_console_mode(void) { return tv_on(); }   // for the picker and the launcher (GamePicker.swift / Launcher.swift): the TV layout; changes come with DMShellChanged
 static void output_audio_set(BOOL ipad) {   // switches at once (a paused game's sound resumes on the new output) and stays the choice
     if (ipad == [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]) return;
     [NSUserDefaults.standardUserDefaults setBool:ipad forKey:@"DMAudioOnIPad"];
@@ -1334,6 +1399,7 @@ int front_ios_picker_outputs(void) {
 
 void front_ios_picker_action(int action) {
     if (!front_ios_pick_needed() || g_root.game || g_pregame_moving) return;
+    if (action == 0) { volume_toggle_mute(); return; }
     if (action == 3) { fflush(stderr); exit(0); }
     if (!g_tv_scene) return;
     if (action == 1) play_mode_set(!video_pref_ipad());
@@ -1348,13 +1414,14 @@ static void home_menu_activate(int i) {
     else if ([act isEqualToString:@"players"]) { g_menu_move = g_menu_confirm = -1; menu_page(1, 0); }
     else if ([act isEqualToString:@"back"]) { g_menu_move = g_menu_confirm = -1; menu_page(0, 1); }
     else if ([act hasPrefix:@"slot:"]) slot_activate([[act substringFromIndex:5] intValue]);
-    else if ([act isEqualToString:@"volume"]) volume_adjust(1);
+    else if ([act isEqualToString:@"volume"]) volume_toggle_mute();
     else if ([act isEqualToString:@"audio"]) { output_audio_set(![NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]); menu_refresh(i); }
     else if ([act isEqualToString:@"video"]) { play_mode_set(!video_pref_ipad()); menu_refresh(i); }
     else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
 }
 static NSTimer *g_volume_hold;
 static int g_volume_hold_dir;
+static int g_volume_hold_player;
 static BOOL g_volume_hold_touch;
 static CFTimeInterval g_volume_hold_since;
 static void volume_hold_stop(void) {
@@ -1595,7 +1662,9 @@ static NSArray<NSString *> *volume_row(void) {
     BOOL z = zh_ui(); int pct = (int)lroundf(volume_pref() * 100);
     NSString *what = volume_is_device() ? (z ? @"iPad 音量（同音量鍵）" : @"The iPad's volume (as its buttons)")
                                         : (z ? @"遊戲音量；電視本身用電視遙控器調" : @"The game's level; the TV's own with its remote");
-    return @[[NSString stringWithFormat:z ? @"音量  %d%%" : @"Volume  %d%%", pct], what, @"volume"];
+    NSString *hint = pct ? (z ? @"A 靜音" : @"A Mute") : (z ? @"A 恢復音量" : @"A Unmute");
+    return @[[NSString stringWithFormat:z ? @"音量  %d%%" : @"Volume  %d%%", pct],
+             [NSString stringWithFormat:@"%@ · %@", what, hint], @"volume"];
 }
 static NSArray<NSString *> *video_row(void) {
     BOOL z = zh_ui(), ipad = video_pref_ipad();
@@ -1628,7 +1697,7 @@ static NSArray *menu_rows(int page) {
     [rows addObject:@[z ? @"繼續遊戲" : @"Continue", @"", @"continue"]];
     [rows addObject:@[z ? @"玩家" : @"Players", [NSString stringWithFormat:z ? @"%d 位" : @"%d", n], @"players"]];
     [rows addObject:volume_row()];
-    if (g_tv_scene) { [rows addObject:video_row()]; [rows addObject:audio_row()]; }   // a TV is connected: where the picture and the sound go
+    if (g_tv_scene) { [rows addObject:audio_row()]; [rows addObject:video_row()]; }   // a TV is connected: where the sound and the picture go
     if (several) [rows addObject:@[z ? @"換遊戲" : @"Change games", z ? @"未存檔進度會遺失" : @"Unsaved progress is lost", @"change"]];
     [rows addObject:@[z ? @"關閉遊戲" : @"Close the game", z ? @"未存檔進度會遺失" : @"Unsaved progress is lost", @"quit"]];
     return rows;
@@ -1649,7 +1718,7 @@ static UIImage *phones_qr(NSString **url_out) {   // the phone controllers' addr
     UIImage *img = [UIImage imageWithCGImage:cg]; CGImageRelease(cg); return img;
 }
 static void home_menu_open(void) {
-    if (g_menu || !g_root.game) return;   // only once the game was started (the picker and the launcher have their own screens)
+    if (g_menu || g_menu_closing || !g_root.game) return;
     g_menu_page = 0; g_menu_move = g_menu_confirm = g_menu_prev_sel = -1; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++; g_menu_anim = 1;
     game_pause(1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput
@@ -1662,9 +1731,10 @@ static void home_menu_input(NSDictionary *u) {
     if (!g_menu || g_menu_closing) return;
     if ([u[@"p"] intValue] != 1) return;   // only player 1 runs the menu (who that is: the menu's Players page)
     NSString *k = u[@"key"], *act = g_menu_rows[g_menu_sel][2];
+    int source = [u[@"source"] intValue];
     int dir = [k isEqualToString:@"left"] ? -1 : [k isEqualToString:@"right"] ? 1 : 0;
     if (![u[@"on"] boolValue]) {
-        if (!g_volume_hold_touch && dir == g_volume_hold_dir) volume_hold_stop();
+        if (!g_volume_hold_touch && dir == g_volume_hold_dir && source == g_volume_hold_player) volume_hold_stop();
         return;
     }
     volume_hold_stop();
@@ -1676,7 +1746,7 @@ static void home_menu_input(NSDictionary *u) {
     if (up) g_menu_sel = MAX(0, g_menu_sel - 1);
     else if (down) g_menu_sel = MIN((int)g_menu_rows.count - 1, g_menu_sel + 1);
     else if ([k isEqualToString:@"a"]) { home_menu_activate(g_menu_sel); return; }
-    else if (dir && [act isEqualToString:@"volume"]) { volume_hold_start(dir, NO); return; }
+    else if (dir && [act isEqualToString:@"volume"]) { g_volume_hold_player = source; volume_hold_start(dir, NO); return; }
     else if ([k isEqualToString:@"y"] && slot >= 0) { slot_layout(slot); return; }
     else if ([k isEqualToString:@"x"] && slot >= 0) {
         if (g_menu_confirm == slot) slot_remove(slot);
@@ -1713,6 +1783,9 @@ static void home_menu_watch(void) {   // once the game starts (startGame)
         }
     }];
     [nc addObserverForName:@"DMLauncherInput" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { home_menu_input(n.userInfo); }];
+    [nc addObserverForName:@"DMPadsChanged" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+        (void)n; if (!g_volume_hold_touch) volume_hold_stop();
+    }];
     [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
         (void)n; volume_hold_stop();
     }];
