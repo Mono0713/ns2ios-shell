@@ -80,6 +80,8 @@ static int g_menu_page;   // 0 main, 1 players / who is 1P, 2 join (QR)
 static int g_menu_anim;   // how the next drawn card comes in: 0 at once, 1 opening, 2 next page, 3 page back
 static void menu_page(int page, int sel);
 static NSArray *menu_rows(int page);
+static NSString *phone_address(void);
+static UIImage *phone_code(NSString *address);
 static UIImage *phones_qr(NSString **url_out);
 static NSArray<NSString *> *audio_row(void);
 static NSArray<NSString *> *video_row(void);
@@ -683,7 +685,24 @@ static UIView *tv_panel(CGRect frame) {
     UIView *qr = [UIView new]; qr.backgroundColor = UIColor.whiteColor; qr.layer.cornerRadius = 18; qr.layer.cornerCurve = kCACornerCurveContinuous;
     UIImageView *qi = [UIImageView new]; qi.layer.magnificationFilter = kCAFilterNearest; qi.contentMode = UIViewContentModeScaleAspectFit; [qr addSubview:qi];
     UILabel *jt = panel_label(20, UIFontWeightSemibold, 1); jt.text = z ? @"用手機加入" : @"Join with a phone"; jt.textAlignment = NSTextAlignmentCenter;
-    qi.image = phones_qr(NULL); qr.hidden = qi.image == nil; jt.hidden = qr.hidden;   // seen from a few steps away: the code and one line, no address, no tips
+    __weak UIView *wqr = qr;
+    __weak UIImageView *wqi = qi;
+    __weak UILabel *wjt = jt;
+    __block NSString *lastAddress;
+    void (^updateQR)(void) = ^{
+        NSString *address = phone_address();
+        if (address != lastAddress && ![address isEqualToString:lastAddress]) {
+            lastAddress = address;
+            wqi.image = phone_code(address);
+        }
+        wqr.hidden = wqi.image == nil;
+        wjt.hidden = wqr.hidden;
+    };
+    updateQR();
+    [NSTimer scheduledTimerWithTimeInterval:3 repeats:YES block:^(NSTimer *timer) {
+        if (wqr) updateQR();
+        else [timer invalidate];
+    }];
     UIView *grid = [UIView new];
     for (UIView *x in @[pt, pn, qr, jt, grid]) [pcv addSubview:x];
 
@@ -844,7 +863,7 @@ static UIView *tv_panel(CGRect frame) {
         else { CGFloat hh = MIN(520, ch * 0.56); pf = CGRectMake(L, top, R - L, hh); cf = CGRectMake(L, top + hh + 18, R - L, ch - hh - 18); }
         pc.frame = pf; cc.frame = cf;
         // players card: QR column, then the grid
-        CGFloat pw = pf.size.width, ph = pf.size.height, qs = qr.hidden ? -20 : MIN(200, ph - 140);
+        CGFloat pw = pf.size.width, ph = pf.size.height, qs = MAX(0, MIN(200, MIN(ph - 140, pw * 0.32)));
         pt.frame = CGRectMake(24, 20, 120, 34); [pt sizeToFit]; pn.frame = CGRectMake(24 + pt.bounds.size.width + 14, 26, 90, 26);
         qr.frame = CGRectMake(24, 72, qs, qs); qi.frame = CGRectInset(qr.bounds, 14, 14);
         jt.frame = CGRectMake(24, 72 + qs + 14, qs, 26);
@@ -1768,14 +1787,22 @@ static void menu_page(int page, int sel) {
     g_menu_page = page; g_menu_rows = menu_rows(page); g_menu_sel = MAX(0, MIN(sel, (int)g_menu_rows.count - 1)); g_menu_prev_sel = -1;
     home_menu_relayout(); home_menu_draw();
 }
-static UIImage *phones_qr(NSString **url_out) {   // the phone controllers' address as a QR code (phone_pads.c); nil while the server is off
+static NSString *phone_address(void) {
     int phone_pads_url(char *out, size_t cap);
-    char url[96] = ""; if (!phone_pads_url(url, sizeof url)) return nil;
-    if (url_out) *url_out = @(url);
-    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[@(url) dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
+    char url[96];
+    return phone_pads_url(url, sizeof url) ? @(url) : nil;
+}
+static UIImage *phone_code(NSString *address) {
+    if (!address) return nil;
+    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"]; [f setValue:[address dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"]; [f setValue:@"M" forKey:@"inputCorrectionLevel"];
     CIImage *ci = f.outputImage; CGImageRef cg = ci ? [[CIContext context] createCGImage:ci fromRect:ci.extent] : NULL;
     if (!cg) return nil;
     UIImage *img = [UIImage imageWithCGImage:cg]; CGImageRelease(cg); return img;
+}
+static UIImage *phones_qr(NSString **url_out) {
+    NSString *address = phone_address();
+    if (url_out) *url_out = address;
+    return phone_code(address);
 }
 static void home_menu_open(void) {
     if (g_menu || g_menu_closing || !g_root.game) return;

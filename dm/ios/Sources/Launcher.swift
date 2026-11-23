@@ -1060,6 +1060,7 @@ private struct LauncherView: View {
                     optionPanel(choice, k: k)
                 } else if panels.panelOpen {
                     PregamePanelsView(m: panels, pads: pads, players: players, viewport: geometry.size, k: k, onTV: tv.on)
+                        .environmentObject(activity)
                 }
             }
             .allowsHitTesting(!mirror && (nav.hasPanel || panels.panelOpen))

@@ -1427,13 +1427,10 @@ private struct PickerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(m.gridOpen ? tr("回到單排", "Back to the row") : tr("所有遊戲", "All games"))
             }
-            Button { m.openSettings() } label: {
-                Image(systemName: "gearshape").font(.ds(.title3, .semibold, k: k))
-                    .frame(width: 48 * k, height: 44 * k)
-                    .background(DS.chip, in: RoundedRectangle(cornerRadius: 12 * k))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(tr("SwitchPad 設定", "SwitchPad settings"))
+            Image(systemName: "gearshape").font(.ds(.title3, .semibold, k: k))
+                .frame(width: 48 * k, height: 44 * k)
+                .background(DS.chip, in: RoundedRectangle(cornerRadius: 12 * k))
+                .launcherTap(tr("SwitchPad 設定", "SwitchPad settings")) { m.openSettings() }
             BackToTVButton()
             StatusBar()
         }
