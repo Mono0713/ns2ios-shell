@@ -23,4 +23,4 @@ if __name__ == '__main__':
     text = render()
     if '--check' in sys.argv[1:]:
         sys.exit(0 if OUT.exists() and OUT.read_text() == text else 'dm/ios/Sources/phone_pad_page.h is stale: run dm/ios/tools/gen_phone_pad_page.py')
-    OUT.write_text(text)
+    OUT.write_bytes(text.encode('ascii'))

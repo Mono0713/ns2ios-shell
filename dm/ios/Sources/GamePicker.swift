@@ -701,7 +701,6 @@ private struct PadsTile: View {
             if let qr {
                 Image(uiImage: qr).interpolation(.none).resizable().scaledToFit()
                     .frame(width: side * 0.74, height: side * 0.74)
-                    .offset(y: -side * 0.028)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "wifi.slash").font(.system(size: side * 0.18))

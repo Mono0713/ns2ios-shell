@@ -96,7 +96,7 @@ static UIView *tv_panel(CGRect frame);
 // the app's own gain instead (dm_audio_master, hle_audio.c), kept between runs. iOS gives apps no call to set the system volume; MPVolumeView's slider is
 // the system's own control for it, so the setter moves that slider, in a view kept off screen only while it is used (while one is on screen the system's
 // volume indicator stays hidden, the volume buttons' too).
-enum { VOLUME_STEP_PERCENT = 1 };
+enum { DEVICE_VOLUME_STEP_PERCENT = 5, APP_VOLUME_STEP_PERCENT = 1 };
 static BOOL volume_is_device(void) {
     for (AVAudioSessionPortDescription *o in AVAudioSession.sharedInstance.currentRoute.outputs)
         if ([o.portType isEqualToString:AVAudioSessionPortHDMI] || [o.portType isEqualToString:AVAudioSessionPortLineOut] || [o.portType isEqualToString:AVAudioSessionPortDisplayPort]) return NO;
@@ -115,14 +115,16 @@ static float volume_pref(void) {
 }
 static MPVolumeView *g_volview; static int g_volgen;
 static UIWindow *root_window(void);   // the iPad's window (defined with g_root below)
-static float volume_quantized(float v) {
-    return roundf(MAX(0.f, MIN(1.f, v)) * 100.f) / 100.f;
+static int volume_step_percent(BOOL device) {
+    return device ? DEVICE_VOLUME_STEP_PERCENT : APP_VOLUME_STEP_PERCENT;
 }
 static void volume_set(float v) {
-    v = volume_quantized(v);
+    BOOL device = volume_is_device();
+    int step = volume_step_percent(device);
+    v = roundf(MAX(0.f, MIN(1.f, v)) * 100.f / step) * step / 100.f;
     BOOL was_muted = g_volume_muted;
     if (v > 0) g_volume_muted = NO;
-    if (!volume_is_device()) { [NSUserDefaults.standardUserDefaults setFloat:v forKey:@"DMVolume"]; app_gain_apply(); }
+    if (!device) { [NSUserDefaults.standardUserDefaults setFloat:v forKey:@"DMVolume"]; app_gain_apply(); }
     else {
         UIWindow *w = root_window();
         if (!g_volview && w) {
@@ -146,7 +148,8 @@ static void volume_set(float v) {
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the menu and the TV panel redraw what they show
 }
 static float volume_step(float v, int dir) {
-    int pct = (int)lroundf(v * 100) + dir * VOLUME_STEP_PERCENT;
+    int step = volume_step_percent(volume_is_device());
+    int pct = (int)lroundf(v * 100.f / step) * step + dir * step;
     return MAX(0, MIN(100, pct)) / 100.f;
 }
 static BOOL volume_adjust(int dir) {
@@ -436,10 +439,17 @@ void front_ios_picker_cover_end(void) {
                          completion:^(BOOL finished) { (void)finished; cover.hidden = YES; }];
     });
 }
+static int g_mode_fades;
+static int g_pending_mode = -1;
+static void play_pending_mode(void) {
+    if (g_mode_fades || g_pending_mode < 0) return;
+    BOOL handheld = g_pending_mode == 1;
+    g_pending_mode = -1;
+    play_mode_set(handheld);
+}
 static void mode_fade(UIWindow *w) {
     if (!w) return;
-    static NSMutableArray *alive; if (!alive) alive = [NSMutableArray array];
-    [alive addObject:w];
+    g_mode_fades++;
     CFTimeInterval start = CACurrentMediaTime();
     __block void (^reveal)(void);
     reveal = ^{
@@ -453,17 +463,47 @@ static void mode_fade(UIWindow *w) {
         [g_root.view layoutIfNeeded];
         [g_tv.rootViewController.view layoutIfNeeded];
         [CATransaction setCompletionBlock:^{
-            [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.24 delay:0
-                                options:UIViewAnimationOptionCurveEaseInOut
+            [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.17 delay:0
+                                options:UIViewAnimationOptionCurveEaseOut
                              animations:^{ w.alpha = 0; }
                              completion:^(BOOL finished) {
-                (void)finished; w.hidden = YES; [alive removeObject:w];
+                (void)finished;
+                w.hidden = YES;
+                g_mode_fades--;
+                if (!g_mode_fades) dispatch_async(dispatch_get_main_queue(), ^{ play_pending_mode(); });
             }];
         }];
         [CATransaction commit];
     };
     dispatch_async(dispatch_get_main_queue(), reveal);
 }
+@interface DmDisplaySample : NSObject
+@property(nonatomic) CFTimeInterval firstTick;
+@property(nonatomic) NSUInteger ticks;
+- (void)recordTick:(CADisplayLink *)link;
+@end
+
+@implementation DmDisplaySample
+- (void)recordTick:(CADisplayLink *)link {
+    if (!self.ticks) self.firstTick = link.timestamp;
+    CFTimeInterval elapsed = link.timestamp - self.firstTick;
+    if (elapsed >= 1.5) {
+        LOG("front end: TV display link measured %.1f Hz over %.2f s", self.ticks / elapsed, elapsed);
+        [link invalidate];
+        return;
+    }
+    self.ticks++;
+}
+@end
+
+static void tv_sample_refresh(UIWindowScene *scene) {
+    DmDisplaySample *sample = [DmDisplaySample new];
+    CADisplayLink *link = [scene displayLinkWithTarget:sample selector:@selector(recordTick:)];
+    if (!link) return;
+    [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [link invalidate]; });
+}
+
 static void mode_transition(void (^change)(void)) {
     UIWindow *ipad = g_root.view.window, *a = mode_still(ipad.windowScene, ipad);
     UIWindowScene *tvs = g_tv_scene; UIWindow *b = mode_still(tvs, g_tv);   // still the screen before the change (black while its window is hidden)
@@ -1226,6 +1266,7 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     LOG("front end: TV connected (%.0fx%.0f points, scale %.1f, screen reports up to %ld Hz)",
         sz.width, sz.height, screen.nativeScale, (long)screen.maximumFramesPerSecond);
     mode_transition(^{ [g_root placeStage]; });   // the TV's window now: the picker, the launcher or the game's picture moves there
+    tv_sample_refresh(g_tv_scene);
     home_menu_relayout();  // a menu already up moves to the TV
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the picker's Back to the TV, the panel
 }
@@ -1445,11 +1486,19 @@ static void output_video_set(BOOL ipad) {   // the picture moves at once, the me
 }
 // Handheld or console play while a TV is connected: the picture and the sound go together (the sound output can still be changed on its own after)
 static void play_mode_set(BOOL handheld) {
-    if (g_pregame_moving) return;
     // A console-mode save rename uses the iPad's input alert. Finish it before moving the launcher.
     if (handheld && !g_root.game && [g_root.presentedViewController isKindOfClass:UIAlertController.class]) return;
-    output_audio_set(handheld);
+    if (g_mode_fades) {
+        g_pending_mode = handheld == video_pref_ipad() ? -1 : handheld;
+        return;
+    }
+    if (g_pregame_moving) return;
     output_video_set(handheld);
+    output_audio_set(handheld);
+}
+static void play_mode_toggle(void) {
+    BOOL target = g_pending_mode < 0 ? video_pref_ipad() : g_pending_mode == 1;
+    play_mode_set(!target);
 }
 static void output_audio_set(BOOL ipad) {   // switches at once (a paused game's sound resumes on the new output) and stays the choice
     if (ipad == [NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]) return;
@@ -1477,11 +1526,11 @@ int front_ios_picker_outputs(void) {
 }
 
 void front_ios_picker_action(int action) {
-    if (!g_root || g_root.game || g_pregame_moving) return;
+    if (!g_root || g_root.game) return;
     if (action == 0) { volume_toggle_mute(); return; }
     if (action == 3) { fflush(stderr); exit(0); }
     if (!g_tv_scene) return;
-    if (action == 1) play_mode_set(!video_pref_ipad());
+    if (action == 1) play_mode_toggle();
     if (action == 2) output_audio_set(![NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]);
 }
 
@@ -1495,7 +1544,7 @@ static void home_menu_activate(int i) {
     else if ([act hasPrefix:@"slot:"]) slot_activate([[act substringFromIndex:5] intValue]);
     else if ([act isEqualToString:@"volume"]) volume_toggle_mute();
     else if ([act isEqualToString:@"audio"]) { output_audio_set(![NSUserDefaults.standardUserDefaults boolForKey:@"DMAudioOnIPad"]); menu_refresh(i); }
-    else if ([act isEqualToString:@"video"]) { play_mode_set(!video_pref_ipad()); menu_refresh(i); }
+    else if ([act isEqualToString:@"video"]) { play_mode_toggle(); menu_refresh(i); }
     else { g_menu_closing = 1; home_menu_quit([act isEqualToString:@"change"]); }
 }
 static NSTimer *g_volume_hold;

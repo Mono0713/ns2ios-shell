@@ -14,7 +14,8 @@
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px -apple-system,system-ui,sans-serif; overflow:hidden; touch-action:none; overscroll-behavior:none; }
   #pad { position:fixed; inset:0; container-type:size; }
   body:not(.designer) #pad:not(.fitted) {
-    inset:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    --safe-x:max(env(safe-area-inset-left), env(safe-area-inset-right));
+    inset:env(safe-area-inset-top) var(--safe-x) env(safe-area-inset-bottom);
   }
   .piece { position:absolute; inset:0; pointer-events:none; }
   .piece > * { pointer-events:auto; }
@@ -82,9 +83,13 @@
   .joyright-only, #designer { display:none; }
   body.joyright :is([data-k="ls"], [data-k="dpad"], [data-k="l"], [data-k="zl"], [data-k="minus"], [data-k="abxy"], #face) { display:none; }
   body.joyright .joyright-only { display:block; }
-  body.joyright #top, body.editing #bar { max-width:calc(100% - 12px); flex-wrap:wrap; justify-content:center; }
-  body.joyright #top { width:max-content; box-sizing:border-box; }
-  :where(body.joyright) #top .tb { padding:7px 8px; }
+  #top, body.editing #bar { max-width:calc(100% - 12px); justify-content:center; }
+  body.joyright #top { width:min(calc(100% - 12px), 550px); }
+  body.joyright #top .tb { min-height:44px; flex:1; padding:5px 4px; }
+  body.joyright #top .tb[data-compact] { font-size:0; }
+  body.joyright #top .tb[data-compact]::after { content:attr(data-compact); font-size:13px; }
+  body.joyright #top :is(#home, #fs) { flex:0 0 42px; font-size:18px; }
+  body.joyright #status { gap:5px; padding:0 2px; }
   @media (max-width:390px), (orientation:landscape) and (max-width:700px) {
     #top { gap:4px; padding:3px; }
     #top .tb { font-size:12px; padding:7px 5px; }
@@ -94,6 +99,7 @@
     #player { min-width:36px; padding-inline:6px; }
   }
   #pad { --joy-button:clamp(28px, 14cqw, 64px); }
+  body.joyright #pad:not(.fitted) { top:max(66px, calc(env(safe-area-inset-top) + 66px)); }
   body.joyright #rs { top:23cqh; left:calc(50% - min(11cqh, 26cqw)); right:auto !important; bottom:auto !important; width:min(22cqh, 52cqw) !important; height:min(22cqh, 52cqw) !important; }
   .joy-face .b { width:var(--joy-button); height:var(--joy-button); }
   .joy-face [data-bit="2"] { left:calc(50% - var(--joy-button) / 2); top:47cqh; }
@@ -180,9 +186,6 @@
   <span data-t="drag">Drag to move, pinch to resize</span>
   <button class="tb" id="smaller" aria-label="Smaller">−</button><span data-t="size">Size</span><button class="tb" id="bigger" aria-label="Bigger">+</button>
   <button class="tb" id="reset" data-t="reset">Reset</button>
-  <button class="tb" id="import" data-t="bring">Import</button>
-  <button class="tb" id="export" data-t="export">Export</button>
-  <input id="preset-file" type="file" accept=".json,application/json" hidden>
   <button class="tb on" id="done" data-t="done">Done</button>
 </div>
 <div id="toast"></div>
@@ -201,8 +204,7 @@
                    kicked: '這支手機已在 iPad 上被移除', rejoin: '重新加入', replaced: '這支手機的手把在另一個頁面（或瀏覽器）使用中', useHere: '改用這個頁面',
                    ios: 'iPhone 沒辦法讓網頁全螢幕：按 Safari 的「分享」→「加入主畫面」，再從主畫面打開，就不會有網址列。',
                    joyright: '右 Joy-Con', pro: '一般手把', designer: 'SwitchPad 手把版面編輯器',
-                   unlock: '鎖定方向', locked: '解除方向鎖', bring: '匯入', export: '匯出', badPreset: '無法讀取這份版面預設',
-                   imported: '已套用版面預設', lockedHelp: '已鎖定目前的手把方向',
+                   unlock: '鎖定方向', locked: '解除方向鎖', lockUnavailable: '可用手機的系統方向鎖', lockedHelp: '已鎖定目前的手把方向',
                    motion: '體感', mOff: '體感 關', mGyro: '體感 陀螺儀', mTilt: '體感 方向盤',
                    tGyro: '陀螺儀：手機的轉動會傳給遊戲（支援體感的遊戲用得到）', tTilt: '方向盤：左右傾斜手機就是左搖桿，適合賽車', tOff: '體感已關閉',
                    goSecure: '手機只在安全連線（HTTPS）下才給網頁陀螺儀', goNote: '接著會出現「此連線不是私人連線」：點「顯示詳細資訊」→「瀏覽此網站」（Android：「進階」→「繼續前往」）。這是 iPad 自己的憑證，只要信任一次。', goOk: '前往',
@@ -213,8 +215,7 @@
                    kicked: 'This phone was removed on the iPad', rejoin: 'Join again', replaced: 'This phone\'s controller is in use on another page (or browser)', useHere: 'Use this page',
                    ios: 'iPhone cannot show a web page full screen: tap Share, then Add to Home Screen in Safari, and open it from the Home Screen for no address bar.',
                    joyright: 'Right Joy-Con', pro: 'Standard pad', designer: 'SwitchPad layout editor',
-                   unlock: 'Lock orientation', locked: 'Unlock orientation', bring: 'Import', export: 'Export', badPreset: 'Could not read this layout preset',
-                   imported: 'Layout preset applied', lockedHelp: 'Controller orientation locked',
+                   unlock: 'Lock orientation', locked: 'Unlock orientation', lockUnavailable: 'Use your phone’s rotation lock', lockedHelp: 'Controller orientation locked',
                    motion: 'Motion', mOff: 'Motion off', mGyro: 'Motion: gyro', mTilt: 'Motion: wheel',
                    tGyro: 'Gyro: the phone\'s turning goes to the game (for games with motion controls)', tTilt: 'Wheel: tilt the phone left and right as the left stick, for racing', tOff: 'Motion is off',
                    goSecure: 'Phones give a page their gyroscope only over a secure connection (HTTPS)', goNote: 'A "connection is not private" warning comes next: tap Show Details, then visit this website (Android: Advanced, then Proceed). It is the iPad\'s own certificate: trust it once.', goOk: 'Go',
@@ -240,11 +241,9 @@
   function readStorage(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
   function writeStorage(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
   const automaticMode = () => portrait.matches ? 'joyright' : 'pro';
-  const savedLock = params.get('lock') || readStorage('padOrientation');
-  let lockedMode = ['joyright', 'pro'].includes(savedLock) ? savedLock : null;
-  let controllerMode = designer ? 'joyright' : lockedMode || automaticMode();
-  let viewportMode = automaticMode();
-  let lockedAspect = null;
+  // A URL or a saved layout cannot lock the browser. The viewport always selects its matching controller.
+  let screenLocked = false, locking = false;
+  let controllerMode = designer ? 'joyright' : automaticMode();
   document.body.classList.toggle('designer', designer);
   try { id = params.get('id') || localStorage.getItem('padId'); if (params.get('id')) localStorage.setItem('padId', id); } catch (e) {}
   if (!id) {
@@ -422,7 +421,6 @@
     if (!window.isSecureContext) {   // over http: to https, with the device id and the mode
       motionMode = 'off'; motionLabel();
       const query = new URLSearchParams({ id, motion: m });
-      if (lockedMode) query.set("lock", lockedMode);
       ask(T.goSecure, T.goNote, T.goOk, () => { location.href = 'https://' + location.host + '/?' + query; });
       return;
     }
@@ -496,17 +494,15 @@
     triedFull = true;
     if (!canFull) { if (!standalone) toast(T.ios); return; }
     if (document.fullscreenElement) return;
-    document.documentElement.requestFullscreen({ navigationUI: 'hide' })
-      .then(applyScreenLock).catch(() => {});
-  }
-  function applyScreenLock() {
-    if (!lockedMode || !screen.orientation?.lock) return;
-    const type = screen.orientation.type;
-    const aspect = lockedMode === 'joyright' ? 'portrait' : 'landscape';
-    return screen.orientation.lock(type?.startsWith(aspect) ? type : aspect).catch(() => {});
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
   }
   if (standalone) $('#fs').style.display = 'none';
-  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && triedFull) note('left full screen'); });
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) return;
+    screenLocked = false;
+    showOrientationLock();
+    if (triedFull) note('left full screen');
+  });
   $('#fs').addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else goFull(); });
 
   // ---- Button layout: where A, B, X and Y sit (each button keeps its own letter and sends that button) ----
@@ -532,8 +528,8 @@
   const layoutKinds = ['pro', 'joyright'];
   const defaultLayouts = {
     pro: {
-      ls: { x: 0.031, y: 0.13, s: 1 },
-      abxy: { x: -0.020, y: 0.105, s: 1 },
+      ls: { x: 0, y: 0.13, s: 1 },
+      abxy: { x: 0, y: 0.105, s: 1 },
       rs: { x: -0.002, y: -0.115, s: 1 }
     },
     joyright: {
@@ -569,6 +565,11 @@
   const legacyPro = designer ? {} : cleanLayout(parseJSON(readStorage('padLayout')));
   let layouts = presetLayouts(parseJSON(readStorage(localKey))) ||
     { pro: Object.keys(legacyPro).length ? legacyPro : cleanLayout(defaultLayouts.pro), joyright: cleanLayout(defaultLayouts.joyright) };
+  // Recenter untouched defaults saved by earlier builds. Keep each piece the player moved or resized.
+  for (const [key, oldX] of [['ls', 0.031], ['abxy', -0.020]]) {
+    const saved = layouts.pro[key], position = defaultLayouts.pro[key];
+    if (saved?.x === oldX && saved.y === position.y && saved.s === position.s) saved.x = position.x;
+  }
   let editing = false, sel = null, drag = null, pinch = null;
   const editTouches = new Map();
   const current = () => layouts[controllerMode];
@@ -596,9 +597,8 @@
     p.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
   }
   function applyLayout() {
-    const fitted = designer || controllerMode !== automaticMode();
-    pad.classList.toggle('fitted', fitted);
-    pad.style.setProperty('--aspect', String(lockedAspect || (controllerMode === 'joyright' ? 9 / 20 : 20 / 9)));
+    pad.classList.toggle('fitted', designer);
+    if (designer) pad.style.setProperty('--aspect', String(controllerMode === 'joyright' ? 9 / 20 : 20 / 9));
     pieces.forEach(applyPiece);
   }
   function saveLayout() { writeStorage(localKey, JSON.stringify(preset())); }
@@ -632,23 +632,6 @@
   $('#reset').addEventListener('click', () => { layouts[controllerMode] = cleanLayout(defaultLayouts[controllerMode]); applyLayout(); saveLayout(); });
   $('#smaller').addEventListener('click', () => scaleSel(1 / 1.1));
   $('#bigger').addEventListener('click', () => scaleSel(1.1));
-  $('#import').addEventListener('click', () => $('#preset-file').click());
-  $('#preset-file').addEventListener('change', async e => {
-    const file = e.target.files[0]; e.target.value = '';
-    if (!file) return;
-    try {
-      const next = file.size <= 65536 && presetLayouts(parseJSON(await file.text()));
-      if (!next) throw new Error();
-      layouts = next; applyLayout(); saveLayout(); toast(T.imported);
-    } catch (error) { toast(T.badPreset); }
-  });
-  $('#export').addEventListener('click', () => {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(preset(), null, 2) + '\n'], { type: 'application/json' }));
-    const download = document.createElement('a');
-    download.href = url; download.download = 'SwitchPad-layout.json';
-    document.body.append(download); download.click(); download.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
   pad.addEventListener('pointerdown', e => {
     if (!editing || e.pointerType === 'touch' || !startDrag(e.pointerId, e.clientX, e.clientY)) return;
     e.preventDefault(); pad.setPointerCapture(e.pointerId);
@@ -808,14 +791,17 @@
     lock(); document.addEventListener('visibilitychange', () => { if (!document.hidden) lock(); });
   }
 
+  function showOrientationLock() {
+    const orientation = $('#orientation');
+    orientation.textContent = screenLocked ? T.locked : T.unlock;
+    orientation.setAttribute('aria-label', orientation.textContent);
+    orientation.dataset.compact = screenLocked ? (zh ? '解鎖' : 'Unlock') : (zh ? '鎖定' : 'Lock');
+    orientation.setAttribute('aria-pressed', String(screenLocked));
+  }
   function showControllerMode() {
     const single = controllerMode === 'joyright';
     document.body.classList.toggle('joyright', single);
-    const orientation = $('#orientation');
-    orientation.textContent = lockedMode ? T.locked : T.unlock;
-    orientation.setAttribute('aria-label', orientation.textContent);
-    orientation.dataset.compact = lockedMode ? (zh ? '解鎖' : 'Unlock') : (zh ? '鎖定' : 'Lock');
-    orientation.setAttribute('aria-pressed', String(!!lockedMode));
+    showOrientationLock();
     $('#design-joy').classList.toggle('on', single);
     $('#design-pro').classList.toggle('on', !single);
     $('#design-joy').setAttribute('aria-pressed', String(single));
@@ -833,35 +819,42 @@
     if (!designer && up()) put(JSON.stringify({ t: 'padtype', mode }));
   }
   function syncOrientation() {
-    const nextViewport = automaticMode();
-    if (!designer && nextViewport !== viewportMode) {
-      viewportMode = nextViewport;
-      if (editing || lockedMode) { clearEditInput(); release(); send(); }
-    }
-    if (designer || editing) { applyLayout(); return; }
-    changeControllerMode(lockedMode || nextViewport);
+    if (designer) applyLayout();
+    else changeControllerMode(automaticMode());
   }
-  $('#orientation').addEventListener('click', () => {
-    if (lockedMode) {
-      lockedMode = null; lockedAspect = null;
-      if (params.has('lock')) {
-        params.delete('lock');
-        history.replaceState(null, '', location.pathname + (params.size ? '?' + params : ''));
-      }
-      try { screen.orientation?.unlock?.(); } catch (e) {}
-    } else {
-      lockedMode = controllerMode;
-      lockedAspect = pad.clientWidth / pad.clientHeight;
-      applyScreenLock();
-      toast(T.lockedHelp);
+  $('#orientation').addEventListener('click', async () => {
+    if (locking) return;
+    if (screenLocked) {
+      screen.orientation.unlock();
+      screenLocked = false;
+      showOrientationLock();
+      return;
     }
-    writeStorage('padOrientation', lockedMode || '');
-    showControllerMode(); syncOrientation();
+    if (!screen.orientation?.lock) { toast(T.lockUnavailable); return; }
+    locking = true;
+    const aspect = controllerMode === 'joyright' ? 'portrait' : 'landscape';
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      }
+      const type = screen.orientation.type;
+      await screen.orientation.lock(type?.startsWith(aspect) ? type : aspect);
+      screenLocked = true;
+      toast(T.lockedHelp);
+    } catch (error) { toast(T.lockUnavailable); }
+    finally { locking = false; showOrientationLock(); }
   });
   $('#design-joy').addEventListener('click', () => changeControllerMode('joyright'));
   $('#design-pro').addEventListener('click', () => changeControllerMode('pro'));
-  addEventListener('resize', syncOrientation);
-  portrait.addEventListener?.('change', syncOrientation);
+  let resizeFrame = 0;
+  function queueResize() {
+    if (!resizeFrame) resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      syncOrientation();
+    });
+  }
+  addEventListener('resize', queueResize);
+  portrait.addEventListener?.('change', queueResize);
   showControllerMode();
   if (designer) {
     document.title = T.designer;
