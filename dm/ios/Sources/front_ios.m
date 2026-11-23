@@ -118,10 +118,13 @@ static UIWindow *root_window(void);   // the iPad's window (defined with g_root 
 static int volume_step_percent(BOOL device) {
     return device ? DEVICE_VOLUME_STEP_PERCENT : APP_VOLUME_STEP_PERCENT;
 }
+static float volume_quantized(float v, BOOL device) {
+    int step = volume_step_percent(device);
+    return roundf(MAX(0.f, MIN(1.f, v)) * 100.f / step) * step / 100.f;
+}
 static void volume_set(float v) {
     BOOL device = volume_is_device();
-    int step = volume_step_percent(device);
-    v = roundf(MAX(0.f, MIN(1.f, v)) * 100.f / step) * step / 100.f;
+    v = volume_quantized(v, device);
     BOOL was_muted = g_volume_muted;
     if (v > 0) g_volume_muted = NO;
     if (!device) { [NSUserDefaults.standardUserDefaults setFloat:v forKey:@"DMVolume"]; app_gain_apply(); }
@@ -180,7 +183,7 @@ static void volume_toggle_mute(void) {
     CGPoint point = [touch locationInView:self];
     CGFloat span = CGRectGetMidX(high) - CGRectGetMidX(low);
     if (!CGRectContainsPoint(CGRectInset(thumb, -5, -5), point) && fabs(span) > 0.1) {
-        self.value = volume_quantized((point.x - CGRectGetMidX(low)) / span);
+        self.value = volume_quantized((point.x - CGRectGetMidX(low)) / span, volume_is_device());
         [self sendActionsForControlEvents:UIControlEventValueChanged];
     }
     return [super beginTrackingWithTouch:touch withEvent:event];
@@ -196,7 +199,7 @@ static DmVolumeSlider *volume_slider(BOOL z) {
         (void)action;
         DmVolumeSlider *control = weakSlider;
         if (!control) return;
-        float value = volume_quantized(control.value);
+        float value = volume_quantized(control.value, volume_is_device());
         if (fabsf(value - volume_pref()) > 0.001f) volume_set(value);
     }] forControlEvents:UIControlEventValueChanged];
     return slider;
@@ -498,7 +501,7 @@ static void mode_fade(UIWindow *w) {
 
 static void tv_sample_refresh(UIWindowScene *scene) {
     DmDisplaySample *sample = [DmDisplaySample new];
-    CADisplayLink *link = [scene displayLinkWithTarget:sample selector:@selector(recordTick:)];
+    CADisplayLink *link = [scene.screen displayLinkWithTarget:sample selector:@selector(recordTick:)];
     if (!link) return;
     [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [link invalidate]; });
