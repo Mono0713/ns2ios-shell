@@ -62,6 +62,7 @@ static void home_input(int p, BOOL shortcut) {   // any thread
     });
 }
 static void home_press(int p) { home_input(p, NO); }
+int front_ios_game_started(void);
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
     // − and + pressed together: Home, for a controller with no Home button the app gets (and a phone, besides its page's own button)
@@ -79,7 +80,7 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     if (ly > t) buttons |= 1ull << B_UP;
     if (ly < -t) buttons |= 1ull << B_DOWN;
     uint64_t old = atomic_exchange(&g_last_nav[p], buttons), pressed = buttons & ~old, released = old & ~buttons;
-    if ((buttons & pm) == pm) {
+    if ((buttons & pm) == pm && front_ios_game_started()) {
         if ((old & pm) != pm) home_input(p, YES);
         pressed &= ~pm;
     }

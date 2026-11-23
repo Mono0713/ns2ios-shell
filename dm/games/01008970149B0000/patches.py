@@ -1,6 +1,12 @@
 # Rabbids Party of Legends (01008970149B0000): the rewriter's patches of this game's own builds. dm/tools/patch_nso.py loads every profile's patches.py and applies those of a module's NSO build ID;
 # CUTS, OBS and FRAME_STEP as described there ("Registered patches"). The game packs from a provisional profile (switchpad/make_provisional.py keeps this file)
 OBS = {
+  # main (1.0.1): the original game opens AudioOut just before the source is found overwritten.
+  # The 1728 iPad trace showed that this destination, the client's PCM buffer and the overwritten source are disjoint.
+  # The same source was corrupted without reaching the destructor or stop gates. The writer remains open.
+  '7c0876057ee29df336f7e12b3099f738': [
+    (0x162b8c0, 22, '52977008', 'AudioOut setup: x20 is the destination object; orig mov w8, #0xbb80'),
+  ],
   # subsdk1 (the SDK's movie library, 1.0.0 v65536): the intro movie (VP9 + Vorbis) crashed on the audio read thread at subsdk1+0x2e9e2c, in NuMediaExtractor::fetchTrackSamples,
   # reading a track's source that held 3, 3, 0, 2 instead of an object (main+0x4091100; iPad logs 2026-11-21, at 1 GB and at 3.2 GB alike, so not memory). Diagnostic gates
   # (OBS_TRACE, hle_sdk16.c) show both sources registered with MatroskaSource's vtable, then one overwritten before the invalid call.

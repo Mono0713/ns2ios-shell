@@ -28,6 +28,8 @@ On the Mac (headless, docked): from a fresh save the opening movie with sound, t
 - One `SetRenderEnableConditional` (drawn unconditionally), one `stage 0 cb7 has no uniform buffer bound` and one `sampler ID 4095 not registered`, at boot.
 - Run headless while someone works at the Mac: in a covered window the display link stalled for a second at a time and screenshots were not taken.
 
+- **Current on iPad:** character models deform in the player setup and Party Plaza. The two previously missing instance-generation vertex libraries are now present in the linked package, and neither reports a load error. The latest iPad run builds its pipelines through MTLDevice. The 1728 candidate supplied DM_PSO_MTL4=1 in env.txt, but the launcher setting still had a default of 0 and set it again at launch. The on-device switch then enabled Metal 4: the log confirmed specialized pipelines and a rendered frame. The player reported the same deformation, so keep the original pipeline default. The transform source or submission producing the bad model is still open.
+
 ## Movies
 
 - The opening movie (`movie/flow/op/movie/bq_op.mp4`, H.264 1080p) and the mode previews in the island map are native-texture movies (output 3, mode 2). The opening movie is unskippable on the first start; later −/+ skips it.

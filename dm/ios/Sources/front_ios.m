@@ -13,6 +13,7 @@
 #import <MediaPlayer/MediaPlayer.h>
 #import <objc/runtime.h>
 #import <Network/Network.h>
+#include <stdatomic.h>
 #include <errno.h>
 #include <math.h>
 #include <string.h>
@@ -100,9 +101,13 @@ static BOOL volume_is_device(void) {
     return YES;
 }
 static float app_gain_pref(void) { NSNumber *v = [NSUserDefaults.standardUserDefaults objectForKey:@"DMVolume"]; return v ? MAX(0.f, MIN(1.f, v.floatValue)) : 1.f; }
-static void app_gain_apply(void) { dm_audio_master(volume_is_device() ? 1.f : app_gain_pref()); }   // on the device's volume the app adds nothing of its own
+static BOOL g_volume_muted;
+static void app_gain_apply(void) {
+    dm_audio_master(g_volume_muted ? 0.f : (volume_is_device() ? 1.f : app_gain_pref()));
+}
 static float g_sysvol_set = -1;   // the level last asked of the system, until it reports it (the slider's change arrives a moment later)
 static float volume_pref(void) {
+    if (g_volume_muted) return 0.f;
     if (!volume_is_device()) return app_gain_pref();
     return g_sysvol_set >= 0 ? g_sysvol_set : AVAudioSession.sharedInstance.outputVolume;
 }
@@ -113,6 +118,8 @@ static float volume_quantized(float v) {
 }
 static void volume_set(float v) {
     v = volume_quantized(v);
+    BOOL was_muted = g_volume_muted;
+    if (v > 0) g_volume_muted = NO;
     if (!volume_is_device()) { [NSUserDefaults.standardUserDefaults setFloat:v forKey:@"DMVolume"]; app_gain_apply(); }
     else {
         UIWindow *w = root_window();
@@ -132,6 +139,7 @@ static void volume_set(float v) {
             g_sysvol_set = -1; [g_volview removeFromSuperview]; g_volview = nil;   // the volume buttons show the system's indicator again
             [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
         });
+        if (was_muted != g_volume_muted) app_gain_apply();
     }
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the menu and the TV panel redraw what they show
 }
@@ -147,12 +155,12 @@ static BOOL volume_adjust(int dir) {
     return next > 0.f && next < 1.f;
 }
 static void volume_toggle_mute(void) {
-    static float last_audible[] = { 1.f, 0.5f };   // app gain and iPad volume have independent restore levels
-    float *restore = &last_audible[volume_is_device() ? 1 : 0];
-    float current = volume_quantized(volume_pref());
-    if (current > 0.f) *restore = current;
-    volume_set(current > 0.f ? 0.f : *restore);
+    // Keep the mute state in the game's mixer so a system slider update or a new route cannot unmute it.
+    g_volume_muted = !g_volume_muted;
+    app_gain_apply();
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];
 }
+
 @interface DmVolumeSlider : UISlider
 @end
 @implementation DmVolumeSlider
@@ -336,7 +344,14 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
     LOG("front end: the screen before the game moves to the %s", [to isKindOfClass:DmTvRootVC.class] ? "TV" : "iPad");
     UIWindow *keep = from.view.window;
     g_pregame_moving++;
-    [from dismissViewControllerAnimated:NO completion:^{ (void)keep; [to presentViewController:p animated:NO completion:^{ g_pregame_moving--; }]; }];
+    [from dismissViewControllerAnimated:NO completion:^{
+        (void)keep;
+        [to presentViewController:p animated:NO completion:^{
+            [to.view layoutIfNeeded];
+            [p.view layoutIfNeeded];
+            g_pregame_moving--;
+        }];
+    }];
 }
 
 @interface DmGameView : UIView
@@ -381,6 +396,7 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
 - (void)placeStage;
 @end
 static DmRootVC *g_root;
+static atomic_bool g_guest_started;
 static UIWindow *root_window(void) { return g_root.view.window; }
 // Handheld <-> console: each screen keeps a still of what it showed, in a window of its own above everything (the picker and the launcher are presented
 // again a moment later by pregame_move, which would land over a still inside the same window), while the change happens under it; the still then fades
@@ -420,29 +436,31 @@ void front_ios_picker_cover_end(void) {
 }
 static void mode_fade(UIWindow *w) {
     if (!w) return;
-    static NSMutableArray *alive; if (!alive) alive = [NSMutableArray array]; [alive addObject:w];
-    UIView *still = [w.rootViewController.view viewWithTag:1], *black = [w.rootViewController.view viewWithTag:2];
-    // a dip through black, as a console changes screens: the old screen sinks back and fades into black (while pregame_move presents the new one under it,
-    // hidden), then the black lifts off the new screen. No moment shows both screens over each other
-    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ still.alpha = 0; still.transform = CGAffineTransformMakeScale(0.97, 0.97); } completion:nil];
-    // the black lifts once the screen is presented again and has drawn its first frame (a 4K TV's picker takes a moment), not on a fixed clock that
-    // lifted it over a screen still building (the hitch in art48)
-    // The moved screen also lays itself out again for its new window (the ten-foot canvas, the status line) over a few frames; lifting the black on
-    // its first frame showed that settling as a shake (art49), so the black stays until the move has been done for a short while
-    CFTimeInterval t0 = CACurrentMediaTime(); __block CFTimeInterval done = 0;
-    __block void (^lift)(void);
-    lift = ^{
-        CFTimeInterval now = CACurrentMediaTime();
-        if (g_pregame_moving) done = 0; else if (!done) done = now;
-        if ((!done || now - done < 0.35 || now - t0 < 0.22) && now - t0 < 1.6) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC), dispatch_get_main_queue(), lift); return;
+    static NSMutableArray *alive; if (!alive) alive = [NSMutableArray array];
+    [alive addObject:w];
+    CFTimeInterval start = CACurrentMediaTime();
+    __block void (^reveal)(void);
+    reveal = ^{
+        if (g_pregame_moving && CACurrentMediaTime() - start < 1.6) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC), dispatch_get_main_queue(), reveal);
+            return;
         }
-        [CATransaction setCompletionBlock:^{   // after the frame now being committed (the new screen's first)
-            [UIView animateWithDuration:0.3 delay:0.03 options:UIViewAnimationOptionCurveEaseOut animations:^{ black.alpha = 0; }
-                             completion:^(BOOL f) { (void)f; w.hidden = YES; [alive removeObject:w]; lift = nil; }];
+        reveal = nil;
+        // Keep the outgoing frame visible until the new scene has committed its own layout.
+        [CATransaction begin];
+        [g_root.view layoutIfNeeded];
+        [g_tv.rootViewController.view layoutIfNeeded];
+        [CATransaction setCompletionBlock:^{
+            [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.24 delay:0
+                                options:UIViewAnimationOptionCurveEaseInOut
+                             animations:^{ w.alpha = 0; }
+                             completion:^(BOOL finished) {
+                (void)finished; w.hidden = YES; [alive removeObject:w];
+            }];
         }];
+        [CATransaction commit];
     };
-    dispatch_async(dispatch_get_main_queue(), lift);
+    dispatch_async(dispatch_get_main_queue(), reveal);
 }
 static void mode_transition(void (^change)(void)) {
     UIWindow *ipad = g_root.view.window, *a = mode_still(ipad.windowScene, ipad);
@@ -467,15 +485,6 @@ void front_ios_back_to_picker(void) {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
     front_ios_power_watch();
-    // Before the game, with a TV connected, player 1's Home (a controller's Home button, − and + together, a phone's ⌂) switches between console and
-    // handheld mode: the TV shows the same screen in both, so a controller can always bring the picture back. In the game Home opens the menu (home_menu_watch)
-    [NSNotificationCenter.defaultCenter addObserverForName:@"DMHomePressed" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
-        if (g_root.game || !g_tv_scene || g_pregame_moving || [n.userInfo[@"p"] intValue] != 1) return;
-        if (front_ios_pick_needed() && [n.userInfo[@"shortcut"] boolValue]) return;
-        static CFTimeInterval last; CFTimeInterval now = CACurrentMediaTime(); if (now - last < 1.0) return; last = now;   // one switch per press, not a second during the dip
-        LOG("front end: Home before the game: %s mode", video_pref_ipad() ? "console" : "handheld");
-        play_mode_set(!video_pref_ipad());
-    }];
     if (front_ios_pick_needed()) return;   // the game picker first (viewDidAppear); afterPick does the rest
     if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
@@ -496,6 +505,7 @@ void front_ios_back_to_picker(void) {
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
     self.stage = [[UIView alloc] initWithFrame:self.view.bounds]; self.stage.backgroundColor = UIColor.blackColor;
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
+    atomic_store(&g_guest_started, true);
     [self.stage addSubview:self.game]; [self.view addSubview:self.stage];
     g_layer = (CAMetalLayer *)self.game.layer;
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
@@ -538,6 +548,7 @@ void front_ios_back_to_picker(void) {
 static void output_video_set(BOOL ipad);
 // Before the game in handheld play with a TV connected: the controller the picker and the launcher present their TV copy on (the same screen as the iPad, fitted
 // to the TV, its selection following the iPad's), nil otherwise; asked again on each DMShellChanged
+int front_ios_game_started(void) { return atomic_load(&g_guest_started); }
 void *front_ios_tv_mirror_host(void) { return g_tv && video_pref_ipad() && g_root && !g_root.game ? (__bridge void *)g_tv.rootViewController : NULL; }
 int front_ios_tv_waiting(void) { return g_tv_scene && video_pref_ipad() && g_root && !g_root.game; }
 void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ LOG("front end: Back to the TV tapped"); play_mode_set(NO); }); }
@@ -554,7 +565,11 @@ void front_ios_back_to_tv(void) { dispatch_async(dispatch_get_main_queue(), ^{ L
             if (dest == self.view) [self.view insertSubview:self.stage atIndex:0]; else [dest insertSubview:self.stage atIndex:0];
             [self layoutStage]; [self.game setNeedsLayout];
             for (UIView *v in @[g_loading ?: NSNull.null, g_prog ?: NSNull.null, g_menu ?: NSNull.null])   // what covers the picture goes with it
-                if ([v isKindOfClass:UIView.class]) { [v removeFromSuperview]; v.frame = overlay_root().bounds; [overlay_root() addSubview:v]; }
+                if ([v isKindOfClass:UIView.class]) {
+                    UIView *root = overlay_root();
+                    [v removeFromSuperview]; v.frame = root.bounds; [root addSubview:v];
+                    [v setNeedsLayout]; [v layoutIfNeeded];
+                }
         }
     } else if (g_tv && self.launched) {   // before the game: the picker or the launcher follows the picture
         if (tv_on()) pregame_move(self, g_tv.rootViewController); else pregame_move(g_tv.rootViewController, self);
@@ -684,9 +699,8 @@ static UIView *tv_panel(CGRect frame) {
     __weak UISlider *wvol = vol;
     UILabel *vl = panel_label(20, UIFontWeightSemibold, 0.85); vl.textAlignment = NSTextAlignmentRight;
     UILabel *vidl = panel_label(18, UIFontWeightSemibold, 0.65); vidl.text = z ? @"模式" : @"Mode";
-    // the switch slides first, then the screens change (their dip through black would otherwise cut the slide short)
     UISegmentedControl *vid = panel_segments(z ? @[@"主機模式", @"掌機模式"] : @[@"Console", @"Handheld"], ^(NSInteger i) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 280 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ play_mode_set(i == 1); });
+        play_mode_set(i == 1);
     });
     UILabel *audl = panel_label(18, UIFontWeightSemibold, 0.65); audl.text = z ? @"聲音輸出" : @"Sound";
     UISegmentedControl *aud = panel_segments(z ? @[@"電視", @"iPad 喇叭"] : @[@"TV", @"iPad speaker"], ^(NSInteger i) {
@@ -930,26 +944,58 @@ static UILabel *front_ios_fps_label(void) {
 
 // Loading screen from Play to the game's first frame (front.h front_first_frame): a spinner and a line over the black game view, which otherwise looked like a hang
 // for the seconds the game takes to boot. Traditional Chinese when the device prefers it, as the launcher (Launcher.swift)
+static DmLayoutView *loading_overlay(UIView *root, UIColor *background) {
+    DmLayoutView *view = [[DmLayoutView alloc] initWithFrame:root.bounds];
+    view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    view.backgroundColor = background;
+    view.userInteractionEnabled = NO;
+    return view;
+}
+
+static CGFloat loading_scale(UIView *view) {
+    CGSize size = view.bounds.size;
+    if (size.width <= 0 || size.height <= 0) return 1;
+    return MIN(ui_scale(view), MIN(size.width / 360, size.height / 145));
+}
+
 static UIView *loading_make(UIView *root) {
-    NSString *lang = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
-    BOOL zh = [lang hasPrefix:@"zh-hant"] || [lang hasPrefix:@"zh-tw"] || [lang hasPrefix:@"zh-hk"] || [lang hasPrefix:@"zh-mo"];
-    UIView *v = [[UIView alloc] initWithFrame:root.bounds]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    v.backgroundColor = UIColor.blackColor; v.userInteractionEnabled = NO;
-    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
-    spin.color = UIColor.whiteColor; spin.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds) - 14);
-    spin.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    [spin startAnimating];
-    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, CGRectGetMidY(root.bounds) + 24, root.bounds.size.width, 24)];
-    l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    l.textAlignment = NSTextAlignmentCenter; l.textColor = [UIColor colorWithWhite:0.72 alpha:1]; l.font = [UIFont systemFontOfSize:15];
-    l.text = zh ? @"遊戲載入中…" : @"Loading the game…"; l.tag = 1;
-    CGFloat k = ui_scale(root);   // bigger on a TV
-    if (k > 1) {
-        spin.transform = CGAffineTransformMakeScale(k, k); l.font = [UIFont systemFontOfSize:15 * k];
-        l.frame = CGRectMake(0, CGRectGetMidY(root.bounds) + 24 * k, root.bounds.size.width, 24 * k);
+    DmLayoutView *view = loading_overlay(root, UIColor.blackColor);
+    UIView *spinner = [UIView new];
+    CAShapeLayer *ring = [CAShapeLayer layer];
+    ring.strokeColor = UIColor.whiteColor.CGColor;
+    ring.fillColor = UIColor.clearColor.CGColor;
+    ring.lineCap = kCALineCapRound;
+    [spinner.layer addSublayer:ring];
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+        spin.toValue = @(2 * M_PI); spin.duration = 0.85; spin.repeatCount = HUGE_VALF;
+        [ring addAnimation:spin forKey:@"loading"];
     }
-    [v addSubview:spin]; [v addSubview:l]; [root addSubview:v];
-    return v;
+    UILabel *title = [UILabel new];
+    title.textAlignment = NSTextAlignmentCenter;
+    title.textColor = [UIColor colorWithWhite:0.72 alpha:1];
+    title.numberOfLines = 2;
+    title.text = zh_ui() ? @"遊戲載入中…" : @"Loading the game…";
+    title.tag = 1;
+    [view addSubview:spinner];
+    [view addSubview:title];
+    view.layout = ^(UIView *overlay) {
+        CGFloat k = loading_scale(overlay);
+        CGRect bounds = overlay.bounds;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        spinner.frame = CGRectMake(CGRectGetMidX(bounds) - 16 * k, CGRectGetMidY(bounds) - 33 * k, 32 * k, 32 * k);
+        ring.frame = spinner.bounds;
+        ring.lineWidth = 2.5 * k;
+        ring.contentsScale = overlay.window.screen.scale ?: 1;
+        ring.path = [UIBezierPath bezierPathWithArcCenter:CGPointMake(16 * k, 16 * k) radius:12 * k
+                                             startAngle:-M_PI_2 endAngle:1.05 * M_PI clockwise:YES].CGPath;
+        [CATransaction commit];
+        title.font = [UIFont systemFontOfSize:17 * k weight:UIFontWeightMedium];
+        title.frame = CGRectMake(18 * k, CGRectGetMidY(bounds) + 13 * k, CGRectGetWidth(bounds) - 36 * k, 46 * k);
+    };
+    [root addSubview:view];
+    return view;
 }
 static void loading_show(UIView *root) {
     if (g_loading || !root) return;
@@ -993,20 +1039,28 @@ void front_first_frame(void) {
     });
 }
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
-static UIView *prog_make(UIView *root) {   // the title (tag 1), the bar (2) and the count (3)
-    UIView *v = [[UIView alloc] initWithFrame:root.bounds]; v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    v.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.94];
-    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(floor((root.bounds.size.width - 320) / 2), floor((root.bounds.size.height - 96) / 2), 320, 96)];
-    box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 4, 320, 30)]; title.textAlignment = NSTextAlignmentCenter; title.textColor = UIColor.whiteColor; title.tag = 1;
-    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
-    UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault]; bar.frame = CGRectMake(20, 48, 280, 4); bar.tag = 2;
-    UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, 320, 22)]; count.textAlignment = NSTextAlignmentCenter; count.tag = 3;
-    count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
-    [box addSubview:title]; [box addSubview:bar]; [box addSubview:count]; [v addSubview:box];
-    CGFloat k = ui_scale(root); if (k > 1) box.transform = CGAffineTransformMakeScale(k, k);   // bigger on a TV
-    [root addSubview:v]; if (k > 1) crisp(box, k);
-    return v;
+static UIView *prog_make(UIView *root) {
+    DmLayoutView *view = loading_overlay(root, [UIColor colorWithWhite:0.06 alpha:0.94]);
+    UILabel *title = [UILabel new];
+    title.textAlignment = NSTextAlignmentCenter; title.textColor = UIColor.whiteColor;
+    title.numberOfLines = 2; title.tag = 1;
+    UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    bar.tag = 2;
+    UILabel *count = [UILabel new];
+    count.textAlignment = NSTextAlignmentCenter; count.tag = 3;
+    count.textColor = [UIColor colorWithWhite:0.72 alpha:1];
+    [view addSubview:title]; [view addSubview:bar]; [view addSubview:count];
+    view.layout = ^(UIView *overlay) {
+        CGFloat k = loading_scale(overlay);
+        CGFloat x = CGRectGetMidX(overlay.bounds), y = CGRectGetMidY(overlay.bounds);
+        title.font = [UIFont systemFontOfSize:20 * k weight:UIFontWeightSemibold];
+        count.font = [UIFont monospacedDigitSystemFontOfSize:14 * k weight:UIFontWeightRegular];
+        title.frame = CGRectMake(x - 166 * k, y - 52 * k, 332 * k, 46 * k);
+        bar.frame = CGRectMake(x - 140 * k, y + 3 * k, 280 * k, MAX(2, 4 * k));
+        count.frame = CGRectMake(x - 166 * k, y + 19 * k, 332 * k, 27 * k);
+    };
+    [root addSubview:view];
+    return view;
 }
 static void prog_copy(UIView *to, UIView *from) {   // the TV's copy shows what the iPad's shows
     if (!to || !from) return;
@@ -1019,8 +1073,11 @@ void front_progress(const char *title, long done, long total) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!tt) { [g_prog removeFromSuperview]; g_prog = nil; tv_copies_sync(); return; }
         if (!g_prog) { UIView *root = overlay_root(); if (!root) return; g_prog = prog_make(root); }
-        ((UILabel *)[g_prog viewWithTag:1]).text = tt; ((UIProgressView *)[g_prog viewWithTag:2]).progress = total > 0 ? (float)done / (float)total : 0;
-        ((UILabel *)[g_prog viewWithTag:3]).text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
+        BOOL zh = zh_ui();
+        NSString *heading = zh && [tt isEqualToString:@"Preparing pipelines"] ? @"正在準備圖形管線…" : tt;
+        ((UILabel *)[g_prog viewWithTag:1]).text = heading;
+        ((UIProgressView *)[g_prog viewWithTag:2]).progress = total > 0 ? (float)done / (float)total : 0;
+        ((UILabel *)[g_prog viewWithTag:3]).text = [NSString stringWithFormat:zh ? @"%@／%@" : @"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
                              [NSNumberFormatter localizedStringFromNumber:@(total) numberStyle:NSNumberFormatterDecimalStyle]];
         if (g_prog_tv) prog_copy(g_prog_tv, g_prog); else tv_copies_sync();
     });
@@ -1146,7 +1203,9 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     // Edge to edge: the default (scale) shrinks the picture inside the TV's frame for TVs that crop their edges, which left a black border on the ones that do not
     g_tv_scene.screen.overscanCompensation = UIScreenOverscanCompensationNone;
     CGSize sz = g_tv_scene.screen.bounds.size;
-    LOG("front end: TV connected (%.0fx%.0f points, scale %.1f)", sz.width, sz.height, g_tv_scene.screen.nativeScale);
+    UIScreen *screen = g_tv_scene.screen;
+    LOG("front end: TV connected (%.0fx%.0f points, scale %.1f, screen reports up to %ld Hz)",
+        sz.width, sz.height, screen.nativeScale, (long)screen.maximumFramesPerSecond);
     mode_transition(^{ [g_root placeStage]; });   // the TV's window now: the picker, the launcher or the game's picture moves there
     home_menu_relayout();  // a menu already up moves to the TV
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the picker's Back to the TV, the panel
@@ -1367,6 +1426,7 @@ static void output_video_set(BOOL ipad) {   // the picture moves at once, the me
 }
 // Handheld or console play while a TV is connected: the picture and the sound go together (the sound output can still be changed on its own after)
 static void play_mode_set(BOOL handheld) {
+    if (g_pregame_moving) return;
     // A console-mode save rename uses the iPad's input alert. Finish it before moving the launcher.
     if (handheld && !g_root.game && [g_root.presentedViewController isKindOfClass:UIAlertController.class]) return;
     output_audio_set(handheld);
@@ -1385,11 +1445,11 @@ float front_ios_picker_volume(void) {
 }
 
 void front_ios_picker_set_volume(float value) {
-    if (front_ios_pick_needed() && !g_root.game) volume_set(value);
+    if (g_root && !g_root.game) volume_set(value);
 }
 
 bool front_ios_picker_adjust_volume(int direction) {
-    return front_ios_pick_needed() && !g_root.game && volume_adjust(direction);
+    return g_root && !g_root.game && volume_adjust(direction);
 }
 
 int front_ios_picker_outputs(void) {
@@ -1398,7 +1458,7 @@ int front_ios_picker_outputs(void) {
 }
 
 void front_ios_picker_action(int action) {
-    if (!front_ios_pick_needed() || g_root.game || g_pregame_moving) return;
+    if (!g_root || g_root.game || g_pregame_moving) return;
     if (action == 0) { volume_toggle_mute(); return; }
     if (action == 3) { fflush(stderr); exit(0); }
     if (!g_tv_scene) return;

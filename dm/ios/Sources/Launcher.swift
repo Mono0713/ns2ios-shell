@@ -60,6 +60,9 @@ private let zhText: [String: String] = [
     "Frame buffering": "畫面緩衝", "Up to one frame more display latency.": "顯示延遲最多增加一幀。",
     "Metal 4 pipelines": "Metal 4 管線", "Keeps a pipeline archive; uses more memory.": "保留管線快取，會使用較多記憶體。",
     "Pipeline prebuild": "預先建置管線", "The first start waits a few minutes for it, once.": "首次啟動需要多等幾分鐘（僅此一次）。",
+    "Current value": "目前設定", "SwitchPad settings": "SwitchPad 設定",
+    "Shows frame timing and graphics statistics.": "在遊戲畫面顯示幀時間和圖形統計。",
+    "Encodes graphics commands on a separate thread.": "讓圖形指令在另一條執行緒準備。",
     "Encode thread": "獨立編碼執行緒", "Hold frames when late": "延遲時保留畫格", "Performance HUD": "效能資訊（HUD）",
     "American English": "英文（美國）", "British English": "英文（英國）", "Japanese": "日文", "French": "法文", "German": "德文",
     "Latin American Spanish": "西班牙文（拉丁美洲）", "Spanish": "西班牙文", "Italian": "義大利文", "Dutch": "荷蘭文", "Canadian French": "法文（加拿大）",
@@ -331,24 +334,16 @@ private struct PlayersSection: View {
     }
 }
 
-// Phone controllers (phone_pads.c): the address phones open, and a QR code of it. DM_PHONE_PADS_LIVE is the port the server listens on (unset when it is off or could not start);
-// the address is this device's IPv4 address on Wi-Fi (en0), or on another interface that is up (a personal hotspot's bridge) when there is no Wi-Fi
+// Use the listener's current address for every player QR, including after a Wi-Fi change.
+@_silgen_name("phone_pads_url")
+private func nativePhonePadsURL(_ out: UnsafeMutablePointer<CChar>, _ capacity: Int) -> Int32
+
 func phonePadsURL() -> String? {
-    guard let port = ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] else { return nil }
-    var list: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&list) == 0, let first = list else { return nil }
-    defer { freeifaddrs(list) }
-    var found: [String: String] = [:]
-    for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
-        let i = p.pointee
-        guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), (i.ifa_flags & UInt32(IFF_UP)) != 0, (i.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
-        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
-        let name = String(cString: i.ifa_name), addr = String(cString: host)
-        if !addr.hasPrefix("169.254.") { found[name] = found[name] ?? addr }
+    var bytes = [CChar](repeating: 0, count: 128)
+    return bytes.withUnsafeMutableBufferPointer { buffer in
+        guard let start = buffer.baseAddress, nativePhonePadsURL(start, buffer.count) != 0 else { return nil }
+        return String(cString: start)
     }
-    guard let addr = found["en0"] ?? found.first(where: { $0.key.hasPrefix("bridge") || $0.key.hasPrefix("en") })?.value else { return nil }
-    return "http://\(addr):\(port)/"
 }
 
 func qrImage(_ text: String) -> UIImage? {
@@ -421,10 +416,6 @@ private struct PhonePadsCard: View {   // under Play, in the launcher's left col
     }
 }
 
-private extension LauncherModel {
-    func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-}
-
 // On the TV a choice is its name and its value between arrows, on one line as on a console's settings (left and right change it; the TV is not touched).
 // A menu picker there stacks its value under the name once the text is this large, which made every row two lines tall
 private struct TVChoice: View {
@@ -448,10 +439,17 @@ private struct TVChoice: View {
 private struct SettingRow: View {
     let s: Setting
     @ObservedObject var m: LauncherModel
+    let openChoice: (Setting) -> Void
 
     private var locked: Bool { m.fromFile.contains(s.env) }
     private var note: String {
-        locked ? (s.note.isEmpty ? "" : tr(s.note) + " · ") + tr("Set by an env file") : tr(s.note)
+        let detail: String
+        switch s.env {
+        case "DM_METAL_HUD": detail = tr("Shows frame timing and graphics statistics.")
+        case "DM_NVN_ENC_THREAD": detail = tr("Encodes graphics commands on a separate thread.")
+        default: detail = tr(s.note)
+        }
+        return locked ? (detail.isEmpty ? "" : detail + " · ") + tr("Set by an env file") : detail
     }
     private var rangeValue: Binding<Double> {
         Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
@@ -508,21 +506,16 @@ private struct SettingRow: View {
     var body: some View {
         Group {
             switch s.kind {
-            case "choice" where tenFoot:
-                let v = m.values[s.env] ?? s.def
-                TVChoice(title: tr(s.label), value: (s.options ?? []).first { $0[0] == v }.map { tr($0[1]) } ?? v)
             // on the TV a slider or a switch is a value between arrows too: the controls themselves keep their small iPad size there
             case "range" where tenFoot:
                 TVChoice(title: tr(s.label), value: percentage)
             case "memory" where tenFoot:
                 TVChoice(title: tr(s.label), value: String(format: "%.1f GB", memoryGB.wrappedValue) + (memoryIsDefault ? " · " + memoryDefaultLabel : ""))
             case "choice":
-                Picker(selection: m.binding(s)) {
-                    ForEach(s.options ?? [], id: \.[0]) { Text(tr($0[1])).tag($0[0]) }
-                } label: {
-                    settingLabel
-                }
-                .pickerStyle(.menu)
+                let value = m.values[s.env] ?? s.def
+                choiceRow(label: settingLabel,
+                          value: (s.options ?? []).first { $0.first == value && $0.count >= 2 }.map { tr($0[1]) } ?? value)
+                    .launcherTap(tr(s.label), enabled: !locked) { openChoice(s) }
             case "range":
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -542,7 +535,11 @@ private struct SettingRow: View {
                         // the size, then "Game default" in the same place: a label at the default, a button that goes back to it otherwise
                         Text(String(format: "%.1f GB", memoryGB.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
                         if memoryIsDefault || locked { Text(memoryDefaultLabel).foregroundStyle(.secondary).opacity(memoryIsDefault ? 1 : 0) }
-                        else { Button(memoryDefaultLabel) { m.values[s.env] = "-" }.buttonStyle(.borderless) }
+                        else {
+                            Text(memoryDefaultLabel).foregroundStyle(Color.accentColor)
+                                .launcherTap(memoryDefaultLabel) { m.values[s.env] = "-" }
+                                .fixedSize()
+                        }
                     }
                     Slider(value: memoryGB, in: (s.min ?? 0.5)...(s.max ?? 3.2), step: s.step ?? 0.1)
                         .accessibilityLabel(tr(s.label))
@@ -556,6 +553,7 @@ private struct SettingRow: View {
                     Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
                         settingLabel
                     }
+                    .toggleStyle(LauncherToggleStyle(title: tr(s.label)))
                 }
             }
         }
@@ -564,18 +562,21 @@ private struct SettingRow: View {
 }
 
 // Player 1's controller or phone on the launcher (shell_players.m posts DMLauncherInput): up and down move a highlight over the rows, left goes to Play (right comes
-// back), A uses the highlighted row in place: a switch flips; a choice or a slider takes left and right until A or B; a player's row lets left and right pick its
+// back), A uses the highlighted row in place: a switch flips; a choice opens a list and a slider takes left and right until A or B; a player's row lets left and right pick its
 // layout, Identify, Move to (A, then left and right pick the number) or Remove. B goes back one step (or to Play) and + starts the game. Each other player has a
 // highlight of its own on its own row at the same time: left and right pick its layout or Identify, A uses it, B hides it. Touch works as before
 private final class NavModel: ObservableObject {
     @Published var focus = "play"
-    @Published var editing = false   // the highlighted choice or slider takes left and right
+    @Published var editing = false   // the highlighted slider takes left and right
     @Published var part: Int?        // on a player's row: 0 layout, 1 Identify, 2 Move to, 3 Remove
     @Published var moveTo: Int?      // Move to: the player number picked so far
     @Published var own: [Int: Int] = [:]   // players 2 to 8: the control each one picked on its own row (0 layout, 1 Identify)
     @Published var saveConfirmation: SaveConfirmation?
     @Published var saveSelection: SaveSelection?
     @Published var selectedSaveID: Int?
+    @Published var choice: LauncherChoice?
+    @Published var choiceID: String?
+    var hasPanel: Bool { saveConfirmation != nil || saveSelection != nil || choice != nil }
     @Published var confirmFocused = false
     @Published var nameEntryOnIPad = false
     @Published var newSaveName = ""
@@ -615,14 +616,10 @@ private struct NavPart: ViewModifier {   // a ring around the player row's contr
 private struct NavItem { let id: String; var slider = false; var activate: () -> Void = {}; var adjust: (Int) -> Void = { _ in } }
 
 private extension LauncherModel {
-    // One step of a setting from a controller (d -1 or +1): a toggle flips, a choice moves through its options (wrapping around), a slider moves by its step
+    // One step of a setting from a controller (d -1 or +1): a toggle flips and a slider moves by its step
     func step(_ s: Setting, _ d: Int) {
         let v = values[s.env] ?? s.def
         switch s.kind {
-        case "choice":
-            guard let o = s.options, !o.isEmpty else { return }
-            let i = o.firstIndex { $0[0] == v } ?? 0
-            values[s.env] = o[((i + d) % o.count + o.count) % o.count][0]
         case "range":
             let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
             values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, (Double(v) ?? hi) + Double(d) * st)))
@@ -702,24 +699,17 @@ private struct GyroRow: View {
         Toggle(isOn: $shell.gyro) {
             noteLabel("Motion controls", "The iPad's motion is player 1's while it plays on the iPad; a DualSense, DualShock 4 or Switch Pro controller's is its own player's.")
         }
+        .toggleStyle(LauncherToggleStyle(title: tr("Motion controls")))
         .disabled(shell.gyroLocked)
     }
 }
 private struct FpsRow: View {
     @ObservedObject var shell: ShellSettings
-    @Environment(\.tenFoot) private var tenFoot
+    let open: () -> Void
     var body: some View {
-        if tenFoot { TVChoice(title: tr("Frame rate cap"), value: "\(shell.fps) fps") } else { menu }
-    }
-    private var menu: some View {
-        Picker(selection: $shell.fps) {
-            Text("30 fps").tag(30)
-            Text("60 fps").tag(60)
-        } label: {
-            noteLabel("Frame rate cap", "30 fps runs cooler and saves battery; 60 fps is the most a game runs at.")
-        }
-        .pickerStyle(.menu)
-        .disabled(shell.fpsLocked)
+        choiceRow(label: noteLabel("Frame rate cap", "30 fps runs cooler and saves battery; 60 fps is the most a game runs at."),
+                  value: "\(shell.fps) fps")
+            .launcherTap(tr("Frame rate cap"), enabled: !shell.fpsLocked, perform: open)
     }
 }
 private struct TouchStyleRow: View {   // opacity or size of the touch controls, a slider in percent
@@ -784,16 +774,78 @@ private enum SaveSelection: Equatable {
     var title: String { tr(self == .use ? "Choose a save" : "Delete a save") }
 }
 
-// The launcher handles controller buttons itself. A native List button or menu can receive the
-// same press through UIKit focus even when the launcher has highlighted a different row.
-private extension View {
-    func saveTap(_ label: String, perform: @escaping () -> Void) -> some View {
-        frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: perform)
+private struct LauncherOption: Identifiable {
+    let id: String
+    let label: String
+}
+
+private enum LauncherChoice {
+    case setting(Setting)
+    case frameRate
+
+    var title: String {
+        switch self {
+        case .setting(let setting): tr(setting.label)
+        case .frameRate: tr("Frame rate cap")
+        }
+    }
+
+    var options: [LauncherOption] {
+        switch self {
+        case .setting(let setting):
+            return (setting.options ?? []).compactMap { option in
+                guard option.count >= 2 else { return nil }
+                return LauncherOption(id: option[0], label: tr(option[1]))
+            }
+        case .frameRate:
+            return [LauncherOption(id: "30", label: "30 fps"), LauncherOption(id: "60", label: "60 fps")]
+        }
+    }
+}
+
+private func choiceRow<Label: View>(label: Label, value: String) -> some View {
+    HStack(spacing: 12) {
+        label
+        Spacer(minLength: 12)
+        HStack(spacing: 6) {
+            Text(value).multilineTextAlignment(.trailing)
+            Image(systemName: "chevron.up.chevron.down").font(.footnote)
+        }
+        .foregroundStyle(Color.accentColor)
+    }
+}
+
+// Touch stays independent of the launcher's controller navigation. In particular, avoid a native
+// List button retaining UIKit focus and receiving A alongside the launcher’s highlighted row.
+extension View {
+    func launcherTap(_ label: String, enabled: Bool = true, perform: @escaping () -> Void) -> some View {
+        contentShape(Rectangle())
+            .onTapGesture { if enabled { perform() } }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: Text(label)) { perform() }
+            .accessibilityAction { if enabled { perform() } }
+            .accessibilityAction(named: Text(label)) { if enabled { perform() } }
+            .disabled(!enabled)
+    }
+}
+
+private struct LauncherToggleStyle: ToggleStyle {
+    let title: String
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer()
+            Capsule()
+                .fill(configuration.isOn ? Color.green : Color.secondary.opacity(0.38))
+                .frame(width: 50, height: 30)
+                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                    Circle().fill(.white).frame(width: 24, height: 24).padding(3)
+                }
+                .animation(.easeInOut(duration: 0.16), value: configuration.isOn)
+        }
+        .launcherTap(title, enabled: enabled) { configuration.isOn.toggle() }
+        .accessibilityValue(tr(configuration.isOn ? "On" : "Off"))
     }
 }
 
@@ -812,7 +864,7 @@ private struct SaveSlotsSection: View {
                 Spacer()
                 Text(s.activeName).foregroundStyle(.secondary).lineLimit(1)
             }
-            .saveTap(tr("Switch saves")) { choose(.use) }
+            .launcherTap(tr("Switch saves")) { choose(.use) }
             .nav("slot")
             saveAction("New empty save", icon: "plus.circle") { request(.create) }
                 .nav("slotNew")
@@ -827,7 +879,7 @@ private struct SaveSlotsSection: View {
             if s.slots.count > 1 {
                 saveLabel("Delete a save", icon: "trash")
                     .foregroundStyle(.red)
-                    .saveTap(tr("Delete a save")) { choose(.delete) }
+                    .launcherTap(tr("Delete a save")) { choose(.delete) }
                     .nav("slotDelete")
             }
         } header: {
@@ -840,7 +892,7 @@ private struct SaveSlotsSection: View {
     private func saveAction(_ title: String, icon: String, perform: @escaping () -> Void) -> some View {
         saveLabel(title, icon: icon)
             .foregroundStyle(tenFoot ? Color.white : Color.accentColor)
-            .saveTap(tr(title), perform: perform)
+            .launcherTap(tr(title), perform: perform)
     }
 
     @ViewBuilder private func saveLabel(_ title: String, icon: String) -> some View {
@@ -871,6 +923,8 @@ private struct LauncherView: View {
     let play: () -> Void
     let back: (() -> Void)?   // a package of several games: back to the game picker (main.m), before the game starts
     @StateObject private var players = PlayersModel()
+    @StateObject private var pads = PadsModel()
+    @ObservedObject var panels: PregamePanels
     @Environment(\.pregameMirror) private var mirror   // GamePicker.swift: the TV's copy shows, takes no input and posts nothing
     @StateObject private var activity = ActivityModel()
     @ObservedObject var saves: SaveSlotsModel
@@ -878,12 +932,13 @@ private struct LauncherView: View {
     @State private var held: (key: String, source: Int, task: Task<Void, Never>)?
     @StateObject private var tv: TenFoot
 
-    init(m: LauncherModel, shell: ShellSettings, nav: NavModel, saves: SaveSlotsModel,
+    init(m: LauncherModel, shell: ShellSettings, nav: NavModel, saves: SaveSlotsModel, panels: PregamePanels,
          play: @escaping () -> Void, back: (() -> Void)?, onTV: Bool, screenScale: CGFloat = 1) {
         self.m = m
         self.shell = shell
         self.nav = nav
         self.saves = saves
+        self.panels = panels
         self.play = play
         self.back = back
         _tv = StateObject(wrappedValue: TenFoot(native: true, onTV: onTV, screenScale: screenScale))
@@ -913,11 +968,14 @@ private struct LauncherView: View {
                     playButton(k).padding(.top, 6 * k)
                     // on the TV the code joins the game's card in the middle (an empty middle under Play otherwise); on the iPad it sits at the bottom
                     if tv.on { Color.clear.frame(height: 24 * k) } else { Spacer(minLength: 8) }
-                    if ProcessInfo.processInfo.environment["DM_PHONE_PADS_LIVE"] != nil { PhonePadsCard() }
+                    PhonePadsCard()
                     if tv.on {
                         Spacer(minLength: 0)
-                        KeyHint(key: "Home", text: tr("Switch mode"))   // GamePicker.swift; on the TV, the same in console and handheld mode
-                            .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
+                        HStack(spacing: 14 * k) {
+                            KeyHint(key: "−", text: tr("Players"))
+                            KeyHint(key: "＋", text: tr("SwitchPad settings"))
+                        }
+                        .font(.ds(.callout, k: k)).foregroundStyle(.white.opacity(0.6))
                     }
                 }
                 .padding(20 * k)
@@ -945,8 +1003,10 @@ private struct LauncherView: View {
                     ForEach(m.sections, id: \.self) { section in
                         Section {
                             // the Xbox button layout is each player's own now (the player list above); DM_PAD_BY_LABEL stays the default for a new controller
-                            ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { SettingRow(s: $0, m: m).nav("s:" + $0.env) }
-                            if section == "Game" { FpsRow(shell: shell).nav("fps") }
+                            ForEach(m.settings.filter { $0.sectionTitle == section && $0.env != "DM_PAD_BY_LABEL" }) { setting in
+                                SettingRow(s: setting, m: m) { openChoice(.setting($0)) }.nav("s:" + setting.env)
+                            }
+                            if section == "Game" { FpsRow(shell: shell) { openChoice(.frameRate) }.nav("fps") }
                             if section == "Controls" {
                                 GyroRow(shell: shell).nav("gyro")
                                 if !tv.on {   // the touch controls are the iPad's, in handheld mode
@@ -959,12 +1019,15 @@ private struct LauncherView: View {
                         }
                     }
                     Section {
-                        Button(action: resetSettings) { Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise") }
-                            .foregroundStyle(tv.on ? Color.white : Color.accentColor)
-                            .disabled(!settingsChanged)
+                        Label(tr("Reset to tested defaults"), systemImage: "arrow.counterclockwise")
+                            .foregroundStyle(settingsChanged ? (tv.on ? Color.white : Color.accentColor) : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .launcherTap(tr("Reset to tested defaults"), enabled: settingsChanged, perform: resetSettings)
                             .nav("reset")
-                        if !tv.on {   // the Files app opens on the iPad, not on the TV
-                            Button(action: openGameFolder) { Label(tr("Open game folder"), systemImage: "folder") }
+                        if !tv.on {
+                            Label(tr("Open game folder"), systemImage: "folder")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .launcherTap(tr("Open game folder"), perform: openGameFolder)
                                 .nav("folder")
                         }
                     }
@@ -985,7 +1048,7 @@ private struct LauncherView: View {
         .environmentObject(nav)
         .environmentObject(activity)
         .preferredColorScheme(.dark)
-        .accessibilityHidden(nav.saveSelection != nil || nav.saveConfirmation != nil)
+        .accessibilityHidden(nav.hasPanel || panels.panelOpen)
         .overlay {
             GeometryReader { geometry in
                 let k = tv.on ? TenFootStage.scale(geometry.size) : 1
@@ -993,26 +1056,40 @@ private struct LauncherView: View {
                     saveConfirmationPanel(confirmation, k: k)
                 } else if let selection = nav.saveSelection {
                     saveSelectionPanel(selection, k: k)
+                } else if let choice = nav.choice {
+                    optionPanel(choice, k: k)
+                } else if panels.panelOpen {
+                    PregamePanelsView(m: panels, pads: pads, players: players, viewport: geometry.size, k: k, onTV: tv.on)
                 }
             }
-            .allowsHitTesting(!mirror && (nav.saveConfirmation != nil || nav.saveSelection != nil))
+            .allowsHitTesting(!mirror && (nav.hasPanel || panels.panelOpen))
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPadsChanged"))) { _ in
             held?.task.cancel()
             held = nil
+            if !mirror { panels.stopRepeat() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            held?.task.cancel()
+            held = nil
+            if !mirror { panels.stopRepeat() }
+        }
+        .task { while !Task.isCancelled { pads.refresh(); try? await Task.sleep(for: .seconds(3)) } }
         .onAppear { if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 1]) } }
         .onDisappear {
             held?.task.cancel()
-            if !mirror { NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0]) }
+            if !mirror {
+                panels.stopRepeat()
+                NotificationCenter.default.post(name: Notification.Name("DMPlayersCommand"), object: nil, userInfo: ["op": "launcher", "on": 0])
+            }
         }
         .tenFoot(tv)
         .settleOnArrival()   // GamePicker.swift: one plain fade in
     }
 
     private func requestSaveConfirmation(_ confirmation: SaveConfirmation) {
-        guard !mirror, nav.saveConfirmation == nil, nav.saveSelection == nil else { return }
+        guard !mirror, !nav.hasPanel else { return }
         held?.task.cancel()
         held = nil
         nav.confirmFocused = false
@@ -1133,46 +1210,105 @@ private struct LauncherView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(selected ? (destructive ? Color.red : DS.accent) : rowPlate,
                         in: RoundedRectangle(cornerRadius: 8 * k))
-            .saveTap(label, perform: action)
+            .launcherTap(label, perform: action)
     }
 
-    private func saveSelectionPanel(_ selection: SaveSelection, k: CGFloat) -> some View {
+    private func selectionPanel<Option: Identifiable>(
+        title: String, options: [Option], selected: Option.ID?, active: Option.ID?,
+        activeLabel: String, k: CGFloat, label: @escaping (Option) -> String,
+        choose: @escaping (Option) -> Void, cancel: @escaping () -> Void
+    ) -> some View {
         ZStack {
-            Color.black.opacity(0.55).ignoresSafeArea()
-                .onTapGesture { nav.saveSelection = nil }
-                .accessibilityHidden(true)
+            Color.black.opacity(0.55).ignoresSafeArea().onTapGesture(perform: cancel).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 14 * k) {
-                Text(selection.title).font(.ds(.headline, .bold, k: k)).accessibilityAddTraits(.isHeader)
+                Text(title).font(.ds(.headline, .bold, k: k)).accessibilityAddTraits(.isHeader)
                 ScrollViewReader { scroll in
                     ScrollView {
                         VStack(spacing: 4 * k) {
-                            ForEach(saveOptions(selection)) { slot in
+                            ForEach(options) { option in
                                 HStack {
-                                    Text(slot.name)
+                                    Text(label(option))
                                     Spacer()
-                                    if slot.id == saves.active { Image(systemName: "checkmark").accessibilityLabel(tr("Save in use")) }
+                                    if option.id == active { Image(systemName: "checkmark").accessibilityLabel(activeLabel) }
                                 }
                                 .padding(10 * k)
-                                .background(slot.id == nav.selectedSaveID ? DS.accent.opacity(0.45) : rowPlate,
+                                .background(option.id == selected ? DS.accent.opacity(0.45) : rowPlate,
                                             in: RoundedRectangle(cornerRadius: 8 * k))
-                                .saveTap(slot.name) { chooseSave(slot, for: selection) }
-                                .id(slot.id)
+                                .launcherTap(label(option)) { choose(option) }
+                                .id(option.id)
                             }
                         }
                     }
                     .frame(maxHeight: 240 * k)
-                    .onChange(of: nav.selectedSaveID, initial: true) { _, id in
+                    .onChange(of: selected, initial: true) { _, id in
                         if let id { scroll.scrollTo(id) }
                     }
                 }
-                Text(tr("Cancel")).foregroundStyle(Color.accentColor)
-                    .padding(10 * k)
-                    .saveTap(tr("Cancel")) { nav.saveSelection = nil }
+                Text(tr("Cancel")).foregroundStyle(Color.accentColor).padding(10 * k)
+                    .launcherTap(tr("Cancel"), perform: cancel)
             }
             .padding(20 * k)
             .frame(maxWidth: (tv.on ? 575 : 420) * k)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20 * k))
             .padding(20 * k)
+        }
+    }
+
+    private func saveSelectionPanel(_ selection: SaveSelection, k: CGFloat) -> some View {
+        selectionPanel(title: selection.title, options: saveOptions(selection), selected: nav.selectedSaveID,
+                       active: saves.active, activeLabel: tr("Save in use"), k: k, label: { $0.name },
+                       choose: { chooseSave($0, for: selection) }, cancel: { nav.saveSelection = nil })
+    }
+
+    private func choiceValue(_ choice: LauncherChoice) -> String {
+        switch choice {
+        case .setting(let setting): m.values[setting.env] ?? setting.def
+        case .frameRate: String(shell.fps)
+        }
+    }
+
+    private func openChoice(_ choice: LauncherChoice) {
+        guard !mirror, !nav.hasPanel else { return }
+        let options = choice.options
+        guard let first = options.first else { return }
+        let current = choiceValue(choice)
+        held?.task.cancel()
+        held = nil
+        nav.reset()
+        switch choice {
+        case .setting(let setting): nav.focus = "s:" + setting.env
+        case .frameRate: nav.focus = "fps"
+        }
+        nav.choiceID = options.first(where: { $0.id == current })?.id ?? first.id
+        nav.choice = choice
+    }
+
+    private func applyChoice(_ option: LauncherOption, for choice: LauncherChoice) {
+        switch choice {
+        case .setting(let setting):
+            if !m.fromFile.contains(setting.env) { m.values[setting.env] = option.id }
+        case .frameRate:
+            if !shell.fpsLocked, let fps = Int(option.id) { shell.fps = fps }
+        }
+        nav.choice = nil
+    }
+
+    private func optionPanel(_ choice: LauncherChoice, k: CGFloat) -> some View {
+        selectionPanel(title: choice.title, options: choice.options, selected: nav.choiceID,
+                       active: choiceValue(choice), activeLabel: tr("Current value"), k: k,
+                       label: { $0.label }, choose: { applyChoice($0, for: choice) }, cancel: { nav.choice = nil })
+    }
+
+    private func optionInput(_ choice: LauncherChoice, _ key: String) {
+        let options = choice.options
+        guard let index = options.firstIndex(where: { $0.id == nav.choiceID }) else { return }
+        switch key {
+        case "b": nav.choice = nil
+        case "a": applyChoice(options[index], for: choice)
+        case "up", "down":
+            let next = Swift.max(0, Swift.min(options.count - 1, index + (key == "up" ? -1 : 1)))
+            nav.choiceID = options[next].id
+        default: break
         }
     }
 
@@ -1254,12 +1390,13 @@ private struct LauncherView: View {
         for section in m.sections {
             for s in m.settings where s.sectionTitle == section && s.env != "DM_PAD_BY_LABEL" && !m.fromFile.contains(s.env) {
                 switch s.kind {
-                case "choice", "range", "memory": items.append(NavItem(id: "s:" + s.env, slider: true, adjust: { m.step(s, $0) }))
+                case "choice": items.append(NavItem(id: "s:" + s.env, activate: { openChoice(.setting(s)) }))
+                case "range", "memory": items.append(NavItem(id: "s:" + s.env, slider: true, adjust: { m.step(s, $0) }))
                 default: items.append(NavItem(id: "s:" + s.env, activate: { m.step(s, 1) }))
                 }
             }
             if section == "Game" && !shell.fpsLocked {
-                items.append(NavItem(id: "fps", slider: true, adjust: { _ in shell.fps = shell.fps == 30 ? 60 : 30 }))
+                items.append(NavItem(id: "fps", activate: { openChoice(.frameRate) }))
             }
             if section == "Controls" {
                 if !shell.gyroLocked { items.append(NavItem(id: "gyro", activate: { shell.gyro.toggle() })) }
@@ -1309,7 +1446,7 @@ private struct LauncherView: View {
         }
     }
     private func navInput(_ u: [AnyHashable: Any]?) {
-        guard let key = u?["key"] as? String, ["a", "b", "plus", "up", "down", "left", "right"].contains(key) else { return }   // X, Y and − are the game picker's
+        guard let key = u?["key"] as? String else { return }
         if let confirmation = nav.saveConfirmation {
             guard (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 else { return }
             if key == "b" { cancelSaveConfirmation(); return }
@@ -1326,16 +1463,26 @@ private struct LauncherView: View {
             if (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { saveSelectionInput(selection, key) }
             return
         }
+        if let choice = nav.choice {
+            if (u?["p"] as? Int ?? 1) == 1, (u?["on"] as? Int ?? 1) != 0 { optionInput(choice, key) }
+            return
+        }
         if let p = u?["p"] as? Int, p > 1 { ownInput(p, key, (u?["on"] as? Int ?? 1) != 0); return }
         let source = u?["source"] as? Int ?? 1
-        if (u?["on"] as? Int ?? 1) == 0 {
+        let pressed = (u?["on"] as? Int ?? 1) != 0
+        if panels.handlePanelInput(key, source: source, pressed: pressed, players: players) {
+            held?.task.cancel(); held = nil
+            if pressed && panels.panelOpen { nav.reset() }
+            return
+        }
+        guard ["a", "b", "up", "down", "left", "right"].contains(key) else { return }
+        if !pressed {
             if held?.key == key, held?.source == source { held?.task.cancel(); held = nil }
             return
         }
         held?.task.cancel(); held = nil
         let row = players.players.first { "p\($0.player)" == nav.focus }
         switch key {
-        case "plus": nav.reset(); play()
         case "a":
             if let n = nav.moveTo, let r = row { nav.reset(); players.send(["op": "swap", "a": r.player, "b": n]); nav.focus = "p\(n)"; return }   // the highlight goes with it
             if let part = nav.part, let r = row { playerPart(r, part); return }
@@ -1353,7 +1500,7 @@ private struct LauncherView: View {
         default:   // a direction: once, then repeated while held (moving up and down, or a value)
             let repeats = key == "up" || key == "down" || nav.editing || nav.moveTo != nil
             navDirection(key)
-            guard repeats, nav.saveSelection == nil, nav.saveConfirmation == nil else { return }
+            guard repeats, !nav.hasPanel else { return }
             held = (key, source, Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(400))
                 while !Task.isCancelled { navDirection(key); try? await Task.sleep(for: .milliseconds(120)) }
@@ -1381,10 +1528,11 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = LauncherModel(file.settings, defaults: gameDefaults), shell = ShellSettings(), nav = NavModel()
     let saves = SaveSlotsModel(defaultName: { tr("Save %d").replacingOccurrences(of: "%d", with: String($0)) })
+    let panels = PregamePanels()
     var host: UIViewController?
     let scene = parent.view.window?.windowScene
     let onTV = scene?.session.role == .windowExternalDisplayNonInteractive
-    let view = LauncherView(m: model, shell: shell, nav: nav, saves: saves, play: {
+    let view = LauncherView(m: model, shell: shell, nav: nav, saves: saves, panels: panels, play: {
         guard let h = host else { return }
         host = nil
         PregameStage.shared.clear()
@@ -1400,7 +1548,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         let covered = frontIosPickerCoverBegin()
         h.dismiss(animated: !covered) { frontIosBackToPicker() }
     } : nil, onTV: onTV, screenScale: scene?.screen.scale ?? 1)
-    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, saves: saves, play: {}, back: severalGames ? {} : nil, onTV: true)) }   // the TV's copy in handheld mode
+    PregameStage.shared.showLauncher { AnyView(LauncherView(m: model, shell: shell, nav: nav, saves: saves, panels: panels, play: {}, back: severalGames ? {} : nil, onTV: true)) }   // the TV's copy in handheld mode
     let h = NoFocusHostingController(rootView: view)
     controllerNotForUIKit(h.view)
     h.modalPresentationStyle = .fullScreen

@@ -242,7 +242,7 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 int front_ios_boot_ok(void) { return g_boot_ok; }
 int front_ios_pick_needed(void) { return g_pick; }   // front_ios.m: show the game picker before the launcher
 
-static void pads_start(void) { static int once; if (!once++) phone_pads_start(); }   // once: the picker's start and a game's are the same server
+static void pads_start(void) { phone_pads_start(); }   // the picker and game share the same active listener
 
 // The picker's choice (GamePicker.swift, on the main thread): that game's files, its Guest library, then the same start as a package of one game
 static void choose(NSString *gid) {
@@ -295,7 +295,7 @@ static _Atomic(NSTimeInterval) g_relaunch_time;
 }
 - (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
 - (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
-- (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
+- (void)sceneWillEnterForeground:(UIScene *)s { pads_start(); front_ios_focus_event(2); }
 - (void)sceneDidBecomeActive:(UIScene *)s {
     atomic_store(&shell_was_active, 1);
     atomic_store(&g_relaunch_time, 0);

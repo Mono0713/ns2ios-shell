@@ -474,6 +474,8 @@ static int on_readable(client *c) {   // 0: close the connection
     return 1;
 }
 
+static atomic_int g_listen_port;
+
 static void *serve(void *arg) {
     int ls = (int)(intptr_t)arg;
 #ifdef __APPLE__
@@ -486,7 +488,13 @@ static void *serve(void *arg) {
         pf[n] = (struct pollfd){.fd = ls, .events = POLLIN}; map[n++] = -1;
         for (int i = 0; i < MAX_CLIENTS; i++) if (g_cl[i].fd >= 0) { pf[n] = (struct pollfd){.fd = g_cl[i].fd, .events = POLLIN}; map[n++] = i; }
         int r = poll(pf, (nfds_t)n, wait_ms);
-        if (r < 0 && errno != EINTR) { LOG("[RED] phone pads: poll failed (errno %d), phones can no longer play", errno); return NULL; }
+        if (r < 0 && errno != EINTR) {
+            LOG("[RED] phone pads: listener stopped (errno %d)", errno);
+            for (int i = 0; i < MAX_CLIENTS; i++) if (used(&g_cl[i])) drop(&g_cl[i]);
+            close(ls);
+            atomic_store(&g_listen_port, 0);
+            return NULL;
+        }
         for (int k = 0; r > 0 && k < n; k++) {
             if (!(pf[k].revents & (POLLIN | POLLHUP | POLLERR))) continue;
             if (map[k] < 0) {
@@ -533,7 +541,7 @@ static void *serve(void *arg) {
 // The address phones open, as the launcher shows it (Launcher.swift phonePadsURL): this device's IPv4 address on Wi-Fi (en0), or on another interface that is up
 // (a personal hotspot's bridge) when there is no Wi-Fi. 0 while the server is not running or there is no address. For the in-game QR code card (DmGamepad.m)
 int phone_pads_url(char *out, size_t cap) {
-    const char *port = getenv("DM_PHONE_PADS_LIVE"); if (!port) return 0;
+    int port = atomic_load(&g_listen_port); if (!port || !cap) return 0;
     struct ifaddrs *list = NULL; if (getifaddrs(&list) != 0) return 0;
     char best[INET_ADDRSTRLEN] = "", other[INET_ADDRSTRLEN] = "";
     for (struct ifaddrs *i = list; i; i = i->ifa_next) {
@@ -545,11 +553,13 @@ int phone_pads_url(char *out, size_t cap) {
     }
     freeifaddrs(list);
     const char *addr = best[0] ? best : other; if (!addr[0]) return 0;
-    return snprintf(out, cap, "http://%s:%s/", addr, port) < (int)cap;
+    int n = snprintf(out, cap, "http://%s:%d/", addr, port);
+    return n > 0 && (size_t)n < cap;
 }
 
-// Called once at app start (main.m), after the env files are read
+// Called on the main thread at startup and when the app becomes active.
 void phone_pads_start(void) {
+    if (atomic_load(&g_listen_port)) return;
     const char *on = getenv("DM_PHONE_PADS");
     if (on && !strcmp(on, "0")) { LOG("phone pads: off (DM_PHONE_PADS=0)"); return; }
     const char *ps = getenv("DM_PHONE_PADS_PORT"); int port = ps ? atoi(ps) : 8080;
@@ -562,12 +572,23 @@ void phone_pads_start(void) {
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port), .sin_addr.s_addr = htonl(INADDR_ANY)};
     if (bind(ls, (struct sockaddr *)&a, sizeof a) < 0 || listen(ls, 16) < 0) { LOG("[RED] phone pads: port %d is not available (errno %d)", port, errno); close(ls); return; }
-    char pv[8]; snprintf(pv, sizeof pv, "%d", port); setenv("DM_PHONE_PADS_LIVE", pv, 1);   // the launcher shows the address and its QR code while this is set (Launcher.swift)
+    atomic_store(&g_listen_port, port);
+    pthread_t worker;
+    int error = pthread_create(&worker, NULL, serve, (void *)(intptr_t)ls);
+    if (error) {
+        close(ls);
+        atomic_store(&g_listen_port, 0);
+        LOG("[RED] phone pads: could not start listener thread (%d)", error);
+        return;
+    }
+    pthread_detach(worker);
 #ifdef __APPLE__
     static DNSServiceRef sd;
+    if (sd) { DNSServiceRefDeallocate(sd); sd = NULL; }
     DNSServiceErrorType e = DNSServiceRegister(&sd, 0, 0, NULL, "_nxpad._tcp", NULL, NULL, htons((uint16_t)port), 0, NULL, NULL, NULL);
     if (e) LOG("phone pads: Bonjour announcement failed (%d); phones can still use the address", (int)e);
 #endif
-    pthread_t th; pthread_create(&th, NULL, serve, (void *)(intptr_t)ls); pthread_detach(th);
-    LOG("phone pads: open http://<this device's Wi-Fi address>:%d/ on a phone (the launcher shows the address and a QR code)", port);
+    char url[128];
+    if (phone_pads_url(url, sizeof url)) LOG("phone pads: listening at %s", url);
+    else LOG("phone pads: listening on port %d, waiting for a Wi-Fi address", port);
 }
