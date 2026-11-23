@@ -123,7 +123,7 @@ static _Atomic uint64_t g_done;                 // highest value whose command b
 static pthread_mutex_t g_qmu = PTHREAD_MUTEX_INITIALIZER, g_done_mu = PTHREAD_MUTEX_INITIALIZER, g_mem_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_done_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic uint64_t g_n_draw, g_n_pass, g_n_submit, g_n_copy, g_n_pso, g_mem_bytes;
-static _Atomic uint64_t g_n_deferred, g_n_depth_states;
+static _Atomic uint64_t g_n_deferred, g_n_depth_states, g_n_deferred_functions;
 
 // Shader table (<DM_MSL_DIR>/vk/vk_shaders.tsv): resource kind u / b / t / s / c, its (set, binding) in the game's SPIR-V and the Metal slot it was moved to;
 // kind p is the push-constant block (set and binding 0), whose bytes are set straight into its buffer slot
@@ -200,6 +200,33 @@ static id<MTLFunction> sh_src_fn(const char *key, int variant) {
     return f;
 }
 
+static BOOL defer_render_pipelines(void) {
+    const char *setting = getenv("DM_VK_DEFER_PSO");
+    return setting && atoi(setting);
+}
+
+static id<MTLFunction> sh_function(const char *key, BOOL dual) {
+    if (!g_lib) return sh_src_fn(key, dual);
+    return [g_lib newFunctionWithName:[NSString stringWithFormat:@"vk_%s%@", key, dual ? @"_d" : @""]];
+}
+
+// Deferred rendering resolves functions in queue replay, serialized by g_qmu. This
+// also caches failed lookups, so a missing variant does not retry for every pipeline.
+static id<MTLFunction> sh_deferred_function(const shinfo *info, BOOL dual) {
+    if (!info) return nil;
+    static NSMutableDictionary<NSString *, id> *resolved;
+    if (!resolved) resolved = [NSMutableDictionary new];
+    NSString *key = [NSString stringWithFormat:@"%s%@", info->key, dual ? @"_d" : @""];
+    id cached = resolved[key];
+    if (cached) return cached == NSNull.null ? nil : cached;
+    id<MTLFunction> fn = sh_function(info->key, dual);
+    resolved[key] = fn ? (id)fn : NSNull.null;
+    g_n_deferred_functions++;
+    if (!fn && !dual) LOG("[vk] [RED] deferred shader %s did not load: %s", info->key,
+                          g_lib ? "function missing in compiled library" : g_srcwhy);
+    return fn;
+}
+
 static void dev_init_once(void) {
     @autoreleasepool {
         g_dev = (__bridge id<MTLDevice>)mtl_device_classic();
@@ -259,6 +286,7 @@ struct VkPipeline_T {
     __strong MTLRenderPipelineDescriptor *pending;
     __strong MTLDepthStencilDescriptor *pending_depth;
     char shader_keys[64];
+    BOOL dual_source;
     const shinfo *vs, *fs; uint32_t vb_mask; VkPipelineLayout layout;
     MTLPrimitiveType prim; MTLCullMode cull; MTLWinding wind; MTLTriangleFillMode fill; MTLDepthClipMode clip;
     int bias; float bias_c, bias_s, bias_cl; float blend[4]; uint32_t sref_f, sref_b;
@@ -851,8 +879,9 @@ VKB(vkCreateShaderModule, VkResult, VkDevice d, const VkShaderModuleCreateInfo *
     for (int i = 0; i < 8; i++) snprintf(m->key + 2 * i, 3, "%02x", h[i]);
     sh_capture(m->key, ci->pCode, ci->codeSize);
     m->si = sh_find(m->key);
-    @autoreleasepool { if (m->si) m->fn = g_lib ? [g_lib newFunctionWithName:[NSString stringWithFormat:@"vk_%s", m->key]] : sh_src_fn(m->key, 0); }
-    if (!m->fn) {
+    BOOL defer = defer_render_pipelines();
+    @autoreleasepool { if (m->si && !defer) m->fn = sh_function(m->key, NO); }
+    if (!m->si || (!defer && !m->fn)) {
         LOG("[vk] [RED] shader %s (%zu bytes of SPIR-V) is not in the library", m->key, ci->codeSize);
         static int d0; if (d0++ < 10) LOG("[vk] [RED]   %s: %s; %s", m->key, m->si ? "the table has it" : "no table row",
                                           g_lib ? "a compiled library is loaded" : (g_srcdir ? (g_srcwhy[0] ? g_srcwhy : "vk/src gave no function") : "no vk/src"));
@@ -907,11 +936,11 @@ static void pipe_compile(VkPipeline p, MTLRenderPipelineDescriptor *pd, const ch
 }
 static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
     VkPipeline p = zalloc(sizeof *p); p->layout = ci->layout;
-    const char *defer_setting = getenv("DM_VK_DEFER_PSO");
-    int defer = defer_setting && atoi(defer_setting);
+    BOOL defer = defer_render_pipelines();
     @autoreleasepool {
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-        char keys[64] = ""; int dual = dual_source(ci->pColorBlendState);
+        char keys[64] = ""; BOOL dual = dual_source(ci->pColorBlendState);
+        p->dual_source = dual;
         for (uint32_t s = 0; s < ci->stageCount; s++) {
             const VkPipelineShaderStageCreateInfo *st = &ci->pStages[s]; VkShaderModule m = st->module;
             if (st->pSpecializationInfo && st->pSpecializationInfo->mapEntryCount) RED1("specialization constants not implemented");
@@ -919,7 +948,7 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
             else if (st->stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
                 if (dual && m->fn) {   // pipelines may be built on several threads
                     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; pthread_mutex_lock(&mu);
-                    if (!m->tried_d) { m->tried_d = 1; m->fn_d = g_lib ? [g_lib newFunctionWithName:[NSString stringWithFormat:@"vk_%s_d", m->key]] : sh_src_fn(m->key, 1); }
+                    if (!m->tried_d) { m->tried_d = 1; m->fn_d = sh_function(m->key, YES); }
                     pthread_mutex_unlock(&mu);
                 }
                 pd.fragmentFunction = dual && m->fn_d ? m->fn_d : m->fn; p->fs = m->si;
@@ -927,7 +956,7 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
             else RED1("shader stage %#x not implemented", st->stage);
             strlcat(keys, s ? " " : "", sizeof keys); strlcat(keys, m->key, sizeof keys);
         }
-        if (!pd.vertexFunction) { LOG("[vk] [RED] pipeline has no usable vertex shader (%s)", keys); return p; }
+        if (defer ? !p->vs : !pd.vertexFunction) { LOG("[vk] [RED] pipeline has no usable vertex shader (%s)", keys); return p; }
         const VkPipelineVertexInputStateCreateInfo *vi = ci->pVertexInputState;
         MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
         uint32_t used = 0;   // bindings some mapped attribute reads: Metal's validation rejects a buffer layout no attribute uses
@@ -1008,7 +1037,8 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
         if (!p->dyn_vp && vs && vs->pViewports && vs->viewportCount) { p->vp = vp_of(&vs->pViewports[0]); p->has_vp = 1; }
         if (!p->dyn_sc && vs && vs->pScissors && vs->scissorCount) { p->sc = vs->pScissors[0]; p->has_sc = 1; }
         if (defer) {
-            // Keep the Metal descriptors and functions; Vulkan shader modules may be destroyed as soon as this returns.
+            // Keep Metal descriptors and shader table rows. Vulkan shader modules
+            // can be destroyed immediately, while the rows live for the whole run.
             p->pending = pd;
             strlcpy(p->shader_keys, keys, sizeof p->shader_keys);
             g_n_deferred++;
@@ -1276,7 +1306,14 @@ static int pre_draw(rs_t *s) {
     if (!p) return 0;
     if (p->pending) {   // replay holds g_qmu, so a deferred pipeline is compiled just once, before its first draw
         @autoreleasepool {
-            pipe_compile(p, p->pending, p->shader_keys);
+            MTLRenderPipelineDescriptor *pd = p->pending;
+            pd.vertexFunction = sh_deferred_function(p->vs, NO);
+            if (pd.vertexFunction) {
+                id<MTLFunction> fragment = sh_deferred_function(p->fs, NO);
+                id<MTLFunction> dual = p->dual_source && fragment ? sh_deferred_function(p->fs, YES) : nil;
+                pd.fragmentFunction = dual ?: fragment;
+                pipe_compile(p, pd, p->shader_keys);
+            }
             p->pending = nil;
             if (p->pso && p->pending_depth) {
                 p->dss = [g_dev newDepthStencilStateWithDescriptor:p->pending_depth];
@@ -1602,8 +1639,9 @@ static void frame_end(void) {
              (unsigned long long)(pa - pp), (unsigned long long)(su - ps), (unsigned long long)(co - pc), (unsigned long long)(f <= 3 ? 1 : 300), (unsigned long long)g_n_pso, g_mem_bytes / 1048576.0);
     if (f <= 3 || f % 300 == 0) {
         uint64_t deferred = g_n_deferred;
-        if (deferred) VLOG("pipeline deferral at frame %llu: %llu described, %llu render and %llu depth/stencil states created",
-                          (unsigned long long)f, (unsigned long long)deferred, (unsigned long long)g_n_pso, (unsigned long long)g_n_depth_states);
+        if (deferred) VLOG("pipeline deferral at frame %llu: %llu described, %llu render and %llu depth/stencil states created, %llu Metal function lookups",
+                          (unsigned long long)f, (unsigned long long)deferred, (unsigned long long)g_n_pso,
+                          (unsigned long long)g_n_depth_states, (unsigned long long)g_n_deferred_functions);
         pd = dr; pp = pa; ps = su; pc = co;
     }
     dm_guest_frame_tick();
