@@ -295,8 +295,10 @@ static void slots_changed(void) {   // any thread (a phone joins on the server's
         atomic_store(&g_post_pending, 0);
         char primary[64]; shell_slot_primary_name(primary);
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-        NSString *name = primary[0] ? @(primary) : nil;
-        if (name && ![name isEqualToString:[defaults stringForKey:primary_key]]) [defaults setObject:name forKey:primary_key];
+        NSString *name = primary[0] ? [NSString stringWithUTF8String:primary] : nil;
+        NSString *saved = [defaults stringForKey:primary_key];
+        if (name && ![name isEqualToString:saved]) [defaults setObject:name forKey:primary_key];
+        else if (!name && saved) [defaults removeObjectForKey:primary_key];
         post_players();
         [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: a phone that joined or left
     });

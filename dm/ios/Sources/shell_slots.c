@@ -119,6 +119,8 @@ int shell_slot_swap(int a, int b) {
     // A player taking vacant P1 takes over the role. The former P1 rejoins using the ordinary open-slot order.
     if (a == 0 && !oa && ob) g_slots.last[b][0] = '\0';
     if (b == 0 && !ob && oa) g_slots.last[a][0] = '\0';
+    if (a == 0 && oa && !ob) g_slots.last[a][0] = '\0';
+    if (b == 0 && ob && !oa) g_slots.last[b][0] = '\0';
     g_slots.owner[a] = ob; g_slots.owner[b] = oa;
     shell_slot_info t = g_info[a]; g_info[a] = g_info[b]; g_info[b] = t;
     void (*ma)(const void *, int, int) = oa ? g_moved[g_info[b].kind] : NULL, (*mb)(const void *, int, int) = ob ? g_moved[g_info[a].kind] : NULL;

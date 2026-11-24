@@ -363,6 +363,11 @@ class PhonePrimaryRestoreTests(PhonePadsServer):
         self.addCleanup(phone.close)
         self.assertEqual(phone.hello(self.primary)['player'], 2)
         self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+        self.launcher('swap 0 3')
+        self.assertEqual(self.host()['menu_players'][:4], [-1, 0, 0, 0])
+        next_phone = Phone(self.port)
+        self.addCleanup(next_phone.close)
+        self.assertEqual(next_phone.hello('new-phone')['player'], 1)
 
 
 class PhoneJoyconTests(PhonePadsServer):
