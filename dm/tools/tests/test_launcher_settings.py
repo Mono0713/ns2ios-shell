@@ -60,6 +60,9 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual((kirby['min'], kirby['max'], kirby['default']), (3.1, 3.2, '-'))
         self.assertEqual(other['min'], 0.5)
 
+    def test_jamboree_keeps_its_packaged_memory_pool(self):
+        self.assertNotIn('DM_APP_POOL', build('0100965017338000', 'nvn'))
+
     def test_table_format_is_strict(self):
         good = 'DM_X\ttoggle\t-\t0\talways\tGame\tX\n'
         for bad, why in [('DM_X\ttoggle\t-\t0\talways\tX\n', 'columns'), ('DM_X\ttoggle\t-\t0\talways\tsecret\tX\n', 'section'),

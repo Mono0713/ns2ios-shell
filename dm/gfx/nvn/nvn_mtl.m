@@ -39,9 +39,36 @@ static const char *shell_chain(void) {
     static char v[34]; if (v[0]) return v;
     const char *e = getenv("DM_MSL_DIR");
     NSString *msl = e && *e ? @(e) : [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"];
-    for (NSString *d in [NSFileManager.defaultManager contentsOfDirectoryAtPath:msl error:nil] ?: @[])
-        if ([d hasPrefix:@"b-"] && d.length > 2 && d.length < 34) { snprintf(v, sizeof v, "%s", d.UTF8String + 2); return v; }
-    return DMSH_CHAIN;
+    NSFileManager *fs = NSFileManager.defaultManager;
+    NSString *game = getenv("DM_SHELL_GAME") ? @(getenv("DM_SHELL_GAME")) : nil;
+    NSString *legacy = nil, *selected = nil;
+    NSArray<NSString *> *chains = [[fs contentsOfDirectoryAtPath:msl error:nil] sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *d in chains) {
+        if (![d hasPrefix:@"b-"] || d.length <= 2 || d.length >= 34) continue;
+        NSString *folder = [msl stringByAppendingPathComponent:d];
+        NSString *stamp = [NSString stringWithContentsOfFile:[folder stringByAppendingPathComponent:@"inputs.tsv"]
+                                                   encoding:NSUTF8StringEncoding error:nil];
+        if (stamp) {
+            NSString *stampGame = nil, *inputs = nil;
+            for (NSString *line in [stamp componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+                if ([line hasPrefix:@"game\t"]) stampGame = [line substringFromIndex:5];
+                if ([line hasPrefix:@"inputs\t"]) inputs = [line substringFromIndex:7];
+            }
+            if (stampGame.length && inputs.length) {
+                if (!game || [stampGame isEqualToString:game]) { selected = d; break; }
+                continue;
+            }
+        }
+        // Incremental sync can leave an empty directory for a retired chain. Legacy packages
+        // without an inputs.tsv remain usable if they actually contain a shader library.
+        if (!legacy) for (NSString *file in [fs contentsOfDirectoryAtPath:folder error:nil]) {
+            if ([file.pathExtension isEqualToString:@"metallib"] || [file.pathExtension isEqualToString:@"metal"]) { legacy = d; break; }
+        }
+    }
+    selected = selected ?: legacy;
+    if (!selected) return DMSH_CHAIN;
+    snprintf(v, sizeof v, "%s", selected.UTF8String + 2);
+    return v;
 }
 #define DM_CHAIN shell_chain()
 #else
@@ -5942,11 +5969,14 @@ static void warm_start(void) {
         paths = @[@(e)];
     } else {
         NSString *seed = [g_shmap_path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"];
-        NSMutableArray<NSString *> *all = [NSMutableArray arrayWithObject:seed];
+        NSFileManager *fs = NSFileManager.defaultManager;
+        NSMutableArray<NSString *> *all = [NSMutableArray array];
+        if ([fs fileExistsAtPath:seed]) [all addObject:seed];
+        else MLOG("pipeline prewarm: no bundled seed list at %s", seed.UTF8String);
         NSString *user = pso_user_path();
-        if (user && [NSFileManager.defaultManager fileExistsAtPath:user]) [all addObject:user];
+        if (user && [fs fileExistsAtPath:user]) [all addObject:user];
         else MLOG("pipeline prewarm: this device's user list %s%s", user ? "does not exist yet: " : "has no path (neither DM_PSO_USER nor DM_SAVE is set)", user ? user.UTF8String : "");
-        if (![NSFileManager.defaultManager fileExistsAtPath:seed]) { MLOG("[RED] pipeline prewarm: seed list does not exist: %s", seed.UTF8String); return; }
+        if (!all.count) return;
         paths = all;
     }
     if (!g_warm_items) g_warm_items = [NSMutableArray array];

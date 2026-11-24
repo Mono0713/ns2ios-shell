@@ -70,7 +70,7 @@ typedef struct {
     uint32_t ip;                 // the phone's address (network order): one phone, one player
     void *tls;                   // the connection's TLS (phone_pads_tls.h), NULL for plain HTTP
     size_t n; uint8_t in[IN_CAP];
-    int last_seq; uint64_t last_ns; int released, joyright;
+    int last_seq; uint64_t last_ns; int released, joyright_layout, joyright_style;
     uint16_t raw; int32_t axes[4];   // the buttons and sticks the phone last sent; what the game gets adds the taps still held (MIN_HOLD_NS)
     uint16_t kept; uint64_t press_ns[16], hold_until;   // kept: buttons the phone let go of that stay down until hold_until; when each button went down
     uint64_t open_ns, seen_ns;   // when the connection opened, when anything last arrived on it (a session: its last request)
@@ -187,21 +187,26 @@ static int rumble_due(client *c, uint64_t t) {   // 1: a rumble message is waiti
 
 // ---- Players ----
 static void send_assign(client *c, int p);
+__attribute__((weak)) int front_ios_game_started(void) { return 0; }
 static void publish_input(client *c, int p) {
     uint64_t buttons = c->raw | c->kept;
-    if (c->joyright) {
-        // The existing 16-bit wire format has no rail bits; the page uses the otherwise absent L and ZL.
+    int32_t lx = c->axes[c->joyright_layout ? 2 : 0], ly = c->axes[c->joyright_layout ? 3 : 1];
+    int32_t rx = c->joyright_layout ? 0 : c->axes[2], ry = c->joyright_layout ? 0 : c->axes[3];
+    if (c->joyright_layout && c->joyright_style) {
+        // The 16-bit wire format uses L and ZL for the right Joy-Con's rails.
         uint64_t rails = buttons & (DM_BTN_L | DM_BTN_ZL);
         buttons &= ~(DM_BTN_L | DM_BTN_ZL);
         if (rails & DM_BTN_L) buttons |= DM_BTN_RIGHT_SL;
         if (rails & DM_BTN_ZL) buttons |= DM_BTN_RIGHT_SR;
     }
-    dm_pad_set_player(p, buttons, c->axes[0], c->axes[1], c->axes[2], c->axes[3]);
-    shell_slot_input(p, buttons, c->axes[c->joyright ? 2 : 0], c->axes[c->joyright ? 3 : 1]);
+    if (c->joyright_style) dm_pad_set_player(p, buttons, 0, 0, lx, ly);
+    else dm_pad_set_player(p, buttons, lx, ly, rx, ry);
+    shell_slot_input(p, buttons, lx, ly);
 }
 static void release(client *c) {
     int p = shell_slot_of(c);
     c->raw = 0; c->kept = 0; c->hold_until = 0;
+    memset(c->axes, 0, sizeof c->axes);
     if (p < 0 || c->released) return;
     dm_pad_set_player(p, 0, 0, 0, 0, 0);
     shell_slot_input(p, 0, 0, 0);
@@ -251,10 +256,15 @@ static void on_hello(client *c, const char *json) {
     json_str(json, "name", name, sizeof name);
     c->greeted = 1;
     if (banned(id, strstr(json, "\"join\"") != NULL)) { say(c, "{\"t\":\"kicked\"}"); return; }
+    int game = front_ios_game_started();
+    int old_style = game && c->player >= 0 && !strcmp(c->id, id) ? c->joyright_style : -1;
     if (c->player >= 0) { release(c); shell_slot_free(c); c->player = -1; }
     // The same phone still connected on an older socket (a page that reloaded before the old connection timed out, a second tab): that one is told it was replaced, so it
     // stops reconnecting (phone_pad.html) instead of taking the player back and the two pages trading it forever, and closed, so this one takes its player
-    for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && used(&g_cl[i]) && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) replace(&g_cl[i], name);
+    for (int i = 0; i < MAX_CLIENTS; i++) if (&g_cl[i] != c && used(&g_cl[i]) && g_cl[i].player >= 0 && !strcmp(g_cl[i].id, id)) {
+        if (game) old_style = g_cl[i].joyright_style;
+        replace(&g_cl[i], name);
+    }
     // The same address from another page with its own storage, so another id (Safari and the Home Screen copy, or a second browser): the old page goes if it has gone quiet,
     // as a page that is no longer in front does at once. One that is still sending is another phone behind the same address (a range extender or guest network that
     // translates addresses): it keeps its player. Not for loopback, which is the server test's several phones on one machine
@@ -263,8 +273,9 @@ static void on_hello(client *c, const char *json) {
             replace(&g_cl[i], name);
     char mode[16] = "";
     json_str(json, "mode", mode, sizeof mode);
-    c->joyright = !strcmp(mode, "joyright");
-    int p = shell_slot_take_phone(c, id, name, c->joyright);   // a reconnecting phone gets its old slot while it is free
+    c->joyright_layout = !strcmp(mode, "joyright");
+    c->joyright_style = old_style < 0 ? c->joyright_layout : old_style;
+    int p = shell_slot_take_phone(c, id, name, c->joyright_style);   // a reconnecting phone gets its old slot while it is free
     snprintf(c->name, sizeof c->name, "%s", name); snprintf(c->id, sizeof c->id, "%s", id);
     if (p < 0) { say(c, "{\"t\":\"full\"}"); LOG("phone pads: '%s' connected: all %d players are taken, not used", name, DM_PLAYERS); return; }
     c->player = p; c->last_seq = -1; c->last_ns = now_ns(); c->released = 1; c->motion.init = 0;
@@ -285,12 +296,17 @@ static void on_text(client *c, const char *json) {
         json_str(json, "mode", mode, sizeof mode);
         if (strcmp(mode, "pro") && strcmp(mode, "joyright")) return;
         int joyright = !strcmp(mode, "joyright");
-        if (c->joyright != joyright) {
+        if (c->joyright_layout != joyright) {
             release(c);
             c->motion.init = 0;
-            c->joyright = joyright;
+            c->joyright_layout = joyright;
         }
-        int p = shell_slot_set_joyright(c, joyright);
+        // A running game may show its reconnect screen on an Npad style change.
+        int p = shell_slot_of(c);
+        if (!front_ios_game_started() && c->joyright_style != joyright) {
+            c->joyright_style = joyright;
+            p = shell_slot_set_joyright(c, joyright);
+        }
         if (p >= 0) send_assign(c, p);
         return;
     }

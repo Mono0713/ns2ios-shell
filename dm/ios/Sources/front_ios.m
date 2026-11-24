@@ -61,7 +61,8 @@ static CGFloat ui_scale(UIView *root) {
 // A view drawn larger with a transform keeps its backing at the screen's scale, so its text and symbols were magnified bitmaps (soft on a TV): each layer
 // drawn at the scale it is shown at instead. After the view is in its window (moving into one sets the layers' scale again)
 static void crisp(UIView *v, CGFloat k) {
-    CGFloat s = (v.window.windowScene.screen.scale ?: UIScreen.mainScreen.scale) * k;
+    UIScreen *screen = v.window.windowScene.screen ?: UIScreen.mainScreen;
+    CGFloat s = (v.window == g_tv ? screen.nativeScale : screen.scale) * k;
     for (NSMutableArray *q = [NSMutableArray arrayWithObject:v]; q.count; ) {
         UIView *x = q.lastObject; [q removeLastObject];
         if (x.layer.contentsScale != s) { x.layer.contentsScale = s; [x.layer setNeedsDisplay]; [x setNeedsDisplay]; }
@@ -296,6 +297,12 @@ static void tv_handheld_note(BOOL on) {
 }
 // Handheld play in game with a TV connected: the TV shows the same game picture as the iPad, fitted to the TV (16:9 fills it); the game presents to the iPad's
 // layer and then draws the frame again into this one (nvn_mtl.m present_mirror). Its drawable is capped at 1920 across: a copy, the TV scales it up
+static void set_sdr_colorspace(CAMetalLayer *layer) {
+    // The present backends put already-encoded SDR values in the drawable.
+    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    layer.colorspace = color;
+    CGColorSpaceRelease(color);
+}
 @interface DmMirrorView : UIView
 @end
 @implementation DmMirrorView
@@ -315,6 +322,7 @@ static void tv_mirror(BOOL on) {
     if (on && root && !m) {
         m = [[DmMirrorView alloc] initWithFrame:root.bounds]; m.tag = 78; m.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         CAMetalLayer *l = (CAMetalLayer *)m.layer; l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm; l.framebufferOnly = NO; l.opaque = YES;
+        set_sdr_colorspace(l);
         m.backgroundColor = UIColor.blackColor;
         [root addSubview:m]; [m setNeedsLayout]; [m layoutIfNeeded];
         static CAMetalLayer *keep; keep = l;   // never freed under the present thread's copy, which reads the pointer without a lock
@@ -371,6 +379,7 @@ static void pregame_move(UIViewController *from, UIViewController *to) {
         CAMetalLayer *l = (CAMetalLayer *)self.layer;
         l.device = MTLCreateSystemDefaultDevice(); l.pixelFormat = MTLPixelFormatBGRA8Unorm;
         l.contentsScale = UIScreen.mainScreen.nativeScale; l.framebufferOnly = NO; l.opaque = YES;
+        set_sdr_colorspace(l);
         self.backgroundColor = UIColor.blackColor;
     }
     return self;
@@ -1300,12 +1309,16 @@ static NSArray<NSArray<NSString *> *> *g_menu_rows;   // [title, detail, action]
 static dispatch_queue_t g_pause_q;
 static int g_paused;
 static void game_pause(int on) {
+    CFTimeInterval requested = CACurrentMediaTime();
     if (!g_pause_q) g_pause_q = dispatch_queue_create("dm.home-menu.pause", DISPATCH_QUEUE_SERIAL);
     dispatch_async(g_pause_q, ^{
         if (on == g_paused) return;
         g_paused = on;
         if (on) { dm_focus_set(2); dm_audio_suspend(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); LOG("front end: game paused for the Home menu"); }
-        else { dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); dm_audio_suspend(0); dm_focus_set(1); LOG("front end: game resumed from the Home menu"); }
+        else {
+            dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); dm_audio_suspend(0); dm_focus_set(1);
+            LOG("front end: game resumed from the Home menu (%.0f ms after request)", (CACurrentMediaTime() - requested) * 1000);
+        }
     });
 }
 static NSString *game_name(void) {
@@ -1316,7 +1329,6 @@ static NSString *game_name(void) {
     return [n isKindOfClass:NSString.class] && n.length ? n : ([NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: @"SwitchPad");
 }
 static NSMutableArray<UIView *> *g_menu_cards;   // the card on the TV and the iPad's copy (touch), or only the iPad's
-static unsigned g_menu_gen;   // each opening: a close's late resume does not undo a menu opened again
 // The selection is a pill that slides to the chosen row (a spring), under the rows' text; the chosen row's icon tile lights up
 static void home_menu_draw(void) {
     for (UIView *card in g_menu_cards) {
@@ -1328,7 +1340,8 @@ static void home_menu_draw(void) {
             UIView *tile = [row viewWithTag:60] ?: [row viewWithTag:63];
             if (tile.tag == 60) tile.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.95] : [UIColor colorWithWhite:1 alpha:0.1];
             ((UIImageView *)[tile viewWithTag:61]).tintColor = on ? [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1] : UIColor.whiteColor;
-            ((UILabel *)[row viewWithTag:62]).textColor = on ? [UIColor colorWithWhite:1 alpha:0.85] : [UIColor colorWithWhite:1 alpha:0.5];
+            BOOL tv = card.window == g_tv;
+            ((UILabel *)[row viewWithTag:62]).textColor = [UIColor colorWithWhite:1 alpha:tv ? 1 : on ? 0.85 : 0.5];
             if (!on) continue;
             if (pill.alpha == 0) { pill.frame = row.frame; pill.alpha = 1; continue; }   // first placement: no slide
             [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
@@ -1339,17 +1352,12 @@ static void home_menu_draw(void) {
     }
     g_menu_prev_sel = g_menu_sel;
 }
-// The game comes back once every button is up: the A that chose Continue would otherwise reach the game as a press (at most a second's wait)
-uint64_t shell_players_held(void);
-static void resume_when_released(unsigned gen, int tries) {
-    if (gen != g_menu_gen) return;   // opened again meanwhile: it stays paused
-    if (shell_players_held() && tries < 20) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ resume_when_released(gen, tries + 1); }); return; }
-    game_pause(0);
-}
 static void home_menu_close(void) {
     if (!g_menu || g_menu_closing) return;
     volume_hold_stop();
     g_menu_closing = 1;
+    dm_input_discard_buttons(DM_BTN_A | DM_BTN_B | DM_BTN_PLUS | DM_BTN_MINUS);
+    game_pause(0);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @0}];
     UIView *m = g_menu, *mi = g_menu_tv;
     NSArray<UIView *> *cards = [g_menu_cards copy];
@@ -1360,7 +1368,6 @@ static void home_menu_close(void) {
         (void)f; [m removeFromSuperview]; [mi removeFromSuperview];
         if (g_menu == m) { g_menu = nil; g_menu_tv = nil; g_menu_cards = nil; g_menu_closing = 0; }
     }];
-    resume_when_released(g_menu_gen, 0);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMShellChanged" object:nil];   // the TV panel's Pause / Continue
 }
 // The menu's size depends on its rows. Give the exit status its own layout on each display.
@@ -1612,7 +1619,7 @@ static UIView *home_menu_make(UIView *root) {
     menu.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
     BOOL onTV = root.window && root.window == g_tv;
     BOOL pl = g_menu_page == 1;   // the Players page: the phones' QR code on the left, the eight numbers on the right
-    CGFloat W = pl ? 720 : 440, rowH = pl ? 46 : 60, gap = pl ? 6 : 8, pad = 16, top = 84, x0 = pl ? pad + 236 : pad, rw = W - x0 - pad;
+    CGFloat W = pl ? 720 : onTV ? 488 : 440, rowH = pl ? 46 : 60, gap = pl ? 6 : 8, pad = 16, top = 84, x0 = pl ? pad + 236 : pad, rw = W - x0 - pad;
     NSString *qrURL = nil; UIImage *qr = pl ? phones_qr(&qrURL) : nil;
     CGFloat H = top + g_menu_rows.count * (rowH + gap) + pad - gap + (pl ? 34 : 4);   // key hints only on the Players page
     CGSize viewport = root.bounds.size;
@@ -1627,7 +1634,7 @@ static UIView *home_menu_make(UIView *root) {
     UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
     glass.frame = card.bounds; glass.tag = 1; glass.layer.cornerRadius = 26 * unit; glass.layer.cornerCurve = kCACornerCurveContinuous; glass.clipsToBounds = YES;
     glass.layer.borderWidth = 1 * unit; glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
-    glass.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:0.55];
+    glass.contentView.backgroundColor = [UIColor colorWithRed:0.08 green:0.09 blue:0.11 alpha:onTV ? 0.86 : 0.55];
     [card addSubview:glass];
     UILabel *t = [[UILabel alloc] initWithFrame:home_menu_rect(unit, pad + 4, 20, W - 2 * pad - 8, 28)];
     t.adjustsFontSizeToFitWidth = YES; t.minimumScaleFactor = 0.75;
@@ -1659,7 +1666,7 @@ static UIView *home_menu_make(UIView *root) {
         [card addSubview:plate];
     }
     UIView *pill = [[UIView alloc] initWithFrame:CGRectZero]; pill.tag = 50; pill.alpha = 0; pill.userInteractionEnabled = NO;
-    pill.backgroundColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; pill.layer.cornerRadius = 16 * unit; pill.layer.cornerCurve = kCACornerCurveContinuous;
+    pill.backgroundColor = onTV ? [UIColor colorWithRed:0.02 green:0.32 blue:0.78 alpha:1] : [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1]; pill.layer.cornerRadius = 16 * unit; pill.layer.cornerCurve = kCACornerCurveContinuous;
     pill.layer.shadowColor = [UIColor colorWithRed:0.04 green:0.52 blue:1 alpha:1].CGColor; pill.layer.shadowOpacity = 0.5; pill.layer.shadowRadius = 12 * unit; pill.layer.shadowOffset = CGSizeZero;
     [card addSubview:pill];
     if (g_menu_anim == 0 && g_menu_prev_sel >= 0 && g_menu_prev_sel < (int)g_menu_rows.count) {   // redrawn in place: the pill starts where it was and slides
@@ -1695,7 +1702,8 @@ static UIView *home_menu_make(UIView *root) {
         UILabel *a = [[UILabel alloc] initWithFrame:home_menu_rect(unit, x, two ? (rowH == 60 ? 9 : 5) : (rowH - 22) / 2, tw, 22)]; a.userInteractionEnabled = NO;
         a.tag = 64; a.text = g_menu_rows[i][0]; a.textColor = UIColor.whiteColor; a.font = [UIFont systemFontOfSize:(onTV ? 19 : 17) * unit weight:UIFontWeightSemibold];
         UILabel *d = [[UILabel alloc] initWithFrame:home_menu_rect(unit, x, rowH == 60 ? 32 : 27, tw, 18)]; d.userInteractionEnabled = NO; d.tag = 62;
-        d.text = g_menu_rows[i][1]; d.font = [UIFont systemFontOfSize:13 * unit];
+        d.text = g_menu_rows[i][1];
+        d.font = [UIFont systemFontOfSize:(onTV ? 15 : 13) * unit weight:onTV ? UIFontWeightMedium : UIFontWeightRegular];
         if (slot >= 0 && !held) a.textColor = [UIColor colorWithWhite:1 alpha:0.35];
         [row addSubview:tile]; [row addSubview:a]; [row addSubview:d];
         if (volume) {
@@ -1736,7 +1744,7 @@ static UIView *home_menu_make(UIView *root) {
     CGAffineTransform base = CGAffineTransformMakeScale(k, k);
     card.transform = base; card.center = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
     [menu addSubview:card]; [root addSubview:menu];
-    if (k > 1) crisp(card, k);   // sharp text on the TV
+    if (onTV || k > 1) crisp(card, k);
     [g_menu_cards addObject:card];
     // coming in: opening pops up from a little smaller and lower (a spring) as the dim fades in; a page slides in from the side it goes to
     if (g_menu_anim == 1) {
@@ -1858,7 +1866,7 @@ static UIImage *phones_qr(NSString **url_out) {
 }
 static void home_menu_open(void) {
     if (g_menu || g_menu_closing || !g_root.game) return;
-    g_menu_page = 0; g_menu_move = g_menu_confirm = g_menu_prev_sel = -1; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_gen++; g_menu_anim = 1;
+    g_menu_page = 0; g_menu_move = g_menu_confirm = g_menu_prev_sel = -1; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_anim = 1;
     game_pause(1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput
     home_menu_build();

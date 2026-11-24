@@ -107,6 +107,10 @@ struct TenFootStage: ViewModifier {
     let on: Bool
     var screenScale: CGFloat = 1
     var native = false
+    // Reserve five percent on each edge for displays that crop the HDMI picture.
+    static func safeInsets(_ size: CGSize, onTV: Bool) -> (x: CGFloat, y: CGFloat) {
+        onTV ? (size.width * 0.05, size.height * 0.05) : (0, 0)
+    }
     static func scale(_ size: CGSize) -> CGFloat { max(0.5, min(size.width / 1920, size.height / 1080)) }
     func body(content: Content) -> some View {
         // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
@@ -1261,9 +1265,10 @@ struct PregamePanelsView: View {
             } else if m.settingsOpen {
                 Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.closeSettings() }
                     .transition(.opacity)
+                let settingsScale = onTV ? k * 1.42 : k
                 ViewThatFits(in: .vertical) {
-                    PickerSettingsCard(m: m, k: k)
-                    ScrollView { PickerSettingsCard(m: m, k: k).frame(maxWidth: .infinity) }
+                    PickerSettingsCard(m: m, k: settingsScale)
+                    ScrollView { PickerSettingsCard(m: m, k: settingsScale).frame(maxWidth: .infinity) }
                         .scrollBounceBehavior(.basedOnSize)
                 }
                 .frame(maxHeight: max(1, viewport.height - 48 * k))
@@ -1293,7 +1298,9 @@ private struct PickerView: View {
     var body: some View {
         GeometryReader { g in
             let k = tv.on ? TenFootStage.scale(g.size) : 1   // the TV's size over 1920 x 1080 (the stage gives the same k to the views inside)
-            let side = tv.on ? min(g.size.height * 0.42, g.size.width / 3.6) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot: fewer, larger tiles
+            let inset = TenFootStage.safeInsets(g.size, onTV: tv.on)
+            let contentWidth = max(1, g.size.width - 2 * inset.x)
+            let side = tv.on ? min(g.size.height * 0.42, contentWidth / 3.6) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot: fewer, larger tiles
             let gap = side * 0.14
             let current = m.game(m.focus)
             ZStack {
@@ -1301,12 +1308,12 @@ private struct PickerView: View {
                     header(k).padding(.horizontal, 32 * k).padding(.top, 22 * k)
                         .padding(.bottom, m.gridOpen ? 12 * k : 0)
                     if m.gridOpen {
-                        GameGrid(m: m, width: g.size.width, cols: tv.on ? 6 : g.size.width > g.size.height ? 7 : 5)
+                        GameGrid(m: m, width: contentWidth, cols: tv.on ? 6 : g.size.width > g.size.height ? 7 : 5)
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     } else {
                         Group {
                             Spacer(minLength: 0)
-                            row(width: g.size.width, side: side, gap: gap)
+                            row(width: contentWidth, side: side, gap: gap)
                             details(current, k).padding(.top, 22 * k)
                             Spacer(minLength: 0)
                         }
@@ -1315,6 +1322,7 @@ private struct PickerView: View {
                     footer(k).padding(.horizontal, 32 * k).padding(.bottom, 22 * k)
                         .padding(.top, m.gridOpen ? 12 * k : 0)
                 }
+                .frame(width: contentWidth, height: max(1, g.size.height - 2 * inset.y))
                 .animation(DS.pop, value: m.gridOpen)
                 PregamePanelsView(m: m, pads: pads, players: players, viewport: g.size, k: k, onTV: tv.on)
             }

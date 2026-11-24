@@ -241,6 +241,15 @@ static void t_joyright(void) {
     CHECK((s.buttons & (DM_BTN_A | DM_BTN_RIGHT_SL | DM_BTN_RIGHT_SR | DM_BTN_L)) == (DM_BTN_A | DM_BTN_RIGHT_SL | DM_BTN_RIGHT_SR),
           "right rail buttons and ABXY reach Joy-Con reads, left shoulder does not");
     CHECK(!s.lx && !s.ly && s.rx == 25000 && s.ry == -27000, "Joy-Con exports only its right stick");
+    h_hid_HoldType(1);
+    const uint64_t logical[] = {DM_BTN_A, DM_BTN_B, DM_BTN_X, DM_BTN_Y};
+    const uint64_t sideways[] = {DM_BTN_B, DM_BTN_Y, DM_BTN_A, DM_BTN_X};
+    for (unsigned i = 0; i < 4; i++) {
+        dm_pad_set_player(0, logical[i], 0, 0, 1000, 2000);
+        h_hid_StateJoyRight(&s, &no1);
+        CHECK(s.buttons == sideways[i] && s.rx == -2000 && s.ry == 1000, "horizontal grip gets the raw controls for the phone's logical labels and axes");
+    }
+    h_hid_HoldType(0);
     dm_motion_set_player(0, (float[]){0, 0, -1}, (float[]){0, 0, .25f}, (float[]){0, 0, 0},
                          (float[]){1, 0, 0, 0, 1, 0, 0, 0, 1});
     CHECK(h_hid_SixHandles(handles, 2, &no1, STYLE_JOYRIGHT) == 1 &&
@@ -285,6 +294,27 @@ static void t_single_player_profile(void) {
     CHECK(info[0] == 2 && h_hid_GetStyle(&no2) == STYLE_FULLKEY, "multiplayer games continue to see P2");
 }
 
+static void t_resume_buttons(void) {
+    uint32_t no1 = 0, no2 = 1;
+    g_mode = 1;
+    ids((uint32_t[]){no1, no2}, 2);
+    dm_pad_players(3);
+    dm_pad_set_player(0, DM_BTN_A | DM_BTN_R, 16000, 0, 0, 0);
+    dm_pad_set_player(1, DM_BTN_B, 0, 0, 0, 0);
+    dm_pad_set_player(1, 0, 0, 0, 0, 0);
+    dm_input_discard_buttons(DM_BTN_A | DM_BTN_B);
+    NpadState view;
+    h_hid_StateFullKey(&view, &no1);
+    CHECK(view.buttons == DM_BTN_R && view.lx == 16000, "resume immediately preserves the active stick and other buttons");
+    CHECK(!buttons_of(no2, STYLE_FULLKEY), "a released menu press is discarded from the latch");
+    dm_pad_set_player(0, DM_BTN_A, 0, 0, 0, 0);
+    CHECK(!buttons_of(no1, STYLE_FULLKEY), "held confirm remains suppressed");
+    dm_pad_set_player(0, 0, 0, 0, 0, 0);
+    dm_pad_set_player(0, DM_BTN_A, 0, 0, 0, 0);
+    CHECK(buttons_of(no1, STYLE_FULLKEY) == DM_BTN_A, "a fresh confirm works after release");
+    dm_pad_players(0);
+}
+
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
     t_slots();
@@ -292,6 +322,7 @@ int main(void) {
     t_vibration();
     t_rumble_log();
     t_joyright();
+    t_resume_buttons();
     t_single_player_profile();
     printf("hid players: %d checks, %d failed\n", checks, fails);
     return fails != 0;

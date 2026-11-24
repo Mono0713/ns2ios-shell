@@ -366,6 +366,30 @@ class PhoneJoyconTests(PhonePadsServer):
         self.assertEqual(self.host()['joyright'], 0b1)
 
 
+    def test_rotation_keeps_guest_style_during_play(self):
+        a = Phone(self.port)
+        self.addCleanup(a.close)
+        self.addCleanup(lambda: self.launcher('game 0'))
+        a.frame(1, b'{"t":"hello","v":1,"id":"rotate-phone","name":"test","mode":"pro"}')
+        player = a.reply()['player'] - 1
+        self.launcher('game 1')
+        a.frame(1, b'{"t":"padtype","mode":"joyright"}')
+        self.assertEqual(a.reply()['player'], player + 1)
+        a.state(1, 1, rx=60, ry=-40)
+        self.assertEqual(self.host()['joyright'], 0)
+        self.assertEqual(self.host()['players'][player], [1, 60 * 258, -40 * 258, 0, 0])
+        self.launcher('game 0')
+        a.frame(1, b'{"t":"padtype","mode":"joyright"}')
+        self.assertEqual(a.reply()['player'], player + 1)
+        self.assertEqual(self.host()['joyright'], 1 << player)
+        self.launcher('game 1')
+        a.frame(1, b'{"t":"padtype","mode":"pro"}')
+        self.assertEqual(a.reply()['player'], player + 1)
+        a.state(2, 4, lx=-60, ly=40, rx=30)
+        self.assertEqual(self.host()['joyright'], 1 << player)
+        self.assertEqual(self.host()['players'][player], [4, 0, 0, -60 * 258, 40 * 258])
+
+
 class PhoneJoyconPostTests(PhonePadsServer):
     def test_joycon_over_post(self):
         p = PostPhone(self.port, 'joy-post', self.tls)

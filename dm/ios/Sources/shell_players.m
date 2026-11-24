@@ -355,5 +355,4 @@ int shell_players_external(void) {   // controllers and phones playing now (main
     int n = 0; for (int p = 0; p < DM_PLAYERS; p++) n += info[p].kind != SHELL_SLOT_NONE;
     return n;
 }
-uint64_t shell_players_held(void) { uint64_t m = 0; for (int p = 0; p < DM_PLAYERS; p++) m |= atomic_load(&g_last_nav[p]); return m; }   // any player's buttons still down (the left stick as the D-pad)
 void shell_players_release(void) { for (GCController *c in g_pads) { int p = shell_slot_of((__bridge const void *)c); if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0); } }   // on resign active

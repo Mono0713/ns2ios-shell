@@ -35,6 +35,8 @@ mem_reserve	0x100000000
 mem_alias	0x10000000
 mem_stack	0x10000000
 app_pool	0xCD500000
+# A 2 GiB automatic pool failed the Bezel heap allocation on iPad. Keep the tested package size.
+app_pool_min_gb	3.2
 
 # ---- Shader split (shader_split.py; BNSH in the Bezel Engine archives, bea_members) ----
 shader_groups	/Archive/=archive

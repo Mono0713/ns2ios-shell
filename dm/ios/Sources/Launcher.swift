@@ -947,6 +947,9 @@ private struct LauncherView: View {
     var body: some View {
         GeometryReader { geometry in
             let k = tv.on ? TenFootStage.scale(geometry.size) : 1   // GamePicker.swift: the TV's size over 1920 x 1080 (the views inside get it as uiK)
+            let inset = TenFootStage.safeInsets(geometry.size, onTV: tv.on)
+            let width = max(1, geometry.size.width - 2 * inset.x)
+            let height = max(1, geometry.size.height - 2 * inset.y)
             HStack(spacing: 0) {
                 VStack(spacing: 16 * k) {
                     Spacer(minLength: 0)
@@ -979,7 +982,7 @@ private struct LauncherView: View {
                     }
                 }
                 .padding(20 * k)
-                .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                .frame(width: width / 3, height: height)
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 0) {
                     if let back {
@@ -1039,8 +1042,9 @@ private struct LauncherView: View {
                 .contentMargins(.horizontal, 12 * k, for: .scrollContent)
                 .onChange(of: nav.focus) { _, id in withAnimation { proxy.scrollTo(id == "play" ? "p1" : id, anchor: .center) } }
                 }
-                .frame(width: geometry.size.width * 2 / 3)
+                .frame(width: width * 2 / 3, height: height)
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .background { backdrop }
         .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)   // ten-foot: every text style grows together on a TV

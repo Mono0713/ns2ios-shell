@@ -3,6 +3,7 @@
 // launcher: "swap <a> <b>", "kick <p>", "layout <p> <0|1>", "rumble <p> <amplitude %>" (players counted from 0); the file also lists each slot's kind and layout
 #include <pthread.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -13,6 +14,8 @@
 
 void phone_pads_start(void);
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int g_in_game;
+int front_ios_game_started(void) { return atomic_load(&g_in_game); }
 static uint64_t g_btn[DM_PLAYERS]; static int32_t g_ax[DM_PLAYERS][4]; static uint32_t g_mask, g_joyright;
 void dm_pad_set_player(int p, uint64_t b, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     pthread_mutex_lock(&g_mu); g_btn[p] = b; g_ax[p][0] = lx; g_ax[p][1] = ly; g_ax[p][2] = rx; g_ax[p][3] = ry; pthread_mutex_unlock(&g_mu);
@@ -31,7 +34,8 @@ uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); r
 static void *commands(void *arg) {
     (void)arg; char line[64]; int a, b;
     while (fgets(line, sizeof line, stdin)) {
-        if (sscanf(line, "swap %d %d", &a, &b) == 2) shell_slot_swap(a, b);
+        if (sscanf(line, "game %d", &a) == 1) atomic_store(&g_in_game, a != 0);
+        else if (sscanf(line, "swap %d %d", &a, &b) == 2) shell_slot_swap(a, b);
         else if (sscanf(line, "kick %d", &a) == 1) shell_slot_kick(a);
         else if (sscanf(line, "layout %d %d", &a, &b) == 2) shell_slot_set_layout(a, b);
         else if (sscanf(line, "rumble %d %d", &a, &b) == 2) {   // the game sets player a's motors to amplitude b / 100

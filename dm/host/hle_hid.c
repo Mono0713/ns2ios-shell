@@ -28,6 +28,7 @@ _Static_assert(sizeof(NpadState) == 0x28, "NpadState");
 // Front-end publishing: the keyboard / touch path (dm_input_set) and player 1's physical controller path (dm_pad_set) are ORed; each further player has a controller path of its own
 // (dm_pad_set_player). Press edges are latched until the game's next read so short presses are not lost
 static _Atomic uint64_t g_btn, g_axes, g_latch, g_pad_btn[DM_PLAYERS], g_pad_axes[DM_PLAYERS], g_pad_latch[DM_PLAYERS];
+static _Atomic uint64_t g_btn_ignored, g_pad_ignored[DM_PLAYERS];
 static _Atomic int64_t g_sampling = 1 << 16;   // starts high so the history entries below the newest keep positive sampling numbers
 static uint64_t pack(int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     return (uint64_t)(uint16_t)lx | (uint64_t)(uint16_t)ly << 16 | (uint64_t)(uint16_t)rx << 32 | (uint64_t)(uint16_t)ry << 48;
@@ -47,12 +48,22 @@ static void shake_note(void) {
 }
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     uint64_t old = atomic_exchange(&g_btn, buttons); atomic_fetch_or(&g_latch, buttons & ~old); atomic_store(&g_axes, pack(lx, ly, rx, ry));
+    atomic_fetch_and(&g_btn_ignored, buttons);
     shake_note();
 }
 void dm_pad_set_player(int p, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     if (p < 0 || p >= DM_PLAYERS) return;
     uint64_t old = atomic_exchange(&g_pad_btn[p], buttons); atomic_fetch_or(&g_pad_latch[p], buttons & ~old); atomic_store(&g_pad_axes[p], pack(lx, ly, rx, ry));
+    atomic_fetch_and(&g_pad_ignored[p], buttons);
     if (!p) shake_note();
+}
+static void discard_buttons(_Atomic uint64_t *held, _Atomic uint64_t *latch, _Atomic uint64_t *ignored, uint64_t mask) {
+    atomic_fetch_or(ignored, atomic_load(held) & mask);
+    atomic_fetch_and(latch, ~mask);
+}
+void dm_input_discard_buttons(uint64_t mask) {
+    discard_buttons(&g_btn, &g_latch, &g_btn_ignored, mask);
+    for (int p = 0; p < DM_PLAYERS; p++) discard_buttons(&g_pad_btn[p], &g_pad_latch[p], &g_pad_ignored[p], mask);
 }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { dm_pad_set_player(0, buttons, lx, ly, rx, ry); }
 uint64_t dm_input_samples(void) { return (uint64_t)atomic_load(&g_sampling); }
@@ -179,6 +190,7 @@ static void ctl_start(void) {
 enum { PLAYER_MASK = (1u << DM_PLAYERS) - 1 };
 static _Atomic uint32_t g_pads, g_ids_supported = 0x3ff, g_styles_supported = 0xffffffffu;
 static _Atomic int g_single_player;
+static _Atomic uint32_t g_hold_type;
 static int player_limit(void) { return atomic_load(&g_single_player) ? 1 : DM_PLAYERS; }
 static uint32_t connected_id_for(uint32_t pads) {
     return dm_opmode() == 0 && !(pads >> DM_PLAYERS & 1) ? NPAD_HANDHELD : NPAD_NO1;
@@ -281,10 +293,18 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     // A Joy-Con has its own rail buttons and right stick. Keep input from other controller types on their original path.
     uint32_t src = pl || style == STYLE_JOYRIGHT ? 1u << pl : 1u | merged_players();
     uint64_t b = 0; int32_t a[4] = {0};
-    if (!pl && style != STYLE_JOYRIGHT) { b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0); uint64_t k = atomic_load(&g_axes); for (int i = 0; i < 4; i++) a[i] = ax(k, i); }
+    if (!pl && style != STYLE_JOYRIGHT) { b = (atomic_load(&g_btn) | atomic_exchange(&g_latch, 0)) & ~atomic_load(&g_btn_ignored); uint64_t k = atomic_load(&g_axes); for (int i = 0; i < 4; i++) a[i] = ax(k, i); }
     for (int p = 0; p < DM_PLAYERS; p++) if (src >> p & 1) {
-        b |= atomic_load(&g_pad_btn[p]) | atomic_exchange(&g_pad_latch[p], 0);
+        b |= (atomic_load(&g_pad_btn[p]) | atomic_exchange(&g_pad_latch[p], 0)) & ~atomic_load(&g_pad_ignored[p]);
         uint64_t v = atomic_load(&g_pad_axes[p]); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(v, i));
+    }
+    if (style == STYLE_JOYRIGHT && atomic_load(&g_hold_type) == 1) {
+        // A sideways right Joy-Con is interpreted in the game's horizontal grip.
+        // Convert the phone's logical face labels and screen axes to that grip's raw controls.
+        const uint64_t face = DM_BTN_A | DM_BTN_B | DM_BTN_X | DM_BTN_Y;
+        b = (b & ~face) | ((b & DM_BTN_A) << 1) | ((b & DM_BTN_B) << 2)
+                        | ((b & DM_BTN_X) >> 2) | ((b & DM_BTN_Y) >> 1);
+        int32_t x = a[2]; a[2] = -a[3]; a[3] = x;
     }
     b &= style == STYLE_JOYRIGHT
         ? DM_BTN_A | DM_BTN_B | DM_BTN_X | DM_BTN_Y | DM_BTN_RS | DM_BTN_R | DM_BTN_ZR | DM_BTN_PLUS | DM_BTN_RIGHT_SL | DM_BTN_RIGHT_SR
@@ -343,8 +363,9 @@ HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyDualStateEiRKj", "dual Joy-Co
 HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyLeftStateEiRKj", "left Joy-Con states (not connected on the host)", int, h_hid_StatesJoyLeft, NpadState *s, int n, const uint32_t *id) { return states(s, n, *id, STYLE_JOYLEFT); }
 HLE_FORCE("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", "right Joy-Con states", int, h_hid_StatesJoyRight, NpadState *s, int n, const uint32_t *id) { return states(s, n, *id, STYLE_JOYRIGHT); }
 HLE_FORCE("_ZN2nn3hid14DisconnectNpadERKj", "disconnect a controller; ignored by the host", void, h_hid_Disconnect, const uint32_t *id) { (void)id; }
-static uint32_t g_hold_type;
-HLE_FORCE("_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", "Joy-Con hold orientation; the host only records it", void, h_hid_HoldType, int t) { g_hold_type = (uint32_t)t; }
+HLE_FORCE("_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", "Joy-Con hold orientation for the raw controller state", void, h_hid_HoldType, int t) {
+    if (atomic_exchange(&g_hold_type, (uint32_t)t) != (uint32_t)t) LOG("hid: Joy-Con hold type %d", t);
+}
 HLE_FORCE("_ZN2nn3hid20GetNpadJoyAssignmentERKj", "single assignment for a single Joy-Con", int, h_hid_GetJoyAssign, const uint32_t *id) { return style_of(*id) == STYLE_JOYRIGHT; }
 HLE_FORCE("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKj", "Joy-Con single assignment; ignored by the host", void, h_hid_JoySingle, const uint32_t *id) { (void)id; }
 HLE_FORCE("_ZN2nn3hid18SwapNpadAssignmentERKjS2_", "swap controller ids; ignored by the host", void, h_hid_Swap, const uint32_t *a, const uint32_t *b) { (void)a; (void)b; }
@@ -390,6 +411,7 @@ void dm_pad_clear_player(int p) {
     atomic_store(&g_pad_btn[p], 0);
     atomic_store(&g_pad_axes[p], 0);
     atomic_store(&g_pad_latch[p], 0);
+    atomic_store(&g_pad_ignored[p], 0);
     pthread_mutex_lock(&g_motion_mu);
     g_motion[p].at = 0;
     pthread_mutex_unlock(&g_motion_mu);
@@ -553,7 +575,7 @@ HLE_FORCE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj", "left Joy-Con 
 HLE_FORCE("_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj", "right Joy-Con current state", void, h_hid_StateJoyRight, NpadState *s, const uint32_t *id) { fill(s, *id, STYLE_JOYRIGHT); }
 
 static uint32_t g_comm_mode, g_hh_mode;
-HLE_FORCE("_ZN2nn3hid18GetNpadJoyHoldTypeEv", "Joy-Con hold orientation: returns the value that was set", int, h_hid_GetHold, void) { return (int)g_hold_type; }
+HLE_FORCE("_ZN2nn3hid18GetNpadJoyHoldTypeEv", "Joy-Con hold orientation: returns the value that was set", int, h_hid_GetHold, void) { return (int)atomic_load(&g_hold_type); }
 HLE_FORCE("_ZN2nn3hid24GetSupportedNpadStyleSetEv", "supported controller styles: all", uint32_t, h_hid_GetStyles, void) { return g_styles_supported; }
 HLE_FORCE("_ZN2nn3hid24GetNpadCommunicationModeEv", "wireless communication mode: returns the value that was set", int, h_hid_GetComm, void) { return (int)g_comm_mode; }
 HLE_FORCE("_ZN2nn3hid24SetNpadCommunicationModeENS0_21NpadCommunicationModeE", "wireless communication mode; the host only records it", void, h_hid_SetComm, int m) { g_comm_mode = (uint32_t)m; }

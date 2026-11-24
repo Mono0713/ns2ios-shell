@@ -125,7 +125,7 @@ struct MemoryAuto {
         var ok = savedPool("ok")
         var lastPool = savedPool("last")
         var jumpTop = false
-        let cands = Array(Set(Self.ladder + [package])).filter { $0 >= max(minimum, 0x20000000) && $0 <= Self.top }
+        let cands = Array(Set(Self.ladder + [package])).filter { $0 >= max(minimum, 0x20000000) }
         // the previous run's marker: read once, then removed
         if let data = try? Data(contentsOf: store.runURL), data.count >= 2, let txt = String(data: data, encoding: .utf8) {
             try? FileManager.default.removeItem(at: store.runURL)

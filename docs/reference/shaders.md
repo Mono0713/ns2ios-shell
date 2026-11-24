@@ -740,6 +740,20 @@ shader on a GPU.
 
 ## Pipelines and caches
 
+### Prewarm without a bundled seed
+
+- **Symptom.** Games without a bundled pipeline manifest compile pipelines while drawing even on repeat launches, and frame times spike at the first use of a pipeline.
+- **Cause.** The prewarm step returned as soon as the bundled seed was absent, even when the device already had a recorded pipeline list.
+- **Fix.** Read each existing list in the usual order. When there is no seed, prewarm the device's list independently.
+- **Found on.** [Minecraft Dungeons II](../../dm/games/0100A7C01B792000/README.md#frame-rate-and-stutter).
+
+### Obsolete chain directories in a shell package
+
+- **Symptom.** The shell loads a populated shader map but fails to open the named Metal libraries after an incremental data sync.
+- **Cause.** The sync left an empty directory for a retired translation chain. The first folder with a chain-style name won regardless of its contents.
+- **Fix.** Prefer a chain stamped for the current title. An unstamped legacy directory is eligible only when it contains Metal libraries or sources.
+- **Found on.** [Rabbids Party of Legends](../../dm/games/01008970149B0000/README.md#rendering).
+
 ### Shader-pair tables in a Mac app
 
 - **Symptom:** a self-contained Mac app (`--platform mac-app`) logs `pipeline prebuild: no .../Resources/dm/shader_pairs.tsv, nothing to build` although every shader library is there; it draws no hybrid stand-ins, and each pipeline seen for the first time compiles on the submit thread (frames of 100–550 ms).
