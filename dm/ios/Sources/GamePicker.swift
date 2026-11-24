@@ -50,6 +50,7 @@ enum DS {
 final class TenFoot: ObservableObject {
     @Published private(set) var on = false
     @Published fileprivate(set) var screenScale: CGFloat = 1
+    @Published fileprivate(set) var overscan = UIEdgeInsets.zero
     let native: Bool   // laid out at the window's own size with sizes times k (the picker), not on the 1920 x 1080 canvas scaled (the launcher)
     init(native: Bool = false, onTV: Bool = false, screenScale: CGFloat = 1) {
         self.native = native
@@ -88,6 +89,8 @@ private struct TenFootProbe: UIViewRepresentable {
                 guard let self, let w, self.window === w else { return }
                 if let t {
                     if t.screenScale != scale { t.screenScale = scale }
+                    let insets = now ? w.windowScene?.screen.overscanCompensationInsets ?? .zero : .zero
+                    if t.overscan != insets { t.overscan = insets }
                     if t.onTV != now { t.onTV = now }
                 }
                 guard let vc = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
@@ -107,10 +110,6 @@ struct TenFootStage: ViewModifier {
     let on: Bool
     var screenScale: CGFloat = 1
     var native = false
-    // Reserve five percent on each edge for displays that crop the HDMI picture.
-    static func safeInsets(_ size: CGSize, onTV: Bool) -> (x: CGFloat, y: CGFloat) {
-        onTV ? (size.width * 0.05, size.height * 0.05) : (0, 0)
-    }
     static func scale(_ size: CGSize) -> CGFloat { max(0.5, min(size.width / 1920, size.height / 1080)) }
     func body(content: Content) -> some View {
         // Always the same structure (scale 1 on the iPad), so the screen's own state and its onAppear do not start over when it moves to the TV
@@ -139,18 +138,13 @@ extension View {
 struct BackToTVButton: View {
     @State private var waiting = frontIosTvWaiting() != 0
     @Environment(\.uiK) private var k
-    @Environment(\.tenFoot) private var tenFoot   // on the iPad only: the TV looks the same in both modes, its footer's Home hint switches
+    @Environment(\.tenFoot) private var tenFoot
     var body: some View {
         Group {
             if waiting && !tenFoot {
                 Button { frontIosBackToTv() } label: {
-                    HStack(spacing: 10) {
-                        Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.ds(.headline, k: k))
-                        // a controller's Home (Xbox, − and + together, the phone page's ⌂) switches too, before the game (front_ios.m)
-                        Text("Home").font(.ds(.caption, .bold, k: k)).padding(.horizontal, 6 * k).frame(minHeight: 22 * k)
-                            .background(RoundedRectangle(cornerRadius: DS.chipRadius * k, style: .continuous).fill(Color.white.opacity(0.22)))
-                    }
-                    .foregroundStyle(.white)
+                    Label(tr("主機模式", "Console mode"), systemImage: "tv").font(.ds(.headline, k: k))
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 14 * k).padding(.vertical, 10 * k)
                         .background(RoundedRectangle(cornerRadius: 12 * k, style: .continuous).fill(DS.accent))
                 }
@@ -518,6 +512,16 @@ private final class PickerModel: PregamePanels {
     var count: Int { games.count + 1 }
     func game(_ i: Int) -> PickerGame? { games.indices.contains(i - 1) ? games[i - 1] : nil }
     var start: (PickerGame) -> Void = { _ in }
+    func returnToPairing() {
+        stopRepeat()
+        padsOpen = false
+        settingsOpen = false
+        confirmingExit = false
+        picked = nil
+        gridOpen = false
+        pos = 0
+        Self.lastPicked = nil
+    }
     func move(_ d: Int) { if !starting { pos += d } }
     func showGrid(_ on: Bool) {
         guard !starting, !reorderingGames, !games.isEmpty, on != gridOpen else { return }
@@ -1173,6 +1177,7 @@ private struct GameGrid: View {
 private struct PickerSettingsCard: View {
     @ObservedObject var m: PregamePanels
     let k: CGFloat
+    let onTV: Bool
     @State private var volume = pickerVolume()
     @State private var outputs = pickerOutputs()
 
@@ -1191,7 +1196,7 @@ private struct PickerSettingsCard: View {
                             .font(.ds(.headline, .semibold, k: k))
                         Spacer()
                         KeyHint(key: "A", text: volume == 0 ? tr("恢復音量", "Unmute") : tr("靜音", "Mute"))
-                            .font(.ds(.footnote, k: k))
+                            .font(.ds(.body, .semibold, k: k))
                     }
                     Slider(value: Binding(get: { volume }, set: {
                         m.setting = 0
@@ -1220,7 +1225,7 @@ private struct PickerSettingsCard: View {
             }
         }
         .padding(22 * k)
-        .frame(maxWidth: 510 * k)
+        .frame(maxWidth: (onTV ? 660 : 550) * k)
         .foregroundStyle(.white)
         .background(DS.card, in: RoundedRectangle(cornerRadius: DS.cardRadius * k))
         .overlay { RoundedRectangle(cornerRadius: DS.cardRadius * k).strokeBorder(DS.hairline).allowsHitTesting(false) }
@@ -1235,7 +1240,7 @@ private struct PickerSettingsCard: View {
         HStack(spacing: 10 * k) {
             Label(title, systemImage: icon)
             Spacer(minLength: 4 * k)
-            if let detail { Text(detail).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8) }
+            if let detail { Text(detail).font(.ds(.title3, .semibold, k: k)).lineLimit(1).minimumScaleFactor(0.85) }
         }
         .font(.ds(.headline, .semibold, k: k)).lineLimit(1)
         .padding(.horizontal, 14 * k).padding(.vertical, 12 * k)
@@ -1265,10 +1270,10 @@ struct PregamePanelsView: View {
             } else if m.settingsOpen {
                 Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { m.closeSettings() }
                     .transition(.opacity)
-                let settingsScale = onTV ? k * 1.42 : k
+                let settingsScale = onTV ? min(k * 1.23, viewport.width / 720) : k
                 ViewThatFits(in: .vertical) {
-                    PickerSettingsCard(m: m, k: settingsScale)
-                    ScrollView { PickerSettingsCard(m: m, k: settingsScale).frame(maxWidth: .infinity) }
+                    PickerSettingsCard(m: m, k: settingsScale, onTV: onTV)
+                    ScrollView { PickerSettingsCard(m: m, k: settingsScale, onTV: onTV).frame(maxWidth: .infinity) }
                         .scrollBounceBehavior(.basedOnSize)
                 }
                 .frame(maxHeight: max(1, viewport.height - 48 * k))
@@ -1276,7 +1281,7 @@ struct PregamePanelsView: View {
                 .transition(DS.cardIn)
             }
         }
-        .dynamicTypeSize(onTV ? .xLarge ... .xLarge : .xSmall ... .accessibility5)
+        .dynamicTypeSize(onTV ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)
     }
 }
 
@@ -1298,8 +1303,8 @@ private struct PickerView: View {
     var body: some View {
         GeometryReader { g in
             let k = tv.on ? TenFootStage.scale(g.size) : 1   // the TV's size over 1920 x 1080 (the stage gives the same k to the views inside)
-            let inset = TenFootStage.safeInsets(g.size, onTV: tv.on)
-            let contentWidth = max(1, g.size.width - 2 * inset.x)
+            let inset = tv.overscan
+            let contentWidth = max(1, g.size.width - inset.left - inset.right)
             let side = tv.on ? min(g.size.height * 0.42, contentWidth / 3.6) : min(g.size.height * 0.36, g.size.width / 4.4, 300)   // ten-foot: fewer, larger tiles
             let gap = side * 0.14
             let current = m.game(m.focus)
@@ -1313,7 +1318,7 @@ private struct PickerView: View {
                     } else {
                         Group {
                             Spacer(minLength: 0)
-                            row(width: contentWidth, side: side, gap: gap)
+                            row(width: g.size.width, side: side, gap: gap)
                             details(current, k).padding(.top, 22 * k)
                             Spacer(minLength: 0)
                         }
@@ -1322,7 +1327,8 @@ private struct PickerView: View {
                     footer(k).padding(.horizontal, 32 * k).padding(.bottom, 22 * k)
                         .padding(.top, m.gridOpen ? 12 * k : 0)
                 }
-                .frame(width: contentWidth, height: max(1, g.size.height - 2 * inset.y))
+                .frame(width: contentWidth, height: max(1, g.size.height - inset.top - inset.bottom))
+                .offset(x: (inset.left - inset.right) / 2, y: (inset.top - inset.bottom) / 2)
                 .animation(DS.pop, value: m.gridOpen)
                 PregamePanelsView(m: m, pads: pads, players: players, viewport: g.size, k: k, onTV: tv.on)
             }
@@ -1337,6 +1343,12 @@ private struct PickerView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { input($0.userInfo) } }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPhonePickerHome"))) { _ in
+            guard !mirror, !m.starting, !m.reorderingGames else { return }
+            held?.task.cancel()
+            held = nil
+            m.returnToPairing()
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPadsChanged"))) { _ in
             held?.task.cancel()
             held = nil
@@ -1528,6 +1540,8 @@ private struct PickerView: View {
         }
     }
 }
+
+func backToPairing() { PickerModel.kept?.returnToPairing() }
 
 // Shows the picker over the root view controller; once a game is chosen and main.m has it set up, the picker goes away and done runs.
 // Shown again when the launcher goes back to the game list (front_ios.m)

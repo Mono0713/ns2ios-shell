@@ -370,6 +370,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/fork"
           make -C dm/host/tests GAME=0000000000000000 build/t_hid
           dm/host/tests/build/t_hid
+          PYTHONPATH=dm/ios/tests python3 -m unittest test_phone_pads.PhoneMenuAuthorityTests test_phone_pads.PhonePrimaryRestoreTests test_phone_pads.PhonePadsTests.test_embedded_page_is_current
 
       - name: Build the shell
         env:

@@ -508,9 +508,9 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 
 ### Vertex storage writes with rasterizer discard
 
-- **Symptom:** character meshes send large polygons across the picture, and the preceding vertex-only draws log `draw skipped: rasterizer discard`.
+- **Symptom:** character meshes send large polygons across the picture. The preceding draws log `draw skipped: rasterizer discard` or Metal rejects the vertex-only pipeline with `RasterizationEnabled is false but the vertex shader's return type is not void`.
 - **Cause:** rasterizer discard suppresses fragments, but the vertex shader still runs and can write to storage buffers. The host skipped the draw whenever transform feedback was inactive.
-- **Fix:** direct point draws with vertex shader writes use an attachment-free render encoder and a vertex-only pipeline with rasterization disabled. The regular storage bindings track the writes, and the encoder boundary makes them visible to subsequent draws.
+- **Fix:** direct point draws with vertex shader writes run the original vertex function against a private one-pixel scratch attachment, whose contents are discarded. This supports existing libraries that return a raster output. The game's attachments stay untouched, and its storage bindings receive the writes for subsequent draws.
 - **Found on:** [Super Mario Party Jamboree](../../dm/games/0100965017338000/README.md#rendering). Two 194-point blend-shape jobs write Yoshi's face positions for the meshes that sample them.
 
 ### Helper encoders end the open copy encoder first

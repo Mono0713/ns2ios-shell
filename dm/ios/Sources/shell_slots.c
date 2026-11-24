@@ -8,7 +8,6 @@
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pad_slots g_slots;
-static int g_primary_reserved;   // P1 disconnected. Keep the vacancy for that holder or an explicit move into P1.
 static shell_slot_info g_info[DM_PLAYERS];
 static unsigned char g_joyright[DM_PLAYERS];
 static void (*g_moved[SHELL_SLOT_KINDS])(const void *, int, int);
@@ -29,9 +28,8 @@ static void publish_slots(void) {
 }
 static int take(const void *owner, const char *name, int kind, const char *label, int joyright) {
     pthread_mutex_lock(&g_mu);
-    int first = g_primary_reserved && (!name || strcmp(g_slots.last[0], name)) ? 1 : 0;
+    int first = !g_slots.owner[0] && g_slots.last[0][0] && (!name || strcmp(g_slots.last[0], name)) ? 1 : 0;
     int p = pad_slot_take_from(&g_slots, owner, name, first);
-    if (p == 0) g_primary_reserved = 0;
     if (p >= 0 && g_info[p].kind != kind) g_info[p].xbox = 0;   // a new holder starts with the Switch layout until its own choice is set (shell_players.m)
     if (p >= 0) {
         g_info[p].kind = kind;
@@ -62,8 +60,6 @@ int shell_slot_set_joyright(const void *owner, int joyright) {
 int shell_slot_free(const void *owner) {
     pthread_mutex_lock(&g_mu);
     int p = pad_slot_free(&g_slots, owner);
-    if (p == 0) g_primary_reserved = g_slots.last[0][0] != '\0';
-    if (!pad_slot_mask(&g_slots)) g_primary_reserved = 0;
     if (p >= 0) { g_info[p].kind = SHELL_SLOT_NONE; g_info[p].xbox = 0; g_joyright[p] = 0; }
     publish_slots();
     pthread_mutex_unlock(&g_mu);
@@ -91,6 +87,16 @@ int shell_slot_menu_player(int p) {
     pthread_mutex_unlock(&g_mu);
     return player;
 }
+void shell_slot_restore_primary(const char *name) {
+    pthread_mutex_lock(&g_mu);
+    if (!g_slots.owner[0]) snprintf(g_slots.last[0], sizeof g_slots.last[0], "%s", name ? name : "");
+    pthread_mutex_unlock(&g_mu);
+}
+void shell_slot_primary_name(char name[64]) {
+    pthread_mutex_lock(&g_mu);
+    memcpy(name, g_slots.last[0], sizeof g_slots.last[0]);
+    pthread_mutex_unlock(&g_mu);
+}
 void shell_slots_list(shell_slot_info out[]) {
     pthread_mutex_lock(&g_mu);
     for (int i = 0; i < DM_PLAYERS; i++) {
@@ -114,7 +120,6 @@ int shell_slot_swap(int a, int b) {
     if (a == 0 && !oa && ob) g_slots.last[b][0] = '\0';
     if (b == 0 && !ob && oa) g_slots.last[a][0] = '\0';
     g_slots.owner[a] = ob; g_slots.owner[b] = oa;
-    if (g_slots.owner[0]) g_primary_reserved = 0;
     shell_slot_info t = g_info[a]; g_info[a] = g_info[b]; g_info[b] = t;
     void (*ma)(const void *, int, int) = oa ? g_moved[g_info[b].kind] : NULL, (*mb)(const void *, int, int) = ob ? g_moved[g_info[a].kind] : NULL;
     unsigned char joyright = g_joyright[a]; g_joyright[a] = g_joyright[b]; g_joyright[b] = joyright;

@@ -591,7 +591,15 @@ void front_ios_back_to_picker(void) {
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
     if (self.fps) {   // the game picture's top-left corner, inside the picture, so it reads as part of the game view rather than floating in the black bar
-        CGRect g = self.game.frame; self.fps.frame = CGRectMake(CGRectGetMinX(g) + 8, CGRectGetMinY(g) + 8, 60, 20);
+        CGRect g = self.game.frame;
+        BOOL external = self.stage.window == g_tv && g_tv != nil;
+        CGFloat unit = external ? MIN(g.size.width / 1920, g.size.height / 1080) : 1;
+        CGFloat font = external ? MAX(16, 25 * unit) : 14;
+        CGFloat pad = MAX(8, 10 * unit);
+        UIEdgeInsets safe = external ? self.stage.window.windowScene.screen.overscanCompensationInsets : self.stage.safeAreaInsets;
+        self.fps.font = [UIFont monospacedDigitSystemFontOfSize:font weight:UIFontWeightSemibold];
+        self.fps.layer.cornerRadius = font * 0.4;
+        self.fps.frame = CGRectMake(MAX(CGRectGetMinX(g), safe.left) + pad, MAX(CGRectGetMinY(g), safe.top) + pad, font * 5, font * 1.65);
     }
 }
 // The game's picture on the TV while one is connected (its window made now), else on the iPad under the touch controls. The Metal layer itself moves with its view,
@@ -998,7 +1006,7 @@ static UILabel *front_ios_fps_label(void) {
     if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
     UILabel *l = [UILabel new];
     l.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
-    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
+    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.72]; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
     l.text = @"-- fps";
     // The game's own frames (hle_nvn.c dm_nvn_frame_count), not the presents: with present_interval display a 30 fps game is presented every 60 Hz tick, and
     // counting presents showed 60. A Vulkan or GL game has no NVN frame count, so presents are counted for it
@@ -1275,8 +1283,10 @@ static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.vie
     g_tv_scene.screen.overscanCompensation = UIScreenOverscanCompensationNone;
     CGSize sz = g_tv_scene.screen.bounds.size;
     UIScreen *screen = g_tv_scene.screen;
+    UIEdgeInsets safe = screen.overscanCompensationInsets;
     LOG("front end: TV connected (%.0fx%.0f points, scale %.1f, screen reports up to %ld Hz)",
         sz.width, sz.height, screen.nativeScale, (long)screen.maximumFramesPerSecond);
+    LOG("front end: TV overscan insets %.0f top, %.0f left, %.0f bottom, %.0f right", safe.top, safe.left, safe.bottom, safe.right);
     mode_transition(^{ [g_root placeStage]; });   // the TV's window now: the picker, the launcher or the game's picture moves there
     tv_sample_refresh(g_tv_scene);
     home_menu_relayout();  // a menu already up moves to the TV
@@ -1625,7 +1635,7 @@ static UIView *home_menu_make(UIView *root) {
     CGSize viewport = root.bounds.size;
     CGFloat fit = MIN(viewport.width * 0.84 / W, viewport.height * 0.86 / H);
     CGFloat tvType = MAX(0.55, MIN(viewport.width / 1920, viewport.height / 1080)) * 1.65;
-    CGFloat unit = onTV && fit > 0 ? MIN(tvType, fit) : 1;
+    CGFloat unit = MIN(onTV ? tvType : 1.1, fit > 0 ? fit : 1);
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W * unit, H * unit)];
     card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     card.layer.cornerRadius = 26 * unit; card.layer.cornerCurve = kCACornerCurveContinuous;

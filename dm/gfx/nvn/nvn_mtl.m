@@ -4958,7 +4958,6 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
     if (vs->layer_out && k->fsfn != GEO_MARK) d.inputPrimitiveTopology = vs->geo_output == 1 ? MTLPrimitiveTopologyClassPoint : vs->geo_output == 6 ? MTLPrimitiveTopologyClassLine : MTLPrimitiveTopologyClassTriangle;
     if (k->fsfn == AMP_MARK) d.maxVertexAmplificationCount = 2;   // a slice-merged pass's pipeline: the view mapping's layer offset applies (see g_sm_plan)
     if (k->fsfn == TF_MARK || k->fsfn == GEO_MARK) { d.vertexFunction = k->fsfn == GEO_MARK ? vs->geo_fn : vs->tf_fn; d.fragmentFunction = nil; d.rasterizationEnabled = NO; }   // transform feedback capture (tf_draw)
-    if (k->fsfn == DISCARD_MARK) d.rasterizationEnabled = NO;
     d.rasterSampleCount = k->samples ? k->samples : 1;
     d.alphaToCoverageEnabled = k->a2c;
     for (int i = 0; i < 8; i++) {
@@ -8513,23 +8512,64 @@ static int mdx_next(const p_draw *dw, const p_draw_idx *di) {
 // these while its frame target is bound; a pass of that target would load and store it for nothing), and stores the outputs at TF_SLOT + b. Each draw writes from the buffer's current offset on.
 // Only plain array draws are captured (all this game makes); the encoder's barriers order the writes before the draws that read them
 enum { TF_SLOT = 8 };   // = dmsh_build.py TF_SLOT
+// Existing translated libraries return a raster output even for vertex jobs that
+// only write storage. Metal requires a void entry when rasterization is disabled.
+// Give the original entry a private, throwaway target so no fragments can reach
+// the game's attachments and its storage writes still execute.
+static id<MTLTexture> g_discard_target;
+static id<MTLFunction> g_discard_fragment;
+static BOOL discard_target_prepare(void) {
+    if (g_discard_target) return YES;
+    static BOOL tried;
+    if (tried) return NO;
+    tried = YES;
+    NSError *e = nil;
+    id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nfragment half4 dm_discard_fragment() { return half4(0); }\n" options:nil error:&e];
+    NSString *name = @"dm_discard_fragment";
+    g_discard_fragment = fn4_note([lib newFunctionWithName:name], lib, name, nil);
+    if (!g_discard_fragment) {
+        MLOG("[RED] cannot compile the rasterizer-discard scratch fragment: %s", e ? e.localizedDescription.UTF8String : "entry missing");
+        return NO;
+    }
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm width:1 height:1 mipmapped:NO];
+    d.usage = MTLTextureUsageRenderTarget;
+    d.storageMode = MTLStorageModePrivate;
+    g_discard_target = [g_dev newTextureWithDescriptor:d];
+    if (!g_discard_target) { MLOG("[RED] cannot allocate the rasterizer-discard scratch target"); return NO; }
+    res_add(g_discard_target);
+    return YES;
+}
 static __unsafe_unretained id<MTLRenderPipelineState> vertex_only_pso(NvShader *vs, const void *mode) {
-    pso_key k; static const uint32_t cf[8]; pso_key_fill(&k, vs, nil, cf, 0, 0, 1, 0); k.fsfn = mode;
+    BOOL discard = mode == DISCARD_MARK;
+    uint32_t cf[8] = {discard ? MTLPixelFormatR8Unorm : MTLPixelFormatInvalid};
+    pso_key k; pso_key_fill(&k, vs, nil, cf, 0, 0, 1, 0); k.fsfn = mode;
     k.a2c = 0;
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
     if (cached) return cached;
     if (hm_get_id(&g_pso_fail, &k)) return nil;
-    NSError *e = nil; id<MTLRenderPipelineState> ps = pso_build(pso_desc(&k, vs, nil, nil, 0), &e);
+    MTLRenderPipelineDescriptor *desc = pso_desc(&k, vs, nil, discard ? g_discard_fragment : nil, 0);
+    if (discard) {
+        desc.inputPrimitiveTopology = MTLPrimitiveTopologyClassPoint;
+        desc.colorAttachments[0].blendingEnabled = NO;
+        desc.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+    }
+    NSError *e = nil; id<MTLRenderPipelineState> ps = pso_build(desc, &e);
     if (!ps) { MLOG("[RED] failed to create the vertex-only pipeline (vertex %s): %s", vs->key, e.localizedDescription.UTF8String); hm_put_id(&g_pso_fail, &k, NSNull.null); return nil; }
+    if (discard) MLOG("shader %s: rasterizer-discard storage pipeline ready", vs->key);
     hm_put_id(&g_pso, &k, ps);
     return ps;
 }
-static id<MTL4RenderCommandEncoder> vertex_only_begin(id<MTLRenderPipelineState> ps) {
+static id<MTL4RenderCommandEncoder> vertex_only_begin(id<MTLRenderPipelineState> ps, id<MTLTexture> target) {
     rp_end();
     ubd_land();
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     MTL4RenderPassDescriptor *d = [MTL4RenderPassDescriptor new];
     d.renderTargetWidth = 1; d.renderTargetHeight = 1; d.defaultRasterSampleCount = 1;
+    if (target) {
+        d.colorAttachments[0].texture = target;
+        d.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        d.colorAttachments[0].storeAction = MTLStoreActionDontCare;
+    }
     id<MTL4RenderCommandEncoder> en = enc_r_begin(d);
     enc_r_pso(en, ps);
     args_dirty_all();
@@ -8550,10 +8590,10 @@ static void discard_draw(NvShader *vs, const p_draw *dw) {
         RED_ONCE(121, "rasterizer discard with vertex writes outside a direct point draw (vertex %s)", vs->key);
         return;
     }
-    if (dw->count <= 0) return;
+    if (dw->count <= 0 || !discard_target_prepare()) return;
     id<MTLRenderPipelineState> ps = vertex_only_pso(vs, DISCARD_MARK);
     if (!ps) return;
-    id<MTL4RenderCommandEncoder> en = vertex_only_begin(ps);
+    id<MTL4RenderCommandEncoder> en = vertex_only_begin(ps, g_discard_target);
     bind_vbufs(en);
     vconv_bind(en, vs, 0, dw, NULL);
     encode_args(en, vs, 0, 1);
@@ -8581,7 +8621,7 @@ static void draw_without_rasterization(NvProg *pr, const p_draw *dw, const p_dra
     }
     __unsafe_unretained id<MTLRenderPipelineState> ps = vertex_only_pso(vs, TF_MARK);
     if (!ps) return;
-    id<MTL4RenderCommandEncoder> en = vertex_only_begin(ps);
+    id<MTL4RenderCommandEncoder> en = vertex_only_begin(ps, nil);
     bind_vbufs(en);
     vconv_bind(en, vs, 1, dw, NULL);
     encode_args(en, vs, 0, 1);

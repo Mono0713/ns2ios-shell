@@ -60,6 +60,7 @@ General changes first needed here; each applies to every game:
 ## Open
 
 - **Current (2026-11-05):** the translator deletes 6 bindless accesses in 3 shaders (3 pixel; texture2D 6), whose results read 0: `061eb3acaed2678b` `99e839ad6339f567` `d9bc8141191909f2`. The cause is not traced, and whether a route reaches them is not known. [Losses a shader build reports](../../../docs/reference/shaders.md#losses-a-shader-build-reports).
+- iPad build 2026.1125.0000 selected the discard jobs but Metal rejected their non-void vertex entry, including `031c6c0e475e171c_b` and `6be6273b0719b37c_b`. The scratch target allows these jobs to use their original compiled shaders. The same character selections and gameplay still need visual verification on iPad.
 - Only one board and one minigame were played; the other boards, modes (Koopathlon, Bowser Kaboom Squad, Rhythm Kitchen, …) and most minigame NROs were not loaded. Motion minigames were turned off at the prompt.
 - Only the 2.3.0 build (`v458752`) is registered.
 - iPhone: not built, not installed, not tested.

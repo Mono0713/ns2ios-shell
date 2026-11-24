@@ -49,6 +49,7 @@ int main(int argc, char **argv) {
     if (argc < 2) return 2;
     char tmp[1024]; snprintf(tmp, sizeof tmp, "%s.tmp", argv[1]);
     static int controllers[DM_PLAYERS];
+    if (argc > 3) shell_slot_restore_primary(argv[3]);
     for (int i = 0; argc > 2 && i < atoi(argv[2]) && i < DM_PLAYERS; i++) shell_slot_take(&controllers[i], "Xbox Wireless Controller", SHELL_SLOT_CONTROLLER, "Xbox Wireless Controller");
     dm_haptics_init(no_output, 1);
     phone_pads_start();

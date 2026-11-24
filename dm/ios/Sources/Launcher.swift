@@ -947,9 +947,11 @@ private struct LauncherView: View {
     var body: some View {
         GeometryReader { geometry in
             let k = tv.on ? TenFootStage.scale(geometry.size) : 1   // GamePicker.swift: the TV's size over 1920 x 1080 (the views inside get it as uiK)
-            let inset = TenFootStage.safeInsets(geometry.size, onTV: tv.on)
-            let width = max(1, geometry.size.width - 2 * inset.x)
-            let height = max(1, geometry.size.height - 2 * inset.y)
+            let inset = tv.overscan
+            let horizontalGutter = tv.on ? 24 * k : 0
+            let verticalGutter = tv.on ? 16 * k : 0
+            let width = max(1, geometry.size.width - inset.left - inset.right - 2 * horizontalGutter)
+            let height = max(1, geometry.size.height - inset.top - inset.bottom - 2 * verticalGutter)
             HStack(spacing: 0) {
                 VStack(spacing: 16 * k) {
                     Spacer(minLength: 0)
@@ -1044,6 +1046,7 @@ private struct LauncherView: View {
                 }
                 .frame(width: width * 2 / 3, height: height)
             }
+            .offset(x: (inset.left - inset.right) / 2, y: (inset.top - inset.bottom) / 2)
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .background { backdrop }
@@ -1055,7 +1058,7 @@ private struct LauncherView: View {
         .accessibilityHidden(nav.hasPanel || panels.panelOpen)
         .overlay {
             GeometryReader { geometry in
-                let k = tv.on ? TenFootStage.scale(geometry.size) : 1
+                let k = tv.on ? min(TenFootStage.scale(geometry.size), geometry.size.width / 850) : 1
                 if let confirmation = nav.saveConfirmation {
                     saveConfirmationPanel(confirmation, k: k)
                 } else if let selection = nav.saveSelection {
@@ -1067,9 +1070,18 @@ private struct LauncherView: View {
                         .environmentObject(activity)
                 }
             }
+            .dynamicTypeSize(tv.on ? .accessibility1 ... .accessibility1 : .xSmall ... .accessibility5)
             .allowsHitTesting(!mirror && (nav.hasPanel || panels.panelOpen))
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMLauncherInput"))) { if !mirror { navInput($0.userInfo) } }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPhonePickerHome"))) { _ in
+            guard !mirror, let back else { return }
+            held?.task.cancel()
+            held = nil
+            panels.stopRepeat()
+            backToPairing()
+            back()
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMPadsChanged"))) { _ in
             held?.task.cancel()
             held = nil
@@ -1226,17 +1238,20 @@ private struct LauncherView: View {
         ZStack {
             Color.black.opacity(0.55).ignoresSafeArea().onTapGesture(perform: cancel).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 14 * k) {
-                Text(title).font(.ds(.headline, .bold, k: k)).accessibilityAddTraits(.isHeader)
+                Text(title).font(.ds(.title2, .bold, k: k)).accessibilityAddTraits(.isHeader)
                 ScrollViewReader { scroll in
                     ScrollView {
-                        VStack(spacing: 4 * k) {
+                        VStack(spacing: 6 * k) {
                             ForEach(options) { option in
                                 HStack {
                                     Text(label(option))
                                     Spacer()
                                     if option.id == active { Image(systemName: "checkmark").accessibilityLabel(activeLabel) }
                                 }
-                                .padding(10 * k)
+                                .font(.ds(.body, .semibold, k: k))
+                                .padding(.horizontal, 14 * k)
+                                .padding(.vertical, 12 * k)
+                                .frame(minHeight: (tv.on ? 48 : 44) * k)
                                 .background(option.id == selected ? DS.accent.opacity(0.45) : rowPlate,
                                             in: RoundedRectangle(cornerRadius: 8 * k))
                                 .launcherTap(label(option)) { choose(option) }
@@ -1244,17 +1259,17 @@ private struct LauncherView: View {
                             }
                         }
                     }
-                    .frame(maxHeight: 240 * k)
+                    .frame(maxHeight: (tv.on ? 460 : 320) * k)
                     .onChange(of: selected, initial: true) { _, id in
                         if let id { scroll.scrollTo(id) }
                     }
                 }
-                Text(tr("Cancel")).foregroundStyle(Color.accentColor).padding(10 * k)
+                Text(tr("Cancel")).font(.ds(.body, .semibold, k: k)).foregroundStyle(Color.accentColor).padding(10 * k)
                     .launcherTap(tr("Cancel"), perform: cancel)
             }
             .padding(20 * k)
-            .frame(maxWidth: (tv.on ? 575 : 420) * k)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20 * k))
+            .frame(maxWidth: (tv.on ? 720 : 500) * k)
+            .background(DS.card, in: RoundedRectangle(cornerRadius: 20 * k))
             .padding(20 * k)
         }
     }

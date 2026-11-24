@@ -81,7 +81,7 @@
   #flash.on { animation:flash .8s ease-out; }
   @keyframes flash { 0%, 30% { opacity:.75; } 100% { opacity:0; } }
   .joyright-only, #designer { display:none; }
-  body.joyright :is([data-k="ls"], [data-k="dpad"], [data-k="l"], [data-k="zl"], [data-k="minus"], [data-k="abxy"], #face) { display:none; }
+  body.joyright :is([data-k="ls"], [data-k="dpad"], [data-k="l"], [data-k="zl"], [data-k="abxy"], #face) { display:none; }
   body.joyright .joyright-only { display:block; }
   #top, body.editing #bar { max-width:calc(100% - 12px); justify-content:center; }
   body.joyright #top { width:min(calc(100% - 12px), 550px); }
@@ -106,7 +106,9 @@
   .joy-face [data-bit="3"] { left:calc(50% - 1.5 * var(--joy-button)); top:calc(47cqh + var(--joy-button)); }
   .joy-face [data-bit="0"] { left:calc(50% + var(--joy-button) / 2); top:calc(47cqh + var(--joy-button)); }
   .joy-face [data-bit="1"] { left:calc(50% - var(--joy-button) / 2); top:calc(47cqh + 2 * var(--joy-button)); }
-  body.joyright [data-k="plus"] .b { left:5cqw; top:calc(20cqh + 8px) !important; width:42px !important; height:42px !important; }
+  body.joyright :is([data-k="plus"], [data-k="minus"]) .b { top:calc(20cqh + 8px) !important; width:42px !important; height:42px !important; }
+  body.joyright [data-k="plus"] .b { left:5cqw; }
+  body.joyright [data-k="minus"] .b { left:calc(61.5cqw - 50px) !important; }
   body.joyright [data-k="r"] .b { left:5cqw; top:9cqh !important; }
   body.joyright [data-k="zr"] .b { top:9cqh !important; }
   body.joyright [data-k="rs-click"] .b { top:calc(20cqh + 8px); }
@@ -339,7 +341,7 @@
   }
   // The button layout from the phone itself: the iPad keeps it for this phone and answers with an assign, which redraws the buttons
   $('#face').addEventListener('click', () => { if (up()) put(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
-  // The iPad's menu (continue, change games), as a controller's Home button opens it
+  // Return to the QR tile before play, or open the pause menu during play.
   $('#home').addEventListener('click', () => { if (up()) put(JSON.stringify({ t: 'home' })); });
   $('#rejoin').addEventListener('click', () => {
     if (replaced) { replaced = false; backoff = 500; if (up()) hello(); else connect(); return; }   // take the player back to this page
@@ -534,6 +536,7 @@
     },
     joyright: {
       plus: { x: 0.565, y: -0.1336, s: 1 },
+      minus: { x: 0, y: -0.1336, s: 1 },
       'rs-click': { x: 0.008, y: -0.135, s: 1 },
       zr: { x: -0.014, y: 0.076, s: 1 },
       r: { x: 0.756, y: 0.202, s: 1 },
@@ -565,6 +568,7 @@
   const legacyPro = designer ? {} : cleanLayout(parseJSON(readStorage('padLayout')));
   let layouts = presetLayouts(parseJSON(readStorage(localKey))) ||
     { pro: Object.keys(legacyPro).length ? legacyPro : cleanLayout(defaultLayouts.pro), joyright: cleanLayout(defaultLayouts.joyright) };
+  layouts.joyright.minus ??= { ...defaultLayouts.joyright.minus };
   // Recenter untouched defaults saved by earlier builds. Keep each piece the player moved or resized.
   for (const [key, oldX] of [['ls', 0.031], ['abxy', -0.020]]) {
     const saved = layouts.pro[key], position = defaultLayouts.pro[key];

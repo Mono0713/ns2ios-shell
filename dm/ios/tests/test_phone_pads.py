@@ -103,6 +103,7 @@ class PostPhone:
 
 class PhonePadsServer(unittest.TestCase):
     controllers = 0   # players physical controllers hold before any phone connects
+    primary = ''      # saved P1 restored before connected controllers are registered
     tls = False       # HTTPS too (phone_pads_tls_test.c with OpenSSL, a certificate made for the test)
 
     @classmethod
@@ -129,17 +130,26 @@ class PhonePadsServer(unittest.TestCase):
         r = subprocess.run([cc, '-std=gnu11', '-O1', '-Wall', '-Werror', '-Wno-unused-parameter', f'-I{cls.tmp}', f'-I{REPO / "dm/host"}', f'-I{SOURCES}', '-o', str(exe),
                             str(Path(__file__).with_name('phone_pads_check.c')), str(SOURCES / 'phone_pads.c'), str(SOURCES / 'shell_slots.c'), str(SOURCES / 'shell_motion.c'), str(REPO / 'dm/host/hle_haptics.c')] + extra + ['-lpthread', '-lm'], capture_output=True, text=True)
         if r.returncode: raise AssertionError(r.stdout + r.stderr)
-        cls.port = free_port()
-        cls.state_file = cls.tmp / 'state.json'
-        cls.proc = subprocess.Popen([str(exe), str(cls.state_file), str(cls.controllers)], env=dict(os.environ, DM_PHONE_PADS_PORT=str(cls.port), **env), stdin=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True)
+        cls.exe, cls.env = exe, env
+
+    def setUp(self):
+        self.port = free_port()
+        self.state_file = self.tmp / f'{self._testMethodName}.json'
+        self.proc = subprocess.Popen([str(self.exe), str(self.state_file), str(self.controllers), self.primary],
+                                     env=dict(os.environ, DM_PHONE_PADS_PORT=str(self.port), **self.env), stdin=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True)
+        self.addCleanup(self.stop_server)
         for _ in range(100):
-            if cls.state_file.exists(): break
+            if self.state_file.exists(): break
             time.sleep(0.02)
+
+    def stop_server(self):
+        self.proc.kill()
+        self.proc.wait()
+        self.proc.stdin.close()
 
     @classmethod
     def tearDownClass(cls):
-        cls.proc.kill(); cls.proc.wait()
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def launcher(self, line):   # what the launcher's player list does (shell_slots.h)
@@ -333,6 +343,26 @@ class PhoneMenuAuthorityTests(PhonePadsServer):
         for phone in (first, second, third):
             phone.close()
         self.assertEqual(self.host()['mask'], 0)
+
+
+class PhonePrimaryRestoreTests(PhonePadsServer):
+    controllers, primary = 2, 'saved-phone'
+
+    def test_restores_phone_primary_after_controllers_connect(self):
+        self.assertEqual(self.host()['mask'], 0b110)
+        self.assertEqual(self.host()['menu_players'][:3], [-1, 0, 0])
+        phone = Phone(self.port)
+        self.addCleanup(phone.close)
+        self.assertEqual(phone.hello(self.primary)['player'], 1)
+        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+        phone.close()
+        self.assertEqual(self.host()['menu_players'][:3], [-1, 0, 0])
+        self.launcher('swap 0 1')
+        self.assertEqual(self.host()['menu_players'][:3], [0, -1, 2])
+        phone = Phone(self.port)
+        self.addCleanup(phone.close)
+        self.assertEqual(phone.hello(self.primary)['player'], 2)
+        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
 
 
 class PhoneJoyconTests(PhonePadsServer):

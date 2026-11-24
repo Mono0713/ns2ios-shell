@@ -51,18 +51,23 @@ static int wanted_layout(int kind, const char *name, const char *label) {
 
 // ---- Player 1 drives the launcher (shell_slot_input: controllers here, phones on the phone server's thread) ----
 static atomic_int g_launcher;
+static NSString *const primary_key = @"DMPrimaryPlayerIdentity";
 static _Atomic uint64_t g_last_nav[DM_PLAYERS];   // each player's buttons, the left stick folded into the D-pad
 static _Atomic uint64_t g_last_active[DM_PLAYERS];   // when each player's row last lit up (ns)
-static void home_input(int p, BOOL shortcut) {   // any thread
+int front_ios_game_started(void);
+static void home_input(int p, BOOL shortcut, BOOL phone) {   // any thread
     dispatch_async(dispatch_get_main_queue(), ^{
         int a = shell_slot_menu_player(p);
         if (a < 0) return;
         if (a != p) LOG("player %d's Home counts as player 1's: nobody holds player 1", p + 1);
-        [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1), @"shortcut": @(shortcut)}];
+        if (phone && !front_ios_game_started()) {
+            if (a == 0) [NSNotificationCenter.defaultCenter postNotificationName:@"DMPhonePickerHome" object:nil];
+        } else {
+            [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @(a + 1), @"shortcut": @(shortcut)}];
+        }
     });
 }
-static void home_press(int p) { home_input(p, NO); }
-int front_ios_game_started(void);
+static void phone_home_press(int p) { home_input(p, NO, YES); }
 static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     const int32_t t = DM_STICK_MAX / 2;
     // − and + pressed together: Home, for a controller with no Home button the app gets (and a phone, besides its page's own button)
@@ -81,7 +86,7 @@ static void launcher_input(int p, uint64_t buttons, int32_t lx, int32_t ly) {
     if (ly < -t) buttons |= 1ull << B_DOWN;
     uint64_t old = atomic_exchange(&g_last_nav[p], buttons), pressed = buttons & ~old, released = old & ~buttons;
     if ((buttons & pm) == pm && front_ios_game_started()) {
-        if ((old & pm) != pm) home_input(p, YES);
+        if ((old & pm) != pm) home_input(p, YES, NO);
         pressed &= ~pm;
     }
     if (!atomic_load(&g_launcher) || !(pressed | released)) return;
@@ -184,7 +189,7 @@ static void pads_changed(GCController *gone) {   // a disconnect may still list 
             home.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL pressed) {
                 (void)b; (void)v; GCController *cc = wc; if (!pressed || !cc) return;
                 int hp = shell_slot_of((__bridge const void *)cc); if (hp < 0) return;
-                LOG("controller '%s' (player %d) pressed Home", cc.vendorName.UTF8String ?: "?", hp + 1); home_press(hp);
+                LOG("controller '%s' (player %d) pressed Home", cc.vendorName.UTF8String ?: "?", hp + 1); home_input(hp, NO, NO);
             };
         }
         motion_on(c);
@@ -287,7 +292,12 @@ static atomic_int g_post_pending;   // changes in a burst (a swap is two moves a
 static void slots_changed(void) {   // any thread (a phone joins on the server's)
     if (atomic_exchange(&g_post_pending, 1)) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        atomic_store(&g_post_pending, 0); post_players();
+        atomic_store(&g_post_pending, 0);
+        char primary[64]; shell_slot_primary_name(primary);
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        NSString *name = primary[0] ? @(primary) : nil;
+        if (name && ![name isEqualToString:[defaults stringForKey:primary_key]]) [defaults setObject:name forKey:primary_key];
+        post_players();
         [NSNotificationCenter.defaultCenter postNotificationName:@"DMPadsChanged" object:nil];   // DmGamepad.m: a phone that joined or left
     });
 }
@@ -332,12 +342,13 @@ static void command(NSDictionary *u) {
 
 void shell_players_start(void) {   // main.m, on the main thread, once
     g_pads = [NSMutableArray array]; g_removed = [NSMutableArray array]; g_removing = [NSMutableSet set]; g_motion_state = [NSMapTable strongToStrongObjectsMapTable];
+    shell_slot_restore_primary([NSUserDefaults.standardUserDefaults stringForKey:primary_key].UTF8String);
     shell_slots_handlers(SHELL_SLOT_CONTROLLER, on_moved, on_kick, on_layout);
     shell_slots_on_layout_request(layout_request);
     shell_slots_identify_handler(SHELL_SLOT_CONTROLLER, on_identify);
     shell_slots_on_change(slots_changed);
     shell_slots_on_input(launcher_input);
-    shell_slots_on_home(home_press);
+    shell_slots_on_home(phone_home_press);
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     for (NSNotificationName n in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
         [nc addObserverForName:n object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
