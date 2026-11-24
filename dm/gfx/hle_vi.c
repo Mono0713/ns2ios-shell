@@ -1,6 +1,8 @@
 // nn::vi (display layer): on a real device, the vi service is used to open the display, create a layer and get the native window handle; the handle is passed to NVN's window builder.
 // Host: returns host static objects; when hooking up Metal, the native window corresponds to the front end's CAMetalLayer (front_metal_layer()).
 #include "../host/hle.h"
+#include "nvn/nvn_obj.h"
+#include <pthread.h>
 #include <stdatomic.h>
 
 static struct { uint32_t magic; } g_display = {0x50534944}, g_layer = {0x5259414c};
@@ -47,9 +49,53 @@ uint64_t dm_nvn_frame_count(void);
 HLE_FORCE("_ZN2nn2vi20GetLatestFrameNumberEPmPKNS0_5LayerE", "the layer's latest frame number: the frames presented so far", Result, h_vi_FrameNo, uint64_t *out, const void *layer) {
     (void)layer; *out = dm_nvn_frame_count(); return RES_OK;
 }
-HLE_FORCE("_ZN2nn2vi16ListFrameHistoryEPNS0_9FrameInfoEiPKNS0_5LayerE", "the layer's frame history: none kept, 0 entries", int, h_vi_FrameHist, void *out, int n, const void *layer) {
-    (void)out; (void)layer; static int once; if (!once++) LOG("vi::ListFrameHistory (%d entries asked): the host keeps no frame history, 0 returned", n);
-    return 0;
+// SDK 20.5.15 reads eight 40-byte records, newest first. Unreal's viewport thread uses the
+// last presented frame to retire swap-chain fences, including during FlushRenderingCommands.
+enum { VI_HISTORY_LENGTH = 8 };
+typedef struct { uint64_t frame, ticket, queued_ns, presented_ns; } vi_frame_event;
+typedef struct { uint64_t state, frame, queued, presented, latched; } vi_frame_info;
+_Static_assert(sizeof(vi_frame_info) == 0x28, "SDK FrameInfo size");
+static vi_frame_event g_vi_history[VI_HISTORY_LENGTH];
+static pthread_mutex_t g_vi_history_lock = PTHREAD_MUTEX_INITIALIZER;
+void dm_vi_frame_queued(uint64_t frame, uint64_t ticket) {
+    pthread_mutex_lock(&g_vi_history_lock);
+    g_vi_history[frame % VI_HISTORY_LENGTH] = (vi_frame_event){frame, ticket, guest_ns(), 0};
+    pthread_mutex_unlock(&g_vi_history_lock);
+}
+
+static uint64_t vi_frame_ticks(uint64_t ns) {
+    return ns / 625 * 12 + ns % 625 * 12 / 625;   // Horizon's 19.2 MHz guest clock
+}
+
+HLE_FORCE("_ZN2nn2vi16ListFrameHistoryEPNS0_9FrameInfoEiPKNS0_5LayerE", "the layer's latest queued and presented frames", int, h_vi_FrameHist, void *out, int n, const void *layer) {
+    (void)layer;
+    if (!out) return VI_HISTORY_LENGTH;
+    if (n <= 0) return 0;
+    uint64_t done = mtl_present_done();
+    uint64_t newest = dm_nvn_frame_count();
+    uint64_t guest_now = guest_ns(), host_now = now_ns();
+    uint8_t *records = out;
+    int count = 0;
+    pthread_mutex_lock(&g_vi_history_lock);
+    for (uint64_t frame = newest; frame && newest - frame < VI_HISTORY_LENGTH && count < n; frame--) {
+        vi_frame_event *event = &g_vi_history[frame % VI_HISTORY_LENGTH];
+        if (event->frame != frame) continue;
+        if (!event->presented_ns && event->ticket <= done) {
+            // Count a frame once the present queue has retired it, even if the compositor
+            // dropped it or there is no drawable. Otherwise the guest can wait forever.
+            double time = event->ticket ? mtl_presented_time(event->ticket) : 0;
+            uint64_t presented = time > 0 ? (uint64_t)(time * 1e9) : host_now;
+            uint64_t elapsed = host_now > presented ? host_now - presented : 0;
+            uint64_t seen = guest_now > elapsed ? guest_now - elapsed : 0;
+            event->presented_ns = seen > event->queued_ns ? seen : event->queued_ns;
+            if (!event->presented_ns) event->presented_ns = 1;
+        }
+        uint64_t ticks = vi_frame_ticks(event->presented_ns);
+        vi_frame_info info = {event->presented_ns ? 2 : 1, frame, vi_frame_ticks(event->queued_ns), ticks, ticks};
+        memcpy(records + count++ * sizeof info, &info, sizeof info);
+    }
+    pthread_mutex_unlock(&g_vi_history_lock);
+    return count;
 }
 // Rhythm Heaven Groove (SDK 21) asks for the built-in panel's identity at start (main+0xa9a4); the SDK's version calls through the vi service object the host never made (SIGSEGV at +0x20).
 //   The game reads a u32 kind and, when it is 2 or more, 0x14 more bytes that it hands on; any other answer makes it hand on zeros. The host has no panel: an all-zero identifier, kind 0

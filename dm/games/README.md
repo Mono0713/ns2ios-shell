@@ -77,6 +77,7 @@ One row per profile; the notes are each profile's `README.md`.
 | [Mario Party Superstars](01006FE013472000/README.md) | `01006FE013472000` | 1.1.1 | 11.4.3 | NintendoWare Bezel Engine 1.55 | NVN |
 | [Mario vs. Donkey Kong](0100B99019412000/README.md) | `0100B99019412000` | 1.0.1 (cartridge base) | 15.3.0 | Nintendo (sead / agl / gsys) | NVN |
 | [Metroid Dread](010093801237C000/README.md) | `010093801237C000` | 2.1.0 | 11.4.3 | MercurySteam's engine | NVN |
+| [Minecraft Dungeons II](0100A7C01B792000/README.md) | `0100A7C01B792000` | 1.1.3.0 (bring-up) | — | Unreal Engine | NVN |
 | [Monster Hunter Rise](0100B04011742000/README.md) | `0100B04011742000` | 16.0.2 | 11.4.3 | Capcom's RE Engine | NVN |
 | [Monster Train 2](010051701FB46000/README.md) | `010051701FB46000` | 1.1.1 | 18.3.5 | Unity 2022.3.54f1 IL2CPP | NVN |
 | [NieR:Automata The End of YoRHa Edition](010056B015FE8000/README.md) | `010056B015FE8000` | 1.0.3 | 12.3.9 | PlatinumGames' engine | NVN |
@@ -92,6 +93,7 @@ One row per profile; the notes are each profile's `README.md`.
 | [Pokémon Shield](01008DB008C2C000/README.md) | `01008DB008C2C000` | 1.3.2 | 7.3.2 | Game Freak's engine (before Trinity) | NVN |
 | [Pokémon Sword](0100ABF008968000/README.md) | `0100ABF008968000` | 1.3.2 | 7.3.2 | Game Freak's engine (before Trinity) | NVN |
 | [Portal](01007BB017812000/README.md) | `01007BB017812000` | 1.0.3 | 13.3.0 | Valve's Source engine (28 NROs) | NVN |
+| [Rabbids Party of Legends](01008970149B0000/README.md) | `01008970149B0000` | 1.0.1 (bring-up) | — | Snowdrop | NVN |
 | [Raging Loop](010020400E1C2000/README.md) | `010020400E1C2000` | 1.0.0 (base) | 7.3.2 | Unity 2018.3.10f1 IL2CPP | NVN |
 | [Rhythm Heaven Groove](0100D9F01D474000/README.md) | `0100D9F01D474000` | 1.0.0 (base) | 21.4.0 | Nintendo's own 2D engine | NVN |
 | [ROMANCE OF THE THREE KINGDOMS 8 REMAKE](0100C2A01A730000/README.md) | `0100C2A01A730000` | 1.1.3 | 17.5.3 | Koei Tecmo's KTGL | NVN |
@@ -128,7 +130,7 @@ One row per profile; the notes are each profile's `README.md`.
 | `romfs_marker` | A path that must exist in the RomFS; empty checks the directory itself for a program without a data section (ANIMAL WELL) |
 | `zip_store` | Extensions the IPA stores without compressing |
 | `mem_reserve`, `mem_alias`, `mem_stack`, `app_pool` | Guest address-space partition and application pool (`hle_svc.c`) |
-| `app_pool_min_gb` | Optional minimum for the launcher's manual and automatic application pool, in GiB (`settings.py`, `LauncherSettings.swift`) |
+| `app_pool_min_gb` | Optional minimum for the launcher's manual and automatic application pool, in GiB (`settings.py`, `LauncherSettings.swift`). When it reaches the slider's maximum, the launcher keeps the exact packaged size and omits the control. |
 | `mem_used` | Memory `GetInfo(UsedMemorySize)` reports beside the heap (default `0x4000000`, 64 MB). `SetHeapSize` checks a request against the real size of the loaded modules, so a game that sizes its heap as total − used and has more than 64 MB of modules needs at least their size here. Hyrule Warriors: Age of Calamity: 66.6 MB of modules, so the default made `SetHeapSize(pool − 64 MB)` fail and `nnMain` return at once; it sets 72 MB. Cuphead: 80 MB of modules, 84 MB |
 | `sys_resource` | The system resource size the NPDM declares (main.npdm META +0x14), which `GetInfo(TotalSystemResourceSize)` reports (`hle_svc.c`). The SDK's `IsVirtualAddressMemoryEnabled` is "that size is not 0", and some games choose their memory setup by it: Big Brain Academy: Brain vs. Brain's `nninitStartup` asks StandardAllocator for a 60 GB address region with virtual address memory and sets a heap without it, and its NPDM declares none (`0`). The survey writes it from the NPDM for every new game; a profile without it gets the host's earlier answer, 32 MB, for every game |
 | `game_args` | Arguments the game gets when the command line gives none (the iOS app, the NSP script's Mac runs), split at spaces; `dmhost <dir> -- …` overrides them. The SDK hands them to the game before `nninitStartup`, as on hardware (`main.c`). Octopath Traveler 0 caps the address region Unreal's `nninitStartup` reserves (62 GB by default) with `-SwitchVirtualAddressSpaceSize=2048` (MB) |

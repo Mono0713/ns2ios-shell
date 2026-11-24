@@ -99,9 +99,61 @@ HLE_FORCE("nnsocketSetLastErrno", "socket error code kept by the host", void, h_
 // Not cut: Context / Connection construction and destruction, Context::GetContextId (only read and write game objects).
 #define SSF(m, cname, ...) HLE_FORCE(m, "ssl service (cut): fails", Result, cname, __VA_ARGS__)
 HLE_FORCE("_ZN2nn3ssl10InitializeEv", "same as nnsslInitialize: succeeds, creates no session (cut)", Result, h_ssl_InitCpp, void) { return RES_OK; }
-HLE_FORCE("_ZN2nn3ssl8FinalizeEv", "pairs with Initialize (cut)", Result, h_ssl_FinCpp, void) { return RES_OK; }
-SSF("_ZN2nn3ssl7Context6CreateENS1_10SslVersionE", h_ssl_CtxCreate, void *self, int v) { (void)self; (void)v; return RES_FAIL; }
-SSF("_ZN2nn3ssl7Context7DestroyEv", h_ssl_CtxDestroy, void *self) { (void)self; return RES_FAIL; }
+
+// This XAL build creates a configuration context at startup before any connection is attempted.
+// Keep its offline context in the host so unhooked SDK methods never see a fake service pointer.
+// Other builds retain their existing context failure, which may select their offline path.
+typedef struct ssl_local_context {
+    const void *owner;
+    struct ssl_local_context *next;
+} ssl_local_context;
+static pthread_mutex_t ssl_local_mu = PTHREAD_MUTEX_INITIALIZER;
+static ssl_local_context *ssl_local_head;
+
+HLE_FORCE("_ZN2nn3ssl8FinalizeEv", "releases pending local offline contexts", Result, h_ssl_FinCpp, void) {
+    pthread_mutex_lock(&ssl_local_mu);
+    ssl_local_context *context = ssl_local_head;
+    ssl_local_head = NULL;
+    pthread_mutex_unlock(&ssl_local_mu);
+    while (context) {
+        ssl_local_context *next = context->next;
+        free(context);
+        context = next;
+    }
+    return RES_OK;
+}
+HLE_FORCE("_ZN2nn3ssl7Context6CreateENS1_10SslVersionE", "provide a local offline context for the XAL build that needs it", Result, h_ssl_CtxCreate, void *self, int v) {
+    (void)v;
+    if (!self || strcmp(dm_main_build(), "c6b32f4d3d4243ff190b082b4f6aea18")) return RES_FAIL;
+
+    pthread_mutex_lock(&ssl_local_mu);
+    for (const ssl_local_context *context = ssl_local_head; context; context = context->next) {
+        if (context->owner == self) {
+            pthread_mutex_unlock(&ssl_local_mu);
+            return RES_FAIL;
+        }
+    }
+    ssl_local_context *context = malloc(sizeof *context);
+    if (!context) {
+        pthread_mutex_unlock(&ssl_local_mu);
+        return RES_FAIL;
+    }
+    *context = (ssl_local_context){.owner = self, .next = ssl_local_head};
+    ssl_local_head = context;
+    pthread_mutex_unlock(&ssl_local_mu);
+    return RES_OK;
+}
+HLE_FORCE("_ZN2nn3ssl7Context7DestroyEv", "release a local offline context", Result, h_ssl_CtxDestroy, void *self) {
+    pthread_mutex_lock(&ssl_local_mu);
+    ssl_local_context **link = &ssl_local_head;
+    while (*link && (*link)->owner != self) link = &(*link)->next;
+    ssl_local_context *context = *link;
+    if (context) *link = context->next;
+    pthread_mutex_unlock(&ssl_local_mu);
+    if (!context) return RES_FAIL;
+    free(context);
+    return RES_OK;
+}
 SSF("_ZN2nn3ssl7Context19RegisterInternalPkiEPmNS1_11InternalPkiE", h_ssl_CtxRegPki, void *self, uint64_t *id, int p) { (void)self; (void)id; (void)p; return RES_FAIL; }
 SSF("_ZN2nn3ssl7Context9RemovePkiEm", h_ssl_CtxRemovePki, void *self, uint64_t id) { (void)self; (void)id; return RES_FAIL; }
 SSF("_ZN2nn3ssl14BuiltInManager28GetBuiltInCertificateBufSizeEPjPNS0_15CaCertificateIdEj", h_ssl_BiBufSize, uint32_t *o, void *ids, unsigned n) { (void)ids; (void)n; if (o) *o = 0; return RES_FAIL; }

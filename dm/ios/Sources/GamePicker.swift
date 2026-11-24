@@ -708,15 +708,18 @@ private struct PadsTile: View {
                 }
                 .foregroundStyle(.black.opacity(0.55))
             }
+        }
+        .frame(width: side, height: side)
+        .overlay(alignment: .bottom) {
             HStack(spacing: mark * 0.42) {
                 ForEach(joined.sorted(), id: \.self) { player in
                     RoundedRectangle(cornerRadius: mark * 0.22, style: .continuous)
                         .fill(playerColors[(player - 1) % playerColors.count]).frame(width: mark, height: mark)
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, side * 0.047)
+            .padding(.bottom, side * 0.047)
+            .allowsHitTesting(false)
         }
-        .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: tileRadius(side), style: .continuous))
         .modifier(FocusRing(focused: focused, side: side))
         .accessibilityLabel(tr("加入玩家", "Add players"))

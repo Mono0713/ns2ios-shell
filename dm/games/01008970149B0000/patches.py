@@ -1,23 +1,12 @@
-# Rabbids Party of Legends (01008970149B0000): the rewriter's patches of this game's own builds. dm/tools/patch_nso.py loads every profile's patches.py and applies those of a module's NSO build ID;
-# CUTS, OBS and FRAME_STEP as described there ("Registered patches"). The game packs from a provisional profile (switchpad/make_provisional.py keeps this file)
-OBS = {
-  # main (1.0.1): the original game opens AudioOut just before the source is found overwritten.
-  # The 1728 iPad trace showed that this destination, the client's PCM buffer and the overwritten source are disjoint.
-  # The same source was corrupted without reaching the destructor or stop gates. The writer remains open.
-  '7c0876057ee29df336f7e12b3099f738': [
-    (0x162b8c0, 22, '52977008', 'AudioOut setup: x20 is the destination object; orig mov w8, #0xbb80'),
-  ],
-  # subsdk1 (the SDK's movie library, 1.0.0 v65536): the intro movie (VP9 + Vorbis) crashed on the audio read thread at subsdk1+0x2e9e2c, in NuMediaExtractor::fetchTrackSamples,
-  # reading a track's source that held 3, 3, 0, 2 instead of an object (main+0x4091100; iPad logs 2026-11-21, at 1 GB and at 3.2 GB alike, so not memory). Diagnostic gates
-  # (OBS_TRACE, hle_sdk16.c) show both sources registered with MatroskaSource's vtable, then one overwritten before the invalid call.
-  # Trace its two destructor entries and Stop rather than logging every fetch, which used up the 16-hit budget before the crash.
-  # iPad 2026-11-23: neither destructor nor Stop fired, and the fault followed the first decoded PCM copy. Compare the recorded source
-  # address to the decoder's output range before treating this as an object lifetime bug.
-  '7e9f31f59e001cf5d9b546ffb233f480': [
-    # right after bl 0x3310a0 (a gate goes at a function entry or after a bl): x23 = the source stored into the new TrackInfo by the stp x23, x21, [x22] next, x21 = the track index
-    (0x2e98ac, 22, '92800008', 'NuMediaExtractor::selectTrack: the source (x23) about to go into the new TrackInfo; orig mov x8, #-1'),
-    (0x3089c8, 22, 'a9be7bfd', 'MatroskaSource::~MatroskaSource complete destructor: x0 = source; orig stp x29, x30, [sp, #-0x20]!'),
-    (0x308a2c, 22, 'a9be7bfd', 'MatroskaSource::~MatroskaSource deleting destructor: x0 = source; orig stp x29, x30, [sp, #-0x20]!'),
-    (0x308b78, 22, 'a9be7bfd', 'MatroskaSource::stop: x0 = source; orig stp x29, x30, [sp, #-0x20]!'),
-  ],
+# Rabbids Party of Legends 1.0.1 (01008970149B0000), main build 7c087605.
+# The movie player passes a 128-entry count to InitializeMessageQueue, but
+# allocates only 128 bytes for each queue. The SDK stores eight-byte messages.
+# On iPad its seventeenth store overwrote a live MatroskaSource next to the ring.
+CUTS = {
+    '7c0876057ee29df336f7e12b3099f738': [
+        (0x7be794, 'e3aa3994', '0cab3994', 'allocate full storage for the first movie message queue'),
+        (0x7be7a8, 'deaa3994', '07ab3994', 'allocate full storage for the second movie message queue'),
+        # Unreferenced alignment words after the allocator wrapper's final branch.
+        (0x16293c4, '0000000000000000', '21f07dd3d6ffff17', 'lsl x1, x1, #3; tail-call the original aligned allocator'),
+    ],
 }

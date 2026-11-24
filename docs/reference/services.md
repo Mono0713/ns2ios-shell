@@ -341,8 +341,15 @@ Most service calls can be found before they crash, before the first boot or the 
 
 - **Symptom:** SIGSEGV in `android::Surface::getQueuedFrameNumber` under `nn::vi::GetLatestFrameNumber`.
 - **Cause:** Unreal paces frames by the layer's frame number (`main+0x10140e8`); the SDK reads the vi service's surface, which the host never made.
-- **Fix:** `hle_vi.c` answers with the frames presented so far; `ListFrameHistory` returns no entries.
+- **Fix:** `hle_vi.c` answers with the frames presented so far.
 - **Found on:** [Octopath Traveler 0](../../dm/games/01005270232F2000/README.md).
+
+### Layer frame history
+
+- **Symptom:** The logo movie ends, then the screen stays black with audio. The game thread wakes every millisecond in `FFrameEndSync`.
+- **Cause:** Unreal's viewport thread needs the latest completed flip to retire swap-chain fences. The previous `ListFrameHistory` implementation always returned zero entries.
+- **Fix:** `hle_vi.c` returns up to eight 40-byte records, newest first. A new entry stays queued until the Metal present queue retires its ticket. A snapshot keeps its own ticket even when the guest texture is available immediately. A dropped drawable also retires its ticket, so the game can make progress. Use the actual presentation time if available when the record is first read as complete.
+- **Found on:** [Minecraft Dungeons II](../../dm/games/0100A7C01B792000/README.md#startup). Based on [the upstream viewport-thread investigation](https://github.com/seedds/nxnative/blob/main/dm/games/0100A7C01B792000/README.md#frame-rate). A focused test checks the capacity probe, queued and completed states, layout, order and wrap.
 
 ### Default display panel identifier
 
@@ -446,6 +453,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Symptom:** play report calls met entering the save select (3D World); undefined `nn::ldn::` / `nn::socket::` imports with no hook, found from the import list before they were met (Big Brain Academy).
 - **Fix:** hooked (`hle_net.c`, `hle_offline.c`): the `nifm` IP queries with SDK 10's `socket::InAddr` / `in_addr` mangling; `prepo::AddSessionId` / `AddInternetConnectionStatus`; `ldn::GetNetworkConfig`; SDK 11's socket overloads with plain `sockaddr` / `int` arguments (`Connect`, `Accept`, `GetSockName`, `Get` / `SetSockOpt`, `Fcntl`, `Recv`, `Send`).
 - **Found on:** [Super Mario 3D World + Bowser's Fury](../../dm/games/010028600EBDA000/README.md) (SDK 10: `nifm`, `prepo`); [Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md) (SDK 11.4.3: LDN, sockets).
+
+### Local SSL contexts during offline startup
+
+- **Symptom:** XAL throws `HCGlobalInitialize failed` at startup and later Xbox service initialization aborts.
+- **Cause:** the library constructs an SSL settings context during initialization, before any connection. The offline context hook failed the local allocation as well as the network operations.
+- **Fix:** keep a local context for the verified title build until Destroy or Finalize. The SDK's native service pointer remains null and SSL connection operations still report unavailable.
+- **Found on:** [Minecraft Dungeons II](../../dm/games/0100A7C01B792000/README.md). The app continued beyond the earlier abort on iPad and reached a later loading wait.
 
 ### Network requests stay on hold before they settle
 

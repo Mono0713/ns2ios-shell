@@ -856,21 +856,51 @@ VK(vkDestroyFramebuffer, void, VkDevice d, VkFramebuffer fb, const VkAllocationC
 // DM_VK_CAPTURE=<dir>: every SPIR-V module the game creates is written to <dir>/<key>.spv. Super Mario Galaxy generates its GX shaders as SPIR-V at run time
 // (over 3,000 at boot, from the pipeline database), so no game file holds them; vk_shaders.py translates a capture folder like a RomFS. On the phone the packer writes
 // DM_VK_CAPTURE=vk_capture/<title ID> into the game's dm/env.txt (relative to Documents) when it had none yet; the folder is made here, and Switch Pad takes it back
-static void sh_capture(const char *key, const void *code, size_t n) {
-    static const char *dir; static int init;
-    if (!init) {
-        init = 1; dir = getenv("DM_VK_CAPTURE");
-        if (dir && !*dir) dir = NULL;
-        if (dir) { char p[1024]; snprintf(p, sizeof p, "%s", dir); for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; } mkdir(p, 0755);
-                   LOG("[vk] shader capture → %s (the next pack translates what is recorded here)", dir); }
+static char g_capture_dir[1024];
+
+static void sh_capture_init(void) {
+    const char *dir = getenv("DM_VK_CAPTURE");
+    if (!dir || !*dir) return;
+
+    if (strlen(dir) >= sizeof g_capture_dir) {
+        LOG("[vk] [RED] shader capture directory path is too long");
+        return;
     }
-    if (!dir) return;
-    char p[1024]; snprintf(p, sizeof p, "%s/%s.spv", dir, key);
-    if (access(p, F_OK) == 0) return;
-    char t[1100]; snprintf(t, sizeof t, "%s.%d.tmp", p, getpid());
-    FILE *f = fopen(t, "wb"); if (!f) { RED1("shader capture cannot write to %s", dir); return; }
-    int ok = fwrite(code, 1, n, f) == n; ok &= fclose(f) == 0;
-    if (ok) rename(t, p); else unlink(t);   // whole files only: a capture run may be killed at any time
+    strcpy(g_capture_dir, dir);
+    for (char *slash = g_capture_dir + 1; *slash; ++slash) {
+        if (*slash != '/') continue;
+        *slash = '\0';
+        mkdir(g_capture_dir, 0755);
+        *slash = '/';
+    }
+    mkdir(g_capture_dir, 0755);
+    LOG("[vk] shader capture → %s (the next pack translates what is recorded here)", g_capture_dir);
+}
+
+static void sh_capture(const char *key, const void *code, size_t n) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, sh_capture_init);
+    const char *dir = g_capture_dir;
+    if (!*dir) return;
+
+    char path[1100];
+    snprintf(path, sizeof path, "%s/%s.spv", dir, key);
+    if (access(path, F_OK) == 0) return;
+
+    // Concurrent creations of the same module must write to separate files.
+    char tmp[1120];
+    snprintf(tmp, sizeof tmp, "%s.XXXXXX.tmp", path);
+    int fd = mkstemps(tmp, 4);
+    FILE *f = fd >= 0 ? fdopen(fd, "wb") : NULL;
+    if (!f) {
+        if (fd >= 0) { close(fd); unlink(tmp); }
+        static _Atomic unsigned failures;
+        if (atomic_fetch_add(&failures, 1) == 0) LOG("[vk] [RED] shader capture cannot write to %s", dir);
+        return;
+    }
+    bool written = fwrite(code, 1, n, f) == n;
+    if (fclose(f) != 0) written = false;
+    if (!written || rename(tmp, path) != 0) unlink(tmp);
 }
 VKB(vkCreateShaderModule, VkResult, VkDevice d, const VkShaderModuleCreateInfo *ci, const VkAllocationCallbacks *a, VkShaderModule *out) {
     (void)d; (void)a; dev_init();

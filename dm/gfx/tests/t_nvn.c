@@ -87,6 +87,31 @@ int main(void) {
     EXPECT("MemoryPoolInitialize succeeds", 1, P(nvnMemoryPoolInitialize)(&pool, &pb));
     EXPECT("pool GPU address = storage address", (long long)(uintptr_t)poolmem, P(nvnMemoryPoolGetBufferAddress)(&pool));
 
+    // Some guests retarget a buffer by storing the offset and size at the driver's byte offsets.
+    {
+        NVNbufferBuilder builder = {0};
+        struct { uint64_t before; NVNbuffer buffer; uint64_t after; } guarded = {0};
+        guarded.before = 0x1234;
+        guarded.after = 0x5678;
+        P(nvnBufferBuilderSetDevice)(&builder, &dev);
+        P(nvnBufferBuilderSetDefaults)(&builder);
+        P(nvnBufferBuilderSetStorage)(&builder, &pool, 0x100, 0x80);
+        EXPECT("ring buffer initialization", 1, P(nvnBufferInitialize)(&guarded.buffer, &builder));
+        uint8_t *bytes = (uint8_t *)&guarded.buffer;
+        const struct { int64_t offset; uint64_t size; } ranges[] = {{0x500, 0x200}, {0, 0x180}};
+        for (size_t i = 0; i < sizeof ranges / sizeof ranges[0]; ++i) {
+            memcpy(bytes + 0x18, &ranges[i].offset, sizeof ranges[i].offset);
+            memcpy(bytes + 0x20, &ranges[i].size, sizeof ranges[i].size);
+            EXPECT("ring buffer offset after guest write", ranges[i].offset, P(nvnBufferGetMemoryOffset)(&guarded.buffer));
+            EXPECT("ring buffer size after guest write", ranges[i].size, P(nvnBufferGetSize)(&guarded.buffer));
+            EXPECT("ring buffer address after guest write", (uintptr_t)(poolmem + ranges[i].offset), P(nvnBufferGetAddress)(&guarded.buffer));
+            EXPECT("ring buffer map after guest write", (uintptr_t)(poolmem + ranges[i].offset), (uintptr_t)P(nvnBufferMap)(&guarded.buffer));
+        }
+        P(nvnBufferFinalize)(&guarded.buffer);
+        EXPECT("before NVNbuffer remains intact", 0x1234, guarded.before);
+        EXPECT("after NVNbuffer remains intact", 0x5678, guarded.after);
+    }
+
     // 4. Texture storage size (block-linear: GOB = 64 B × 8 rows; block height from the GOB count of "height × 1.5": ≥16→16, ≥8→8 ...)
     //    256×256 RGBA8: 1024 B per row = 16 GOBs; height 256 rows = 32 GOB rows, block height 16 GOBs → 2 blocks; 16×2×(512×16) = 262144
     size_t al; EXPECT("256x256 RGBA8 size", 262144, tex_size(NVN_FORMAT_RGBA8, 256, 256, 0, &al));

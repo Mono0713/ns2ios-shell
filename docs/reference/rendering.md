@@ -640,6 +640,13 @@ The Vulkan layer (`dm/gfx/vk/hle_vk.m`) was written for Hades; Super Mario Galax
 - **Fix:** `DM_VK_CAPTURE=<dir>` writes the modules; `vk_shaders.py` reads capture folders like a RomFS; `fix_strides` copies the stride onto the type before translating.
 - **Found on:** [Super Mario Galaxy](../../dm/games/010099C022B96000/README.md) (3,089 modules, 4,535 pipelines).
 
+### Concurrent Vulkan shader captures of the same module
+
+- **Symptom:** creating the same shader from two threads can leave a partially written SPIR-V capture or a leftover temporary file.
+- **Cause:** directory setup was unsynchronized. Writers in one process chose the same temporary path, so a writer could truncate a file already open by another writer.
+- **Fix:** initialize the capture directory once and publish a closed file by rename. Each writer has a unique temporary file, and a failing write or rename removes only that writer's file.
+- **Found on:** the capture path used by [Super Mario Galaxy](../../dm/games/010099C022B96000/README.md) and [Super Mario Galaxy 2](../../dm/games/0100FD8022DAA000/README.md). A forced duplicate-creation test reproduced the collision outside the game. Its effect on game startup time has not been measured.
+
 ### Push constants in the next free buffer slot
 
 - **Cause:** SPIRV-Cross binds the push constant block at `buffer(0)`, where the first renumbered uniform buffer goes.

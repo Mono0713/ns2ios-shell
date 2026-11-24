@@ -27,6 +27,14 @@ The game may also write into an NVN object directly, without an NVN call, throug
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md).
 - **Check:** to find such writes, put the field you suspect behind a guard value and log when it changes outside the host's own code, or force overflows on the Mac by shrinking the command memory the game gets.
 
+### NVNbuffer fields written by the guest ring allocator
+
+- **Symptom:** a reused buffer reports its original address and uses the guest's new offset as its byte size.
+- **Cause:** the guest writes the offset at `NVNbuffer + 0x18` and the size at `+0x20`. The host stored its own fields eight bytes earlier.
+- **Fix:** backport the driver field layout from [nxnative](https://github.com/seedds/nxnative/commit/f5cc73d). The getters and CPU mapping now see both in-place updates. The buffer builder layout is unchanged.
+- **Check:** `t_nvn` checks repeated writes, a wrap to zero and the neighbouring objects' guards.
+- **Found on:** [nxnative issue #723](https://github.com/seedds/nxnative/issues/723).
+
 ### Sizes the hardware never reports as 0 (ZCull save area)
 
 - **Symptom:** sprites broke apart in some runs only, depending on the allocation order; buffers overlapped.
@@ -213,6 +221,14 @@ Games read this count as a position in their own command memory and size their h
 - **Cause:** `LINEAR_RENDER_TARGET` specifies linear storage independently of `LINEAR`. The Metal backing path recognized either flag, but the storage-size and deswizzle helpers tested only `LINEAR`, underallocating some render targets and treating their rows as block-linear.
 - **Fix:** `nvn_tex.c` recognizes either flag for linear sizing and excludes both from block-linear level offsets, GOB columns and sparse layout. `nvn_deswizzle_geom` rejects both. `tex_linear` uses the same calculated row pitch, including implicit alignment, as `GetStorageSize`. Render-target rows align to 128 bytes; ordinary linear rows align to 32. Explicit strides are preserved. `t_tex` covers the layout and `t_linear_readback` checks a GPU clear against padded CPU-visible rows.
 - **Found on:** [Persona 5 Royal](../../dm/games/01005CA01580E000/README.md#rendering): a 16x16 RGBA8 target with flags `0x44` and stride 128 needs 2 KB; block-linear sizing returned 1 KB.
+
+### Minimal texture layouts
+
+- **Symptom:** Texture writes spill beyond the storage reported by the original driver. Adjacent mesh data can become stretched geometry.
+- **Cause:** Textures using `MINIMAL_LAYOUT` (0x200) used automatic blocks even where those blocks added padding.
+- **Fix:** Compare the full layer sizes with and without the automatic block dimensions. Use one-GOB blocks if they reduce the size. Explicit packaged layouts and sparse tiles retain their own rules. Backported from [49c752f](https://github.com/seedds/nxnative/commit/49c752f).
+- **Check:** `t_tex_layout` compares size, block shape and mip offsets with the original driver. The 18 shapes include a mip chain, a 3D volume, an array and a packaged override.
+- **Found on:** [Tears of the Kingdom, The Depths](https://github.com/seedds/nxnative/issues/183). The original driver stores each 320×320 texture in 204,800 bytes. The automatic layout used 245,760 bytes.
 
 ### Textures written with `nvnTextureWriteTexels`
 

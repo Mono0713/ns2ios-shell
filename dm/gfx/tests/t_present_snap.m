@@ -51,7 +51,7 @@ static void suspend_case(void) {
     gate_encoder();
     // The OS has stopped the display link before notifying the app to suspend.
     pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; pthread_mutex_unlock(&g_pq_mu);
-    present_enqueue(&t, 1. / 60, NULL, 0); mtl_present_discard(1);
+    present_enqueue(&t, 1. / 60, NULL, 0, NULL); mtl_present_discard(1);
     suspend_started = dispatch_semaphore_create(0); suspend_done = dispatch_semaphore_create(0);
     pthread_t th; pthread_create(&th, NULL, suspend_thread, NULL);
     dispatch_semaphore_wait(suspend_started, DISPATCH_TIME_FOREVER);
@@ -98,10 +98,12 @@ static void pending_copy_case(void) {
     tex_t t = source(0);
     id<MTLSharedEvent> gpu_gate = [g_dev newSharedEvent]; [g_q4 waitForEvent:gpu_gate value:1];
     pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; pthread_mutex_unlock(&g_pq_mu);
-    CHECK("first snapshot queued", present_enqueue(&t, 1. / 60, NULL, 0) == 0);
-    CHECK("second snapshot queued", present_enqueue(&t, 1. / 60, NULL, 0) == 0);
+    uint64_t first = 0, second = 0;
+    CHECK("first snapshot releases the game texture", present_enqueue(&t, 1. / 60, NULL, 0, &first) == 0);
+    CHECK("second snapshot releases the game texture", present_enqueue(&t, 1. / 60, NULL, 0, &second) == 0);
+    CHECK("each snapshot still has a present ticket", first > 0 && second == first + 1);
     present_drop_for_suspend();   // Tickets are free, but the GPU still owns both allocators.
-    uint64_t v = g_snap_v, start = now_ns(), ticket = present_enqueue(&t, 1. / 60, NULL, 0);
+    uint64_t v = g_snap_v, start = now_ns(), ticket = present_enqueue(&t, 1. / 60, NULL, 0, NULL);
     CHECK("pending copy falls back without waiting", ticket != 0 && now_ns() - start < 50000000);
     CHECK("pending copy's allocator was not reused", g_snap_v == v);
     gpu_gate.signaledValue = 1; mtl_drain();

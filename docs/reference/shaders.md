@@ -116,6 +116,13 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Reader:** `kpka_jobs` maps the PAKs, takes the newest copy of each path, peeks at 4 decompressed bytes and inflates only SDF entries (`sdf_shaders`).
 - **Found on:** [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md): 63,111 shaders (30,233 vertex, 21,475 pixel, 11,271 compute, 53 geometry, 33 hull, 46 domain) and 102,345 pairs, in 5 s with 12 jobs.
 
+### Shader records in Snowdrop SDF data slices
+
+- **Symptom:** an empty NVN shader map and black frames with repeated missing shader keys.
+- **Cause:** Snowdrop's version-22 `BERG` slices store NVN shaders in length-delimited zlib or zstd records. A zstd chunk can contain another record.
+- **Fix:** backport the length-delimited reader from [nxnative's shader splitter](https://github.com/seedds/nxnative/blob/main/dm/gfx/tools/shader_split.py). Validate the decompressed lengths and the control and code sections. The shaders are single-stage programs, so the normal varying cover applies.
+- **Found on:** [Rabbids Party of Legends](../../dm/games/01008970149B0000/README.md). Its installed build requested 59 shader keys during the first two movies and the screens after them. The split finds all 59 within its 2,570 unique keys.
+
 ### SPK shader package in an MT Framework ARC
 
 - **How it is stored:** the engine's one shader package, `sc\NX_64\root` (`SPK\0`, type hash `0x02358e1a`) in `nativeNXx64/sa/NX_64/root.arc` ([01](../agents/01-extract.md)). After the package's tables every shader is a code area followed directly by its control section, back to back to the end of the file: 230 vertex shaders, then 230 pixel shaders.
