@@ -11,6 +11,7 @@
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
 #include "relaunch_ticket.h"
+#include "embedded_game.h"
 
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 #ifdef DM_SHELL
@@ -250,12 +251,33 @@ static void choose(NSString *gid) {
     g_game_id = gid; g_game_root = [games stringByAppendingPathComponent:gid]; g_pick = 0; g_env_set = [NSMutableArray array];
     setenv("DM_SHELL_GAME", gid.UTF8String, 1);   // the launcher and the touch controls keep their settings per game (Launcher.swift, DmGamepad.m)
     setenv("DM_SHELL_GAME_ROOT", g_game_root.fileSystemRepresentation, 1);
-    NSString *fw = [NSString stringWithFormat:@"Frameworks/Guest_%@.framework/Guest", gid];
-    setenv("DM_GUEST", [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:fw] fileSystemRepresentation], 1);   // loader.c
+    if (![game_info()[@"engine"] isEqual:@"embedded"]) {
+        NSString *fw = [NSString stringWithFormat:@"Frameworks/Guest_%@.framework/Guest", gid];
+        setenv("DM_GUEST", [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:fw] fileSystemRepresentation], 1);   // loader.c
+    }
     @autoreleasepool { g_boot_ok = boot_env(); }
     if (g_boot_ok) pads_start();
 }
 void shell_game_choose(const char *gid) { choose(@(gid)); }
+
+BOOL front_ios_start_embedded_game(UIViewController *controller) {
+    if (![game_info()[@"engine"] isEqual:@"embedded"]) return NO;
+    NSString *error = embedded_game_start(g_game_id, [romfs_locate() stringByAppendingPathComponent:@"romfs.img"],
+                                          msl_locate(), controller.view.window);
+    if (!error) {
+        g_preloaded = 1;
+        return YES;
+    }
+    fprintf(stderr, "[RED] embedded engine: %s\n", error.UTF8String);
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"SwitchPad"
+        message:error preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [controller presentViewController:alert animated:YES completion:nil];
+    return YES;
+}
+static void shell_focus_event(int ev) {
+    if (!embedded_game_focus(ev)) front_ios_focus_event(ev);
+}
 // The launcher's Back to the game list (Launcher.swift through front_ios.m): nothing of the game is loaded yet, so forget it and pick again.
 // 0 once the game has started loading
 int shell_game_unchoose(void) {
@@ -293,13 +315,13 @@ static _Atomic(NSTimeInterval) g_relaunch_time;
     self.window.rootViewController = front_ios_root();
     [self.window makeKeyAndVisible];
 }
-- (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
-- (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
-- (void)sceneWillEnterForeground:(UIScene *)s { pads_start(); front_ios_focus_event(2); }
+- (void)sceneWillResignActive:(UIScene *)s { shell_focus_event(0); }
+- (void)sceneDidEnterBackground:(UIScene *)s { shell_focus_event(1); }
+- (void)sceneWillEnterForeground:(UIScene *)s { pads_start(); shell_focus_event(2); }
 - (void)sceneDidBecomeActive:(UIScene *)s {
     atomic_store(&shell_was_active, 1);
     atomic_store(&g_relaunch_time, 0);
-    front_ios_focus_event(3);
+    shell_focus_event(3);
 }
 @end
 

@@ -29,6 +29,7 @@
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
 void front_ios_boot(void);
+BOOL front_ios_start_embedded_game(UIViewController *controller);
 int front_ios_boot_ok(void);
 static void loading_show(UIView *root);
 static void run_watch_start(void);   // the launcher's automatic memory: how this run goes
@@ -551,7 +552,7 @@ void front_ios_back_to_picker(void) {
 }
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
-    if (self.game) return;
+    if (self.game || front_ios_start_embedded_game(self)) return;
     g_play_started = CACurrentMediaTime();
     // A Joy-Con joining before Play can query and cache the operation mode. Apply the final setting before the guest starts.
     const char *mode = getenv("DM_OPMODE");

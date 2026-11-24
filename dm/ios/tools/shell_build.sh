@@ -115,7 +115,7 @@ DOCDATA=0; grep -q 'msl_locate' Sources/main.m && DOCDATA=1   # romfs/ and msl/ 
 # PACK_ABI: the package format (tools/pack_abi.py). Packages carry the stamp of the shell they were packed with, and a
 # newer shell with the same value takes them as they are (nxn_merge.py, Switch Pad), so a host-only change costs no repacking
 PACK_ABI=$(python3 ../tools/pack_abi.py) || die "tools/pack_abi.py failed"
-printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\nMULTI=%s\nDOCDATA=%s\nPACK_ABI=%s\n' \
+printf 'KIND=ios\nSOURCE_SHA=%s\nCHAIN_PLACEHOLDER=%s\nGATES=%s\nGUEST=%s\nENV=%s\nMEM=1\nMULTI=%s\nDOCDATA=%s\nPACK_ABI=%s\nEMBEDDED_RUNTIME=1\n' \
   "${GITHUB_SHA:-local}" "$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../games/$GAME/dmsh_chain.h)" "$GATES" "$GUEST" "$ENV" "$MULTI" "$DOCDATA" "$PACK_ABI" \
   > "$A/dm/shell_info.txt"
 t "shell understands gates: $GATES"
