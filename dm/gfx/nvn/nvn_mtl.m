@@ -1913,7 +1913,8 @@ static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> base, MTLTextur
         if (!named) tex_put(t->serial, upgraded);
         defer_obj_release(base);
     }
-    MLOG("texture upgraded to allow %s ser=%llu base format %lu → view format %lu (upgrades=%llu)", add & MTLTextureUsageRenderTarget ? "render-target use" : "format views", t->serial, (unsigned long)base.pixelFormat, (unsigned long)view_pf, ++g_pfv_upgrades);
+    const char *use = add & MTLTextureUsageRenderTarget ? "render-target use" : add & MTLTextureUsageShaderWrite ? "image writes" : "format views";
+    MLOG("texture upgraded to allow %s ser=%llu base format %lu → view format %lu (upgrades=%llu)", use, t->serial, (unsigned long)base.pixelFormat, (unsigned long)view_pf, ++g_pfv_upgrades);
     return upgraded;
 }
 static id<MTLTexture> tex_upgrade_pfv(const tex_t *t, id<MTLTexture> base, MTLPixelFormat view_pf) { return tex_upgrade(t, base, MTLTextureUsagePixelFormatView, view_pf); }
@@ -3906,7 +3907,15 @@ static _Atomic uint64_t g_tser[1 << 20];
 static samp_par *g_sreg; static uint8_t *g_sreg_ok; static void **g_sview; static uint64_t *g_srid; static int g_nsreg;   // g_sview: sampler ID → MTLSamplerState (retained)
 // Memory pool Finalize: for texture IDs whose registered texture lives on this pool, drop the cached MTLTexture (view or base texture). The cache used to be released only when the ID was registered again,
 // so a linear texture built directly on a pool kept the whole pool buffer alive (6 to 17 finalized 16 MB pool buffers stayed alive in Engage's title demo). If the ID is still used, the next lookup rebuilds it on the slow path
-static void treg_drop_im(treg_t *r) { if (r->im) { defer_obj_unref((__bridge id)r->im); CFRelease(r->im); r->im = r->im_of = NULL; r->im_rid = 0; } }   // the image class view (img_fit)
+static void treg_drop_im(treg_t *r) {
+    if (!r->im) return;
+    id<MTLTexture> image = (__bridge id<MTLTexture>)r->im;
+    if (!image.parentTexture && image.buffer) defer_obj_release(image);
+    else defer_obj_unref(image);
+    CFRelease(r->im);
+    r->im = r->im_of = NULL;
+    r->im_rid = 0;
+}
 // Texture views by texture serial and view parameters, beside the per-ID view: KTGL (Age of Calamity) registers a texture into the next ID of a ring before every bind (about 21,000
 // registrations a frame in battle after the first cutscene, 5 in 6 of them a different texture than the ID held), so the per-ID view was rebuilt for nearly every bind: half the
 // registrations ended in a new Metal texture view, 45% of the replay's time. A hit is checked against the current base texture (re-uploads and format-view upgrades replace it).
@@ -3999,7 +4008,8 @@ static void treg_drop_pool_views(const void *pool) {
             // The ID stays registered, as in the game's texture pool, but its storage is gone: nothing may make its texture until the game registers the ID again. A draw never binds
             // such an ID; a walk over every ID does (pool_gpu, which also checks tex_storage_live)
             g_treg[i].gone = 1;
-            if (g_treg[i].view) { defer_obj_unref((__bridge id)g_treg[i].view); CFRelease(g_treg[i].view); g_treg[i].view = NULL; g_treg[i].view_id = g_treg[i].view_rid = 0; treg_drop_im(&g_treg[i]); } }
+            if (g_treg[i].view) { defer_obj_unref((__bridge id)g_treg[i].view); CFRelease(g_treg[i].view); g_treg[i].view = NULL; g_treg[i].view_id = g_treg[i].view_rid = 0; }
+            treg_drop_im(&g_treg[i]); }
     os_unfair_lock_unlock(&g_rmu);
 }
 void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
@@ -4214,6 +4224,11 @@ static int mtl_pf_dpf(MTLPixelFormat pf) {
     }
     return NVN_DPF_FLOAT;
 }
+static int img_word_buffer(id<MTLTexture> image) {
+    MTLPixelFormat pf = image.pixelFormat;
+    return image.textureType == MTLTextureTypeTextureBuffer &&
+        (pf == MTLPixelFormatR32Uint || pf == MTLPixelFormatR32Sint || pf == MTLPixelFormatR32Float);
+}
 // An image slot the shader declares as uint / int holding a texture of another class: on the Switch the shader's image format decides how the texel's bits are read. FINAL FANTASY TACTICS -
 // The Ivalice Chronicles' UI composite blends into the RGBA8 window texture in software, loading it as r32ui and unpacking the four bytes (uirender.tec, fragment 4cf1975ed1e36590); bound as
 // it was, an RGBA8Unorm texture in a texture2d<uint> argument read undefined values and translucent UI came out yellow and white. The slot gets a view of the same texel size in the
@@ -4231,24 +4246,42 @@ static void img_fit_upgrade(void) {
 // The same view, in the texture's own class, for a swizzled view (the channel mapping of tex_by_id): Metal gives a swizzled view only the read usage (a base of usage 0x7, a view of 0x1),
 // so an RGBX8 or RGB565 image was bound as the dummy and its writes were lost. An image takes no channel mapping, as a Vulkan storage image view must have the identity swizzle
 static id<MTLTexture> img_fit(int tid, id<MTLTexture> t, int dpf, uint64_t *rid) {
-    size_t n = mtl_pf_bytes(t.pixelFormat); int u = dpf == NVN_DPF_UINT, cls = dpf != NVN_DPF_FLOAT && mtl_pf_dpf(t.pixelFormat) != dpf;
+    size_t n = mtl_pf_bytes(t.pixelFormat);
+    int buffer_word = img_word_buffer(t);
+    int u = dpf == NVN_DPF_UINT, cls = (dpf != NVN_DPF_FLOAT || buffer_word) && mtl_pf_dpf(t.pixelFormat) != dpf;
     MTLPixelFormat pf = !cls ? t.pixelFormat : n == 1 ? (u ? MTLPixelFormatR8Uint : MTLPixelFormatR8Sint) : n == 2 ? (u ? MTLPixelFormatR16Uint : MTLPixelFormatR16Sint) : n == 4 ? (u ? MTLPixelFormatR32Uint : MTLPixelFormatR32Sint)
                       : n == 8 ? (u ? MTLPixelFormatRG32Uint : MTLPixelFormatRG32Sint) : n == 16 ? (u ? MTLPixelFormatRGBA32Uint : MTLPixelFormatRGBA32Sint) : MTLPixelFormatInvalid;
+    if (cls && buffer_word && dpf == NVN_DPF_FLOAT) pf = MTLPixelFormatR32Float;
     id<MTLTexture> base = t.parentTexture ? t.parentTexture : t;
     if (pf == MTLPixelFormatInvalid || tid <= 0 || tid >= g_ntreg) {
         RED_ONCE(106, "image read as %s in the shader, texture of Metal format %lu (texture ID %d): no view of that class, bound as is (reads undefined)", u ? "uint" : "int", (unsigned long)t.pixelFormat, tid); return nil; }
-    if (cls && !(base.usage & MTLTextureUsagePixelFormatView)) {   // made without the format-view usage (it costs lossless compression, so textures get it only when needed): upgraded before the next
+    if (cls && !buffer_word && !(base.usage & MTLTextureUsagePixelFormatView)) {   // made without the format-view usage (it costs lossless compression, so textures get it only when needed): upgraded before the next
         int seen = 0; for (int i = 0; i < g_imfit_npend; i++) seen |= g_imfit_pend[i] == tid;   // draw pass opens, as an upgrade copies the texture and so cannot run inside this draw's pass;
         if (!seen && g_imfit_npend < 16) g_imfit_pend[g_imfit_npend++] = tid;                  // until then the slot is bound as is
         return nil; }
     treg_t *r = &g_treg[tid];
     if (r->im && r->im_of == (__bridge void *)t && ((__bridge id<MTLTexture>)r->im).pixelFormat == pf) { *rid = r->im_rid; return (__bridge id<MTLTexture>)r->im; }
-    if (r->im) { defer_obj_unref((__bridge id)r->im); CFRelease(r->im); r->im = r->im_of = NULL; r->im_rid = 0; }
+    treg_drop_im(r);
     NSUInteger l0 = t.parentTexture ? t.parentRelativeLevel : 0, s0 = t.parentTexture ? t.parentRelativeSlice : 0;
     NSUInteger ns = t.textureType == MTLTextureType3D ? 1 : t.arrayLength * (t.textureType == MTLTextureTypeCube || t.textureType == MTLTextureTypeCubeArray ? 6 : 1);
-    id<MTLTexture> v = [base newTextureViewWithPixelFormat:pf textureType:t.textureType levels:NSMakeRange(l0, t.mipmapLevelCount) slices:NSMakeRange(s0, ns)];
+    if (pf == base.pixelFormat && l0 == 0 && s0 == 0 && t.textureType == base.textureType &&
+        t.mipmapLevelCount == base.mipmapLevelCount && t.arrayLength == base.arrayLength) {
+        *rid = base.gpuResourceID._impl;
+        return base;
+    }
+    id<MTLTexture> v;
+    if (buffer_word && base.buffer && l0 == 0 && s0 == 0) {
+        // A clear and an atomic dispatch may interpret the same words as float and uint. Put both views directly on the same pool range.
+        id<MTLBuffer> storage = base.buffer;
+        MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:pf width:t.width
+            resourceOptions:storage.resourceOptions usage:MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite];
+        v = [storage newTextureWithDescriptor:d offset:base.bufferOffset bytesPerRow:base.bufferBytesPerRow];
+        if (v) res_add(v);
+    } else {
+        v = [base newTextureViewWithPixelFormat:pf textureType:t.textureType levels:NSMakeRange(l0, t.mipmapLevelCount) slices:NSMakeRange(s0, ns)];
+    }
     if (!v) { RED_ONCE(107, "cannot create the image view of class %s (texture ID %d, Metal format %lu)", u ? "uint" : "int", tid, (unsigned long)t.pixelFormat); return nil; }
-    { static int once; if (cls && !once++) MLOG("image read in another class than its texture: first case texture ID %d Metal format %lu → %lu", tid, (unsigned long)t.pixelFormat, (unsigned long)pf); }
+    { static int once; if (cls && !once++) MLOG("image used in another class than its texture: first case texture ID %d Metal format %lu → %lu", tid, (unsigned long)t.pixelFormat, (unsigned long)pf); }
     r->im = (void *)CFBridgingRetain(v); r->im_of = (__bridge void *)t; r->im_rid = v.gpuResourceID._impl;
     *rid = r->im_rid; return v;
 }
@@ -6143,13 +6176,42 @@ static id<MTLTexture> img_binding(int tid, const nvn_rbind *b, uint64_t *rid, in
     id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
     int swz_only = t && !(t.usage & MTLTextureUsageShaderWrite) && (t.parentTexture.usage & MTLTextureUsageShaderWrite);
     if (t && !(t.usage & MTLTextureUsageShaderWrite) && !swz_only) { RED_ONCE(32, "texture bound to an image slot lacks the shader-write usage (texture ID %d)", tid); t = nil; }
-    if (t && (swz_only || (b->dpf != NVN_DPF_FLOAT && mtl_pf_dpf(t.pixelFormat) != b->dpf))) {
+    int word_buffer = img_word_buffer(t);
+    if (t && (swz_only || ((word_buffer || b->dpf != NVN_DPF_FLOAT) && mtl_pf_dpf(t.pixelFormat) != b->dpf))) {
         uint64_t r2 = 0; id<MTLTexture> v = img_fit(tid, t, b->dpf, &r2);
-        if (v) { t = v; *rid = r2; } else if (swz_only) t = nil;
+        if (v) { t = v; *rid = r2; } else if (swz_only || word_buffer) t = nil;
     }
     *real = t != nil;
     if (!t) { t = dummy_img(b->dtt, b->dpf); *rid = g_dummy_img_rid[b->dtt & 7][b->dpf & 3]; }
     return t;
+}
+// An NVN descriptor registered as a texture can also be bound to a compute image slot. Prepare its backing
+// before opening the dispatch encoder: promoting a private texture may have to preserve an earlier draw with a copy.
+static int prepare_compute_images(NvShader *cs) {
+    int alias = 0;
+    for (int i = 0; i < cs->rf.nb; i++) {
+        const nvn_rbind *b = &cs->rf.b[i];
+        if (b->kind != NVN_RB_IMG || b->reg >= 32) continue;
+        int tid = (int)(S.img[5][b->reg] & 0xfffff);
+        if (!tid) continue;
+        os_unfair_lock_lock(&g_rmu);
+        if (tid < g_ntreg && g_treg[tid].ok && !g_treg[tid].gone) {
+            treg_t *r = &g_treg[tid];
+            id<MTLTexture> image = (__bridge id<MTLTexture>)tex_fast(tid);
+            id<MTLTexture> base = image.parentTexture ?: image;
+            if (base && image.textureType == (MTLTextureType)b->dtt && !fmt_compressed(r->t.d.format) &&
+                !mtl_fmt_depth(base.pixelFormat) && base.sampleCount <= 1) {
+                alias |= base.buffer != nil;
+                MTLTextureUsage required = MTLTextureUsageShaderWrite;
+                if (!img_word_buffer(image) && b->dpf != NVN_DPF_FLOAT && mtl_pf_dpf(image.pixelFormat) != b->dpf)
+                    required |= MTLTextureUsagePixelFormatView;
+                required &= ~base.usage;
+                if (required) tex_upgrade(&r->t, base, required, image.pixelFormat);
+            }
+        }
+        os_unfair_lock_unlock(&g_rmu);
+    }
+    return alias;
 }
 static int imga_extent(id<MTLTexture> t, const nvn_rbind *b, uint64_t *bytes) {
     if (!t || t.textureType != (MTLTextureType)b->dtt || t.sampleCount > 1) return 0;
@@ -9073,9 +9135,15 @@ static void dispatch(const p_dispatch *dp) {
     if (!tg[0]) { RED_ONCE(29, "compute shader lacks threadgroup size reflection"); return; }
     if (g_nubd && ubd_conflict_cs(cs, dp->ind)) { g_ubd_conflicts++; ubd_land(); }   // see ubd_conflict_cs
     rp_end();
+    int alias = prepare_compute_images(cs);
+    // Keep buffer/image aliases visible through the barriers on both sides of the dispatch.
     int own = dispatch_own();
     if (own && g_blit) { enc_b_end(g_blit); g_blit = nil; }
+    if (!own) g_blit_alias |= alias;
     id<MTLComputeCommandEncoder> ce = own ? pg_compute() : (id<MTLComputeCommandEncoder>)dispatch_enc();
+    if (own && alias)
+        [(id<MTL4ComputeCommandEncoder>)ce barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll
+            visibilityOptions:MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias];
     enc_c_pso(ce, ps);
     g_dispatch_dim[0] = (uint32_t)dp->x; g_dispatch_dim[1] = (uint32_t)dp->y; g_dispatch_dim[2] = (uint32_t)dp->z;   // read back by the driver segment c0 (encode_args_)
     g_c0_dim_buf = nil;
@@ -9085,7 +9153,12 @@ static void dispatch(const p_dispatch *dp) {
             [(id<MTL4ComputeCommandEncoder>)ce barrierAfterEncoderStages:MTLStageBlit beforeEncoderStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice]; }
         enc_c_dispatch_indirect(ce, ig, MTLSizeMake(tg[0], tg[1], tg[2]));
     } else enc_c_dispatch(ce, MTLSizeMake(dp->x, dp->y, dp->z), MTLSizeMake(tg[0], tg[1], tg[2]));
-    if (own) enc_c_end(ce);
+    if (own) {
+        if (alias)
+            [(id<MTL4ComputeCommandEncoder>)ce barrierAfterStages:MTLStageAll beforeQueueStages:MTLStageAll
+                visibilityOptions:MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias];
+        enc_c_end(ce);
+    }
 }
 // GPU: texture -> buffer (row stride taken from SetCopyRowStride, layer stride from SetCopyImageStride, 0 = tightly packed)
 // A copy at a level the host texture lacks (more levels declared than its size holds, tex_desc) is skipped: Metal does not check the level of a blit

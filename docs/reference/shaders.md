@@ -652,6 +652,13 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Fix:** the shared reflection type decoder recognizes `texture_buffer` as `MTLTextureTypeTextureBuffer`; the matched IMG and IMGA retain their buffer-image shape. `t_refl.m` checks the actual reflection converter with a paired buffer image and atomic pointer.
 - **Found on:** [SHIN MEGAMI TENSEI V: Vengeance](../../dm/games/010069C01AB82000/README.md), compute shader `2d2093c1f1d3a7e0`, image slot 2 (one R32Uint texel).
 
+### Compute image bindings can use ordinary texture descriptors
+
+- **Symptom:** `texture bound to an image slot lacks the shader-write usage`, or `image atomics: real image is not a resolved R32 integer IMG` after a compute clear.
+- **Cause:** A regular NVN texture ID can be bound as an image, even with no IMAGE creation flag. Metal requires shader-write usage at creation. A buffer clear and a later integer atomic can also interpret the same four-byte elements as different types.
+- **Fix:** Prepare the image before opening its compute encoder. Upgrade the texture's usage while preserving its contents and aliases. Use a typed texture-buffer view directly over the same memory for the format the shader declares.
+- **Found on:** [Rabbids Party of Legends](../../dm/games/01008970149B0000/README.md#rendering) registers a 1,024-element R32Uint buffer as an ordinary texture, clears it through a float image, then accumulates an integer histogram in the same buffer.
+
 ### Bounded MSL 2.3 atomic emulation
 
 - **Symptom:** Metal shader validation reports invalid image-atomic stores even with an image-sized scratch buffer; without validation, GPU page faults can freeze rendering.
