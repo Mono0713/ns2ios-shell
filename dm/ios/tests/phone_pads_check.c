@@ -10,7 +10,15 @@
 #include <unistd.h>
 #include "dm_input.h"
 #include "hle_haptics.h"
+#include "phone_pads_tls.h"
 #include "shell_slots.h"
+
+#if defined(__APPLE__) && !defined(PP_TEST_TLS)
+void *pp_tls_new(int fd) { (void)fd; return NULL; }
+long pp_tls_recv(void *t, void *buf, size_t n) { (void)t; (void)buf; (void)n; return -1; }
+int pp_tls_send(void *t, const void *buf, size_t n) { (void)t; (void)buf; (void)n; return -1; }
+void pp_tls_free(void *t) { (void)t; }
+#endif
 
 void phone_pads_start(void);
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;

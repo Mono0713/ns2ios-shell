@@ -508,7 +508,7 @@ private final class PickerModel: PregamePanels {
     @Published var starting = false
     @Published var gridOpen = false   // every game at once (X, or the button at the top); kept while a game's launcher is over the picker
     var reorderingGames = false
-    var gridCols = 6                  // the grid's columns, as laid out (the arrows move by them)
+    @Published var gridCols = 7       // the interactive grid's columns, also used by the handheld TV mirror
     var count: Int { games.count + 1 }
     func game(_ i: Int) -> PickerGame? { games.indices.contains(i - 1) ? games[i - 1] : nil }
     var start: (PickerGame) -> Void = { _ in }
@@ -1139,7 +1139,8 @@ private struct GameGrid: View {
     @Environment(\.pregameMirror) private var mirror
     var body: some View {
         let pad = min(48 * k, width * 0.1), gap = 28 * k
-        let columns = max(1, min(cols, Int((width - 2 * pad + gap) / (60 + gap))))
+        let fit = max(1, min(cols, Int((width - 2 * pad + gap) / (60 + gap))))
+        let columns = mirror ? m.gridCols : fit
         let side = max(1, ((width - 2 * pad - CGFloat(columns - 1) * gap) / CGFloat(columns)).rounded(.down))
         Group {
             if tenFoot || mirror {
@@ -1149,7 +1150,9 @@ private struct GameGrid: View {
             }
         }
         .clipped()
-        .onChange(of: columns, initial: true) { _, c in if !mirror { m.gridCols = c } }
+        .onChange(of: columns, initial: true) { _, c in
+            if !mirror && c != m.gridCols { m.gridCols = c }
+        }
     }
 
     private func controllerGrid(pad: CGFloat, gap: CGFloat, side: CGFloat, columns: Int) -> some View {
@@ -1169,6 +1172,7 @@ private struct GameGrid: View {
                 .animation(DS.spring, value: m.pos)
             }
             .onChange(of: m.pos) { _, _ in if let id = m.game(m.focus)?.id { withAnimation(DS.spring) { proxy.scrollTo(id, anchor: .center) } } }
+            .onChange(of: columns) { _, _ in if let id = m.game(m.focus)?.id { proxy.scrollTo(id, anchor: .center) } }
             .onAppear { if let id = m.game(m.focus)?.id { proxy.scrollTo(id, anchor: .center) } }
         }
     }
@@ -1313,7 +1317,7 @@ private struct PickerView: View {
                     header(k).padding(.horizontal, 32 * k).padding(.top, 22 * k)
                         .padding(.bottom, m.gridOpen ? 12 * k : 0)
                     if m.gridOpen {
-                        GameGrid(m: m, width: contentWidth, cols: tv.on ? 6 : g.size.width > g.size.height ? 7 : 5)
+                        GameGrid(m: m, width: contentWidth, cols: tv.on ? 6 : (g.size.width > g.size.height ? 7 : 5))
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     } else {
                         Group {

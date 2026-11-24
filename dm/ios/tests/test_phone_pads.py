@@ -125,7 +125,7 @@ class PhonePadsServer(unittest.TestCase):
             subprocess.run(['openssl', 'x509', '-inform', 'der', '-in', str(cls.tmp / 'cert.der'), '-out', str(cls.tmp / 'cert.pem')], check=True, capture_output=True)
             r = subprocess.run(['openssl', 'verify', '-CAfile', str(cls.tmp / 'cert.pem'), '-purpose', 'sslserver', str(cls.tmp / 'cert.pem')], capture_output=True, text=True)
             if r.returncode: raise AssertionError('the certificate does not check out: ' + r.stdout + r.stderr)
-            extra = [str(Path(__file__).with_name('phone_pads_tls_test.c')), '-lssl', '-lcrypto']
+            extra = ['-DPP_TEST_TLS', str(Path(__file__).with_name('phone_pads_tls_test.c')), '-lssl', '-lcrypto']
             env = {'PP_TEST_CERT': str(cls.tmp / 'cert.pem'), 'PP_TEST_KEY': str(cls.tmp / 'key.pem')}
         r = subprocess.run([cc, '-std=gnu11', '-O1', '-Wall', '-Werror', '-Wno-unused-parameter', f'-I{cls.tmp}', f'-I{REPO / "dm/host"}', f'-I{SOURCES}', '-o', str(exe),
                             str(Path(__file__).with_name('phone_pads_check.c')), str(SOURCES / 'phone_pads.c'), str(SOURCES / 'shell_slots.c'), str(SOURCES / 'shell_motion.c'), str(REPO / 'dm/host/hle_haptics.c')] + extra + ['-lpthread', '-lm'], capture_output=True, text=True)
