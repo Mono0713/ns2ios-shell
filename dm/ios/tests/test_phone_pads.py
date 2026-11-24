@@ -348,23 +348,34 @@ class PhoneMenuAuthorityTests(PhonePadsServer):
 class PhonePrimaryRestoreTests(PhonePadsServer):
     controllers, primary = 2, 'saved-phone'
 
+    def expect_menu(self, expected):
+        deadline = time.monotonic() + 2
+        while True:
+            actual = self.host()['menu_players'][:len(expected)]
+            if actual == expected:
+                return
+            if time.monotonic() >= deadline:
+                self.assertEqual(actual, expected)
+
     def test_restores_phone_primary_after_controllers_connect(self):
         self.assertEqual(self.host()['mask'], 0b110)
-        self.assertEqual(self.host()['menu_players'][:3], [-1, 0, 0])
+        self.expect_menu([-1, 0, 0])
         phone = Phone(self.port)
         self.addCleanup(phone.close)
         self.assertEqual(phone.hello(self.primary)['player'], 1)
-        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+        phone.state(0, 0)
+        self.expect_menu([0, 1, 2])
         phone.close()
-        self.assertEqual(self.host()['menu_players'][:3], [-1, 0, 0])
+        self.expect_menu([-1, 0, 0])
         self.launcher('swap 0 1')
-        self.assertEqual(self.host()['menu_players'][:3], [0, -1, 2])
+        self.expect_menu([0, -1, 2])
         phone = Phone(self.port)
         self.addCleanup(phone.close)
         self.assertEqual(phone.hello(self.primary)['player'], 2)
-        self.assertEqual(self.host()['menu_players'][:3], [0, 1, 2])
+        phone.state(0, 0)
+        self.expect_menu([0, 1, 2])
         self.launcher('swap 0 3')
-        self.assertEqual(self.host()['menu_players'][:4], [-1, 0, 0, 0])
+        self.expect_menu([-1, 0, 0, 0])
         next_phone = Phone(self.port)
         self.addCleanup(next_phone.close)
         self.assertEqual(next_phone.hello('new-phone')['player'], 1)

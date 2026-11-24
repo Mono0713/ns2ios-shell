@@ -16,3 +16,4 @@ Update 1.0.1 (`v65536`), provisional profile. Main build `7c0876057ee29df336f7e1
 ## Frame rate
 
 - iPad build 2026.1125.0000 displays the title after the compute image correction. The game changes the NVN present interval from 1 to 2 at startup and reads it back in its frame loop. The game's frame rate measured 27.4–30.0 fps across early windows with a 60 fps shell ceiling. Keep native pacing until a faster cadence can be verified against gameplay timers and audio.
+- The 1.0.1 engine parses the integer `fpslimit` option at `main+0x32f740` and sets both engine limits from it. The Switch presentation path at `main+0x2ef660` uses interval 2 for a target of exactly 30 and interval 1 for ordinary higher limits. This provides a route to test a 60 fps engine target without overriding the host's NVN timing.
