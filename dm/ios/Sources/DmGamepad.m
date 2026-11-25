@@ -32,6 +32,7 @@
 #include "haptics_apple.h"
 #include "shell_motion.h"
 #include "shell_slots.h"
+#include "embedded_game.h"
 #include <stdatomic.h>
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
@@ -46,7 +47,8 @@ static void publish(void) {
     int32_t lx = g_touch_lx, ly = g_touch_ly, rx = g_touch_rx, ry = g_touch_ry;
     if (tilted(g_pad_lx, g_pad_ly)) { lx = g_pad_lx; ly = g_pad_ly; }   // a tilted physical stick wins
     if (tilted(g_pad_rx, g_pad_ry)) { rx = g_pad_rx; ry = g_pad_ry; }
-    dm_input_set(g_touch_btn | g_pad_btn | g_shake_btn, lx, ly, rx, ry);
+    uint64_t buttons = g_touch_btn | g_pad_btn | g_shake_btn;
+    if (!embedded_game_buttons(buttons, lx, ly, rx, ry)) dm_input_set(buttons, lx, ly, rx, ry);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -247,7 +249,7 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserver:self selector:@selector(padsChanged) name:@"DMPadsChanged" object:nil];   // shell_players.m, on the main thread
         [self padsChanged];
-        motion_start();
+        if (!embedded_game_virtual_active()) motion_start();
     }
     return self;
 }
@@ -412,7 +414,8 @@ static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
     _homeHeld = YES; [self refresh];
     __weak DmGamepad *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ DmGamepad *v = weakSelf; if (v) { v->_homeHeld = NO; [v refresh]; } });
-    [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @1}];
+    if (!embedded_game_show_menu(self, self.homeCenter))
+        [NSNotificationCenter.defaultCenter postNotificationName:@"DMHomePressed" object:nil userInfo:@{@"p": @1}];
     if (_tap) [self peekChrome];
 }
 - (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count)
@@ -484,7 +487,7 @@ static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
         CGPoint p = [_game[i] locationInView:self];
         t[n++] = (dm_touch){(uint32_t)i, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax((p.y - y0) / h, 0), 0.999)};
     }
-    dm_touch_set(t, n);
+    if (!embedded_game_touches(t, n)) dm_touch_set(t, n);
 }
 - (BOOL)gameBegin:(UITouch *)t {
     for (int i = 0; i < 16; i++) if (!_game[i]) { _game[i] = t; [_owner setObject:@(C_GAME | (uint64_t)i << 8) forKey:t]; return YES; }

@@ -1,14 +1,71 @@
 // The library's existing engine serves legacy games. A game with its own engine uses
 // the same app window and saves, through the embedded framework's versioned glue.
 #include "embedded_game.h"
+#include "switchpad_virtual_pad.h"
 
 #include <dlfcn.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 
 typedef const char *(*EngineStart)(const char *const *, int, const void *);
 typedef void (*EnginePresent)(void *);
 typedef void (*EngineFocus)(int);
 static EngineFocus active_focus;
+static _Atomic(const SwitchPadVirtualPad *) active_pad;
+UIView *dm_gamepad_view(CGRect frame);
+void dm_gamepad_reset(void);
+
+static void *make_library_pad(CGRect frame) {
+    return (__bridge_retained void *)dm_gamepad_view(frame);
+}
+
+BOOL embedded_game_virtual_active(void) {
+    return atomic_load(&active_pad) != NULL;
+}
+BOOL embedded_game_buttons(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    const SwitchPadVirtualPad *pad = atomic_load(&active_pad);
+    if (!pad) return NO;
+    pad->buttons(buttons, lx, ly, rx, ry);
+    return YES;
+}
+BOOL embedded_game_touches(const void *points, int count) {
+    const SwitchPadVirtualPad *pad = atomic_load(&active_pad);
+    if (!pad) return NO;
+    pad->touches(points, count);
+    return YES;
+}
+
+@interface EmbeddedPadMenu : NSObject <UIEditMenuInteractionDelegate>
+@property (nonatomic, strong) UIMenu *menu;
+@end
+@implementation EmbeddedPadMenu
+- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction
+          menuForConfiguration:(UIEditMenuConfiguration *)configuration
+              suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions {
+    return self.menu;
+}
+@end
+
+BOOL embedded_game_show_menu(UIView *view, CGPoint anchor) {
+    const SwitchPadVirtualPad *pad = atomic_load(&active_pad);
+    if (!pad) return NO;
+    UIMenu *menu = CFBridgingRelease(pad->menu());
+    if (!menu || !view.window) return YES;
+    static __weak UIView *menu_view;
+    static EmbeddedPadMenu *delegate;
+    static UIEditMenuInteraction *interaction;
+    if (menu_view != view) {
+        [menu_view removeInteraction:interaction];
+        delegate = [EmbeddedPadMenu new];
+        interaction = [[UIEditMenuInteraction alloc] initWithDelegate:delegate];
+        [view addInteraction:interaction];
+        menu_view = view;
+    }
+    delegate.menu = menu;
+    UIEditMenuConfiguration *cfg = [UIEditMenuConfiguration configurationWithIdentifier:nil sourcePoint:anchor];
+    [interaction presentEditMenuWithConfiguration:cfg];
+    return YES;
+}
 
 BOOL embedded_game_focus(int event) {
     if (!active_focus) return NO;
@@ -97,6 +154,12 @@ NSString *embedded_game_start(NSString *title, NSString *romfs, NSString *shader
         }
         // Objective-C classes from the embedded image can already be registered.
         return message;
+    }
+    const SwitchPadVirtualPad *(*get_pad)(void) = dlsym(handle, "dm_glue_virtual_pad_api");
+    const SwitchPadVirtualPad *pad = get_pad ? get_pad() : NULL;
+    if (pad && pad->version == 1 && pad->configure && pad->buttons && pad->touches && pad->menu) {
+        pad->configure(make_library_pad, dm_gamepad_reset);
+        atomic_store(&active_pad, pad);
     }
     active_focus = focus;
     present((__bridge void *)window);
