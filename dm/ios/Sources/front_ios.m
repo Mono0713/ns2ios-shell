@@ -447,7 +447,7 @@ void front_ios_picker_cover_end(void) {
     if (!cover) return;
     g_picker_cover = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.24
+        [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.20
                          animations:^{ cover.alpha = 0; }
                          completion:^(BOOL finished) { (void)finished; cover.hidden = YES; }];
     });
