@@ -555,7 +555,7 @@ void front_ios_back_to_picker(void) {
 - (void)startGame {
     if (self.game) return;
     if (front_ios_start_embedded_game(self)) {
-        if (embedded_game_menu_host()) {
+        if (embedded_game_uses_shell_controls()) {
             atomic_store(&g_guest_started, true);
             home_menu_watch();
         }

@@ -340,7 +340,7 @@
     };
   }
   // The button layout from the phone itself: the iPad keeps it for this phone and answers with an assign, which redraws the buttons
-  $('#face').addEventListener('click', () => { if (up()) put(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
+  $('#face').addEventListener('click', () => { if (controllerMode === 'pro' && up()) put(JSON.stringify({ t: 'layout', xbox: document.body.classList.contains('xbox') ? 0 : 1 })); });
   // Return to the QR tile before play, or open the pause menu during play.
   $('#home').addEventListener('click', () => { if (up()) put(JSON.stringify({ t: 'home' })); });
   $('#rejoin').addEventListener('click', () => {
