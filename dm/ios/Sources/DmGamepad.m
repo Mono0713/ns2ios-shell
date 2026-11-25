@@ -249,7 +249,7 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserver:self selector:@selector(padsChanged) name:@"DMPadsChanged" object:nil];   // shell_players.m, on the main thread
         [self padsChanged];
-        if (!embedded_game_virtual_active()) motion_start();
+        if (!embedded_game_virtual_active() || embedded_game_uses_shell_controls()) motion_start();
     }
     return self;
 }

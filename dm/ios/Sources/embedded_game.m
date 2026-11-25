@@ -60,6 +60,10 @@ static void *make_library_pad(CGRect frame) {
     return (__bridge_retained void *)dm_gamepad_view(frame);
 }
 
+BOOL embedded_game_uses_shell_controls(void) {
+    return atomic_load(&active_controls) != NULL;
+}
+
 BOOL embedded_game_virtual_active(void) {
     return atomic_load(&active_pad) != NULL;
 }
