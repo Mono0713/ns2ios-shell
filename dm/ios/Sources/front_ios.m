@@ -25,6 +25,7 @@
 #include "dm_input.h"
 #include "shell_slots.h"
 #include "relaunch_ticket.h"
+#include "embedded_game.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
@@ -552,7 +553,14 @@ void front_ios_back_to_picker(void) {
 }
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
-    if (self.game || front_ios_start_embedded_game(self)) return;
+    if (self.game) return;
+    if (front_ios_start_embedded_game(self)) {
+        if (embedded_game_menu_host()) {
+            atomic_store(&g_guest_started, true);
+            home_menu_watch();
+        }
+        return;
+    }
     g_play_started = CACurrentMediaTime();
     // A Joy-Con joining before Play can query and cache the operation mode. Apply the final setting before the guest starts.
     const char *mode = getenv("DM_OPMODE");
@@ -1272,7 +1280,9 @@ void front_ios_focus_event(int ev) {
 
 // ---- The TV (an external display scene) ----
 // Where the views that cover the picture go: the TV's window while it shows the game, else the iPad's root view (over the touch controls)
-static UIView *overlay_root(void) { return tv_on() ? g_tv.rootViewController.view : g_root.view; }
+static UIView *overlay_root(void) {
+    return embedded_game_menu_host() ?: (tv_on() ? g_tv.rootViewController.view : g_root.view);
+}
 @interface DmTvSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @end
 @implementation DmTvSceneDelegate
@@ -1325,6 +1335,7 @@ static void game_pause(int on) {
     dispatch_async(g_pause_q, ^{
         if (on == g_paused) return;
         g_paused = on;
+        if (embedded_game_pause(on)) return;
         if (on) { dm_focus_set(2); dm_audio_suspend(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); LOG("front end: game paused for the Home menu"); }
         else {
             dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); dm_audio_suspend(0); dm_focus_set(1);
@@ -1449,7 +1460,7 @@ static void home_menu_quit(int relaunch) {
     volume_hold_stop();
     BOOL z = zh_ui();
     NSString *message = relaunch ? (z ? @"正在回到選擇遊戲…" : @"Back to the games…") : (z ? @"正在關閉…" : @"Closing…");
-    home_exit_status(g_root.view, message);
+    home_exit_status(embedded_game_menu_host() ?: g_root.view, message);
     home_exit_status(g_tv.rootViewController.view, message);
     LOG("front end: Home menu: user confirmed %s", relaunch ? "Change games" : "Close the game");
     fflush(stderr);
@@ -1876,7 +1887,7 @@ static UIImage *phones_qr(NSString **url_out) {
     return phone_code(address);
 }
 static void home_menu_open(void) {
-    if (g_menu || g_menu_closing || !g_root.game) return;
+    if (g_menu || g_menu_closing || (!g_root.game && !embedded_game_menu_host())) return;
     g_menu_page = 0; g_menu_move = g_menu_confirm = g_menu_prev_sel = -1; g_menu_rows = menu_rows(0); g_menu_sel = 0; g_menu_closing = 0; g_menu_anim = 1;
     game_pause(1);
     [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayersCommand" object:nil userInfo:@{@"op": @"launcher", @"on": @1}];   // controllers and phones send DMLauncherInput

@@ -1,6 +1,10 @@
 // The library's existing engine serves legacy games. A game with its own engine uses
 // the same app window and saves, through the embedded framework's versioned glue.
 #include "embedded_game.h"
+#define DM_SHELL_INPUT_BRIDGE 1
+#include "embedded_game_input.h"
+#include "dm_input.h"
+#include "shell_slots.h"
 #include "switchpad_virtual_pad.h"
 
 #include <dlfcn.h>
@@ -12,6 +16,43 @@ typedef void (*EnginePresent)(void *);
 typedef void (*EngineFocus)(int);
 static EngineFocus active_focus;
 static _Atomic(const SwitchPadVirtualPad *) active_pad;
+static _Atomic(const SwitchPadShellControls *) active_controls;
+
+void shell_pad_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    const SwitchPadShellControls *controls = atomic_load(&active_controls);
+    if (controls) controls->player(player, buttons, lx, ly, rx, ry);
+    else dm_pad_set_player(player, buttons, lx, ly, rx, ry);
+}
+
+void shell_pad_slots(uint32_t mask, uint32_t joyright) {
+    const SwitchPadShellControls *controls = atomic_load(&active_controls);
+    if (controls) controls->slots(mask, joyright);
+    else dm_pad_players_with_joyright(mask, joyright);
+}
+
+void shell_pad_clear(int player) {
+    const SwitchPadShellControls *controls = atomic_load(&active_controls);
+    if (controls) controls->clear(player);
+    else dm_pad_clear_player(player);
+}
+
+void shell_pad_motion(int player, const float acc[3], const float gyro[3], const float angle[3], const float dir[9]) {
+    const SwitchPadShellControls *controls = atomic_load(&active_controls);
+    if (controls) controls->motion(player, acc, gyro, angle, dir);
+    else dm_motion_set_player(player, acc, gyro, angle, dir);
+}
+
+UIView *embedded_game_menu_host(void) {
+    const SwitchPadShellControls *controls = atomic_load(&active_controls);
+    return controls ? (__bridge UIView *)controls->menu_host() : nil;
+}
+
+BOOL embedded_game_pause(int on) {
+    const SwitchPadShellControls *controls = atomic_load(&active_controls);
+    if (!controls) return NO;
+    controls->pause(on);
+    return YES;
+}
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
 
@@ -47,6 +88,7 @@ BOOL embedded_game_touches(const void *points, int count) {
 @end
 
 BOOL embedded_game_show_menu(UIView *view, CGPoint anchor) {
+    if (atomic_load(&active_controls)) return NO;   // use the library's Home menu
     const SwitchPadVirtualPad *pad = atomic_load(&active_pad);
     if (!pad) return NO;
     UIMenu *menu = CFBridgingRelease(pad->menu());
@@ -160,6 +202,14 @@ NSString *embedded_game_start(NSString *title, NSString *romfs, NSString *shader
     if (pad && pad->version == 1 && pad->configure && pad->buttons && pad->touches && pad->menu) {
         pad->configure(make_library_pad, dm_gamepad_reset);
         atomic_store(&active_pad, pad);
+    }
+    const SwitchPadShellControls *(*get_controls)(void) = dlsym(handle, "dm_glue_shell_controls_api");
+    const SwitchPadShellControls *controls = get_controls ? get_controls() : NULL;
+    if (atomic_load(&active_pad) && controls && controls->version == 1 && controls->adopt && controls->player &&
+        controls->slots && controls->clear && controls->motion && controls->pause && controls->menu_host) {
+        controls->adopt();
+        atomic_store(&active_controls, controls);
+        shell_slots_publish();
     }
     active_focus = focus;
     present((__bridge void *)window);

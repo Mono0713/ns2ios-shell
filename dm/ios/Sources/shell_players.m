@@ -29,6 +29,7 @@
 #include <time.h>
 #include "dm.h"
 #include "dm_input.h"
+#include "embedded_game_input.h"
 #include "haptics_apple.h"
 #include "shell_slots.h"
 #include "shell_motion.h"
@@ -120,7 +121,7 @@ static void read_pad(GCController *c, bool layout_changed) {
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
     int32_t lx = axis(g.leftThumbstick.xAxis.value), ly = axis(g.leftThumbstick.yAxis.value);
-    dm_pad_set_player(p, m, lx, ly, axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+    shell_pad_player(p, m, lx, ly, axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
     if (layout_changed) {
         // A held face button just acquired another label. This sample is a layout change, not a press.
         const uint64_t face = (1ull << B_A) | (1ull << B_B) | (1ull << B_X) | (1ull << B_Y);
@@ -163,7 +164,7 @@ static void stop_using(GCController *c, int p) {   // c no longer feeds player p
     shell_slot_free((__bridge const void *)c);
     if (p >= 0) {
         atomic_store(&g_last_nav[p], 0);
-        dm_pad_set_player(p, 0, 0, 0, 0, 0);
+        shell_pad_player(p, 0, 0, 0, 0, 0);
     }
     [g_pads removeObject:c];
 }
@@ -368,4 +369,4 @@ int shell_players_external(void) {   // controllers and phones playing now (main
     int n = 0; for (int p = 0; p < DM_PLAYERS; p++) n += info[p].kind != SHELL_SLOT_NONE;
     return n;
 }
-void shell_players_release(void) { for (GCController *c in g_pads) { int p = shell_slot_of((__bridge const void *)c); if (p >= 0) dm_pad_set_player(p, 0, 0, 0, 0, 0); } }   // on resign active
+void shell_players_release(void) { for (GCController *c in g_pads) { int p = shell_slot_of((__bridge const void *)c); if (p >= 0) shell_pad_player(p, 0, 0, 0, 0, 0); } }   // on resign active

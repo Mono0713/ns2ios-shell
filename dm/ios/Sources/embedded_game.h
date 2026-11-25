@@ -10,3 +10,5 @@ BOOL embedded_game_virtual_active(void);
 BOOL embedded_game_buttons(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 BOOL embedded_game_touches(const void *points, int count);
 BOOL embedded_game_show_menu(UIView *view, CGPoint anchor);
+UIView *embedded_game_menu_host(void);
+BOOL embedded_game_pause(int on);

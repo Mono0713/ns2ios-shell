@@ -45,6 +45,7 @@
 #include <unistd.h>
 #include "dm.h"
 #include "dm_input.h"
+#include "embedded_game_input.h"
 #include "hle_haptics.h"
 #include "phone_pad_page.h"
 #include "phone_pads_tls.h"
@@ -199,8 +200,8 @@ static void publish_input(client *c, int p) {
         if (rails & DM_BTN_L) buttons |= DM_BTN_RIGHT_SL;
         if (rails & DM_BTN_ZL) buttons |= DM_BTN_RIGHT_SR;
     }
-    if (c->joyright_style) dm_pad_set_player(p, buttons, 0, 0, lx, ly);
-    else dm_pad_set_player(p, buttons, lx, ly, rx, ry);
+    if (c->joyright_style) shell_pad_player(p, buttons, 0, 0, lx, ly);
+    else shell_pad_player(p, buttons, lx, ly, rx, ry);
     shell_slot_input(p, buttons, lx, ly);
 }
 static void release(client *c) {
@@ -208,7 +209,7 @@ static void release(client *c) {
     c->raw = 0; c->kept = 0; c->hold_until = 0;
     memset(c->axes, 0, sizeof c->axes);
     if (p < 0 || c->released) return;
-    dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    shell_pad_player(p, 0, 0, 0, 0, 0);
     shell_slot_input(p, 0, 0, 0);
     c->released = 1;
 }

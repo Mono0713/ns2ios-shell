@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dm_input.h"
+#include "embedded_game_input.h"
 #include "pad_slots.h"
 #include "shell_slots.h"
 
@@ -24,8 +25,14 @@ static void changed(void) { void (*h)(void) = g_hook; if (h) h(); }
 static void publish_slots(void) {
     uint32_t joyright = 0;
     for (int p = 0; p < DM_PLAYERS; p++) if (g_joyright[p]) joyright |= 1u << p;
-    dm_pad_players_with_joyright(pad_slot_mask(&g_slots), joyright);
+    shell_pad_slots(pad_slot_mask(&g_slots), joyright);
 }
+void shell_slots_publish(void) {
+    pthread_mutex_lock(&g_mu);
+    publish_slots();
+    pthread_mutex_unlock(&g_mu);
+}
+
 static int take(const void *owner, const char *name, int kind, const char *label, int joyright) {
     pthread_mutex_lock(&g_mu);
     int first = !g_slots.owner[0] && g_slots.last[0][0] && (!name || strcmp(g_slots.last[0], name)) ? 1 : 0;
@@ -125,8 +132,8 @@ int shell_slot_swap(int a, int b) {
     shell_slot_info t = g_info[a]; g_info[a] = g_info[b]; g_info[b] = t;
     void (*ma)(const void *, int, int) = oa ? g_moved[g_info[b].kind] : NULL, (*mb)(const void *, int, int) = ob ? g_moved[g_info[a].kind] : NULL;
     unsigned char joyright = g_joyright[a]; g_joyright[a] = g_joyright[b]; g_joyright[b] = joyright;
-    dm_pad_clear_player(a);
-    dm_pad_clear_player(b);
+    shell_pad_clear(a);
+    shell_pad_clear(b);
     publish_slots();
     pthread_mutex_unlock(&g_mu);
     if (ma) ma(oa, a, b);

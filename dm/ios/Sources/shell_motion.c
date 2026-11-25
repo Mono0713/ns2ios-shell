@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "dm_input.h"
+#include "embedded_game_input.h"
 #include "shell_motion.h"
 
 static atomic_int g_on = -1;
@@ -51,5 +52,5 @@ void shell_motion_feed(shell_motion *m, int player, double t, const double grav[
     dir[0] = (float)(1 - 2 * (qy * qy + qz * qz)); dir[1] = (float)(2 * (qx * qy + qw * qz)); dir[2] = (float)(2 * (qx * qz - qw * qy));
     dir[3] = (float)(2 * (qx * qy - qw * qz)); dir[4] = (float)(1 - 2 * (qx * qx + qz * qz)); dir[5] = (float)(2 * (qy * qz + qw * qx));
     dir[6] = (float)(2 * (qx * qz + qw * qy)); dir[7] = (float)(2 * (qy * qz - qw * qx)); dir[8] = (float)(1 - 2 * (qx * qx + qy * qy));
-    dm_motion_set_player(player, acc, gyro, angle, dir);
+    shell_pad_motion(player, acc, gyro, angle, dir);
 }
